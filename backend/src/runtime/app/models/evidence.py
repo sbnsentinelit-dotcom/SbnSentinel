@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Integer, Text, UniqueConstraint
+from sqlalchemy import Column, String, DateTime, Integer, Text, Boolean, UniqueConstraint
 from app.db.database import Base
 from datetime import datetime
 
@@ -19,3 +19,38 @@ class EvidenceModel(Base):
     version = Column(Integer, default=1)
     previous_version_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # G5 Additive Provenance, Versioning & Tombstone
+    tombstone = Column(Boolean, default=False, nullable=True)
+    effective_time = Column(DateTime, nullable=True)
+    ingestion_sequence = Column(Integer, nullable=True)
+    clinic_id = Column(String, nullable=True)
+    external_record_id = Column(String, nullable=True)
+    resource_kind = Column(String, nullable=True)
+    source_version = Column(String, nullable=True)
+
+
+class IngestionLedgerModel(Base):
+    """
+    G5 Durable Ingestion Ledger.
+    Tracks staged and committed source records, providing strict DB unique dedupe_key.
+    dedupe_key = hash(clinic_id, connector_instance_id, resource_kind, external_record_id, source_version)
+    """
+    __tablename__ = "ingestion_ledger"
+    __table_args__ = (
+        UniqueConstraint(
+            "clinic_id", "connector_instance_id", "resource_kind", "external_record_id", "source_version",
+            name="uq_ingest_ledger_dedupe"
+        ),
+    )
+    id = Column(String, primary_key=True)  # dedupe_key hash
+    clinic_id = Column(String, nullable=False, index=True)
+    connector_instance_id = Column(String, nullable=False, index=True)
+    resource_kind = Column(String, nullable=False)
+    external_record_id = Column(String, nullable=False)
+    source_version = Column(String, nullable=False)
+    status = Column(String, default="COMMITTED", nullable=False)  # STAGED, COMMITTED, PUBLISHED, TOMBSTONED
+    evidence_id = Column(String, nullable=True)
+    payload_hash = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    effective_at = Column(DateTime, nullable=True)

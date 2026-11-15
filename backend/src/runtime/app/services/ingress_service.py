@@ -12,6 +12,7 @@ from app.integrations.core.source_authority import (
     connector_store,
 )
 from app.integrations.core.mapping_registry import mapping_registry
+from app.services.cursor_store import cursor_store
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +85,16 @@ def _compute_source_version(resource: Dict[str, Any]) -> str:
 
 class CanonicalIngressService:
     """
-    G3 Canonical Ingress Service (Evidence Input & Authority Boundary).
-    Handles ingestion of canonical evidence records from verified external connectors.
-    Enforces:
-    - Secure intake authority check: registered, ready, matching clinic scope, permitted resource.
-    - Input safety: payload size limit and safe JSON parsing.
-    - Idempotency dedupe key: hash(clinic_id, connector_id, resource_kind, resource_id, source_version).
-    - Publication boundary: Ambiguous or unmapped statuses are gated from decision emission.
+    G5 Replay-Safe Ingestion Service with Durable Ingestion Ledger.
+    Sequence:
+    Receive page / batch
+     -> authenticate + validate source owner
+     -> normalize + preserve source version
+     -> stage source observation + canonical fact
+     -> commit durable facts and ingest ledger
+     -> advance checkpoint (consistent commit / outbox)
+     -> publish only eligible, lineage-complete facts
+     -> governed evaluation on qualified event
     """
 
     def __init__(self):
@@ -100,16 +104,19 @@ class CanonicalIngressService:
         self,
         connector_id: str,
         records: List[Dict[str, Any]],
-        clinic_id: Optional[str] = None
+        clinic_id: Optional[str] = None,
+        checkpoint: Optional[str] = None,
+        is_opaque_cursor: bool = False,
     ) -> Dict[str, Any]:
         """
         Accepts a batch of canonical evidence context records.
-        Validates source authority and semantic mappings before durable storage.
+        Validates source authority, stages facts, commits atomically to repository
+        and ingestion ledger, and advances checkpoints consistently.
         """
         if not records:
-            return {"status": "Success", "processed": 0, "gated": 0}
+            return {"status": "Success", "processed": 0, "gated": 0, "tombstoned": 0, "duplicates_skipped": 0}
 
-        # G3 Input Safety: Payload size enforcement
+        # G3/G5 Input Safety: Payload size enforcement
         payload_bytes = json.dumps(records).encode("utf-8")
         validate_payload_safety(payload_bytes)
 
@@ -117,15 +124,18 @@ class CanonicalIngressService:
         binding = connector_store.get(connector_id)
         resolved_clinic = clinic_id or (binding.allowed_clinic_id if binding else "default")
 
-        from app.models.evidence import EvidenceModel
+        from app.models.evidence import EvidenceModel, IngestionLedgerModel
         from app.db.database import SessionLocal
 
         processed = 0
         gated = 0
+        tombstoned = 0
+        last_context_type = "Unknown"
 
         with SessionLocal() as db:
             for r in records:
                 context_type = r.get("context_type", "Unknown")
+                last_context_type = context_type
 
                 # G3 Gate: Source Authority Check (Registered, AUTHORIZED_READY, Clinic Scope, Permitted Resource)
                 validate_source_authority(
@@ -138,20 +148,40 @@ class CanonicalIngressService:
                 resource_id = detail.get("id", "")
                 source_version = _compute_source_version(detail)
 
-                # G3 Idempotency key: clinic + connector + type + id + version
+                # G5 Idempotency dedupe_key = hash(clinic_id, connector_instance_id, resource_kind, external_record_id, source_version)
                 source_key_str = (
                     f"{resolved_clinic}_{connector_id}_{context_type}_{resource_id}_{source_version}"
                 )
                 fact_key = hashlib.sha256(source_key_str.encode()).hexdigest()
 
-                # Deduplication check
+                # G5 Event Case 1: Deduplication / Replay check against DB
                 existing = db.query(EvidenceModel).filter(
                     EvidenceModel.source_connector == connector_id,
                     EvidenceModel.fact_key == fact_key,
                 ).first()
 
                 if existing:
-                    continue  # ALREADY_PROCESSED — idempotent
+                    continue  # ALREADY_PROCESSED — idempotent no-op; retain original evidence ID
+
+                # G5 Event Case 3: Deletion / Revocation / Tombstone
+                is_deleted = (
+                    detail.get("deleted") is True
+                    or r.get("is_deleted") is True
+                    or str(detail.get("status", "")).lower() in ("entered-in-error", "revoked", "deleted")
+                )
+                if is_deleted:
+                    tombstoned += 1
+
+                # G5 Event Case 2: Out-of-order correction & version chain
+                # Check for prior version of same entity without overwriting history
+                prior_evidence = db.query(EvidenceModel).filter(
+                    EvidenceModel.source_connector == connector_id,
+                    EvidenceModel.canonical_entity == context_type,
+                    EvidenceModel.external_record_id == resource_id,
+                ).order_by(EvidenceModel.version.desc()).first()
+
+                version = (prior_evidence.version + 1) if prior_evidence else 1
+                previous_version_id = prior_evidence.evidence_id if prior_evidence else None
 
                 # G3 Semantic Mapping & Quality Gate / Publication Boundary
                 mapping_id = r.get("mapping_id")
@@ -160,7 +190,9 @@ class CanonicalIngressService:
                 quality_state = "VALID"
                 canonical_val = None
 
-                if mapping_id and raw_status is not None:
+                if is_deleted:
+                    quality_state = "TOMBSTONED"
+                elif mapping_id and raw_status is not None:
                     map_status, canonical_val = mapping_registry.evaluate_mapping(
                         mapping_id=mapping_id,
                         version=mapping_version,
@@ -180,9 +212,20 @@ class CanonicalIngressService:
                 fact_value = json.dumps(canonical_facts)
                 evidence_id = f"evd_{uuid.uuid4().hex}"
 
-                # G3 Publication Boundary: Only VALID facts are eligible for decision generation
-                is_eligible = (quality_state == "VALID")
+                # G3/G5 Publication Boundary: Only VALID facts (not tombstoned/ambiguous) are eligible for decision publication
+                is_eligible = (quality_state == "VALID" and not is_deleted)
 
+                # Parse effective time if present
+                effective_dt = None
+                raw_effective = detail.get("effective_time") or detail.get("period", {}).get("start")
+                if raw_effective:
+                    try:
+                        from dateutil.parser import parse as parse_date
+                        effective_dt = parse_date(raw_effective)
+                    except Exception:
+                        pass
+
+                # Stage and commit evidence model
                 evidence = EvidenceModel(
                     evidence_id=evidence_id,
                     canonical_entity=context_type,
@@ -191,6 +234,14 @@ class CanonicalIngressService:
                     source_connector=connector_id,
                     retrieval_timestamp=datetime.utcnow(),
                     evidence_type="Sync",
+                    version=version,
+                    previous_version_id=previous_version_id,
+                    tombstone=is_deleted,
+                    effective_time=effective_dt,
+                    clinic_id=resolved_clinic,
+                    external_record_id=resource_id,
+                    resource_kind=context_type,
+                    source_version=source_version,
                     metadata_json=json.dumps({
                         "source_version": source_version,
                         "resource_id": resource_id,
@@ -200,23 +251,50 @@ class CanonicalIngressService:
                         "eligible_for_decision": is_eligible,
                     }),
                 )
+
+                # Stage and commit Ingestion Ledger entry
+                ledger_entry = IngestionLedgerModel(
+                    id=fact_key,
+                    clinic_id=resolved_clinic,
+                    connector_instance_id=connector_id,
+                    resource_kind=context_type,
+                    external_record_id=resource_id,
+                    source_version=source_version,
+                    status="TOMBSTONED" if is_deleted else "COMMITTED",
+                    evidence_id=evidence_id,
+                    effective_at=effective_dt,
+                )
+
                 try:
                     with db.begin_nested():
                         db.add(evidence)
+                        db.add(ledger_entry)
                     processed += 1
                 except exc.IntegrityError:
-                    pass  # Idempotent duplicate
+                    pass  # Idempotent duplicate at DB constraint level
 
             db.commit()
 
+        # Advance checkpoint only AFTER durable facts and ledger are committed
+        if checkpoint:
+            cursor_store.commit(
+                connector_id=connector_id,
+                resource_type=last_context_type,
+                checkpoint=checkpoint,
+                clinic_id=resolved_clinic,
+                is_opaque=is_opaque_cursor,
+            )
+
         duplicates_skipped = len(records) - processed
         self.logger.info(
-            f"[{connector_id}] Processed {processed} records ({duplicates_skipped} duplicates skipped, {gated} ambiguous/gated)."
+            f"[{connector_id}] Processed {processed} records ({duplicates_skipped} duplicates skipped, "
+            f"{tombstoned} tombstoned, {gated} ambiguous/gated)."
         )
         return {
             "status": "Success",
             "processed": processed,
             "gated": gated,
+            "tombstoned": tombstoned,
             "duplicates_skipped": duplicates_skipped,
             "connector_id": connector_id,
             "clinic_id": resolved_clinic,

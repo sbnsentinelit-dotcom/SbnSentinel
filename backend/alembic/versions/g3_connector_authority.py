@@ -41,3 +41,4 @@ def downgrade() -> None:
         batch_op.drop_column('secret_ref')
         batch_op.drop_column('clinic_id')
         batch_op.drop_column('vendor_id')
+
