@@ -84,4 +84,3 @@ def test_cp06_invalid_rule_inputs_produce_not_evaluable():
     int_finding = next((f for f in findings if f.get("rule_id") == rule_id), None)
     if int_finding:
         assert int_finding.get("result") == "NOT_EVALUABLE"
-

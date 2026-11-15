@@ -1,3 +1,4 @@
 [flake8]
 ignore = E501, W503, W504
 max-line-length = 88
+exclude = venv,test_venv,.venv,.git,__pycache__,alembic,test_sesr*,test_auth.py,debug_script.py,patch_router.py,scratch.py,scripts

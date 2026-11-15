@@ -5,8 +5,7 @@ from app.services.governance_registry import (
     governance_registry,
     RecommendationRecord,
     RecommendationStatus,
-    AuthorityRequirement,
-    DecisionType
+    AuthorityRequirement
 )
 from app.services.human_decision_engine import human_decision_engine
 
@@ -43,6 +42,7 @@ def test_cp10_concurrent_human_decisions_single_winner_and_idempotency():
 
     # 2. Concurrently submit 10 conflicting decisions for the same recommendation
     results = []
+
     def make_decision(actor_idx, dec_type):
         return human_decision_engine.record_decision(
             actor_id=f"actor_{actor_idx}",

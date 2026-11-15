@@ -64,4 +64,3 @@ def test_cp02_cp04_unresolved_evidence_causes_pending_evidence_and_policy_block(
 
     assert pol_result.is_permitted is False
     assert "GOV-SUFFICIENCY-GATE" in pol_result.failed_policies
-

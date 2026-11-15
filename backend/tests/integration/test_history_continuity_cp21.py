@@ -5,7 +5,6 @@ from app.models.governance_storage import (
     RecommendationModel,
     HumanDecisionModel,
     OperationalActionModel,
-    OperationalOutcomeModel,
     RuleEvaluationModel
 )
 from app.api.v1.endpoints.history import _build_historical_lifecycle

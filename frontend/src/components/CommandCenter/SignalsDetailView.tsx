@@ -193,12 +193,12 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null }> = 
   const getSimulatedRawPayload = (signal: SignalEvent) => {
     // CP-17: In production, return authoritative evidence projection rather than raw signal object
     if (isProd) {
-      if (basisData?.evidence_package?.evidence_items && basisData.evidence_package.evidence_items.length > 0) {
-        return basisData.evidence_package.evidence_items;
+      if (basisData?.evidence?.used && basisData.evidence.used.length > 0) {
+        return basisData.evidence.used;
       }
       return {
         projection_type: "Governed Evidence Projection",
-        evidence_references: basisData?.evidence_package?.evidence_references || [],
+        evidence_references: basisData?.evidence?.used?.map(u => u.evidence_id) || [],
         governance_note: "Direct raw transport logs unavailable under strict governance boundary."
       };
     }
