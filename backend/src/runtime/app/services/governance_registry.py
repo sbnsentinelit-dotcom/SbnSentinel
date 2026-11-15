@@ -1225,19 +1225,22 @@ class GovernanceRegistry:
                 f"GOVERNANCE_AMBIGUITY: Multiple active recommendation mappings found for rule {rule_id}")
         return applicable[0]
 
-    def get_applicable_policies(self, eval_time: datetime) -> List[PolicyVersion]:
-        """PRR-003: Resolve Applicable Policy Version"""
+    def get_applicable_policies(self, eval_time: datetime, scope: Optional[str] = None) -> List[PolicyVersion]:
+        """PRR-003 / G6: Resolve Applicable Policy Version with Regional Scope Support"""
         self._ensure_policies_loaded()
         applicable = []
+        target_scope = scope or "Global"
         # Find latest active policy per policy_id that is effective
         for p_id in set(p.policy_id for p in self._policies):
             versions = [
                 p for p in self._policies
-                if p.policy_id == p_id and p.is_applicable(eval_time)
+                if p.policy_id == p_id
+                and p.is_applicable(eval_time)
+                and (p.scope in ("Global", target_scope) or target_scope == "Global")
             ]
             if len(versions) > 1:
-                # PRR-003: If multiple active versions are effective, resolve to the latest version
-                versions.sort(key=lambda x: str(x.version), reverse=True)
+                # Prioritize region-specific policy over Global if both are effective; then latest version
+                versions.sort(key=lambda x: (x.scope == target_scope, str(x.version)), reverse=True)
                 applicable.append(versions[0])
             elif versions:
                 applicable.append(versions[0])

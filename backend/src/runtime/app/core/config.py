@@ -36,6 +36,7 @@ class Settings(BaseSettings):
 
     # SESR-012 Configuration Integrity
     ENVIRONMENT: str = "DEVELOPMENT"
+    DEPLOYMENT_REGION: str = "US"  # G6: "US" | "UAE" regional deployment scope
     CLINIC_TIMEZONE: str = "UTC"
     SYNTHETIC_TEST_ENABLED: bool = False
     BUILD_ID: str = "unknown"
@@ -85,6 +86,8 @@ class Settings(BaseSettings):
                 raise ValueError("Production requires PostgreSQL")
         if not self.CLINIC_TIMEZONE:
             raise ValueError("SESR-012 CDI-014 Violation: CLINIC_TIMEZONE is required")
+        if self.DEPLOYMENT_REGION not in ("US", "UAE"):
+            raise ValueError(f"Invalid DEPLOYMENT_REGION: '{self.DEPLOYMENT_REGION}'. Must be 'US' or 'UAE'.")
         return self
 
     @property

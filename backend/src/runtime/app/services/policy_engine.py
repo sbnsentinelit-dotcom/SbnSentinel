@@ -155,11 +155,17 @@ class PolicyEngine(BaseService):
         evidence_package = decision_context.get("evidence_package")
         event_type = decision_context.get("event_type", "Unknown")
 
-        # Get Applicable Policies (SESR-003 PRR-003)
+        # Get Applicable Policies (SESR-003 PRR-003 / G6 Regional Scope)
         # CP-13: Use shared immutable governance_evaluation_time
         from datetime import datetime
+        from app.core.config import settings
         now = decision_context.get("governance_evaluation_time") or datetime.utcnow()
-        applicable_policies = self.registry.get_applicable_policies(eval_time=now)
+        jurisdiction = (
+            decision_context.get("jurisdiction")
+            or decision_context.get("deployment_region")
+            or getattr(settings, "DEPLOYMENT_REGION", "US")
+        )
+        applicable_policies = self.registry.get_applicable_policies(eval_time=now, scope=jurisdiction)
 
         # CP-02: Hard gate - Check sufficiency status from ContextValidator
         sufficiency_status = decision_context.get("sufficiency_status")

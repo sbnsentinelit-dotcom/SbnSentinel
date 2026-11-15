@@ -59,6 +59,7 @@ class ConnectorBinding(BaseModel):
     allowed_clinic_id: str
     state: str = "CONFIGURED"  # CONFIGURED, AUTHORIZED_READY, REVOKED, SUSPENDED, DEGRADED
     permitted_resources: Set[str] = Field(default_factory=set)
+    jurisdiction: str = "US"  # G6: "US" | "UAE" regional scope
     secret_ref: Optional[str] = None
     endpoint_url: Optional[str] = None
     allowed_hosts: Optional[List[str]] = None
@@ -157,11 +158,13 @@ def validate_source_authority(
     instance_id: str,
     verified_clinic_id: str,
     resource_kind: str,
-    store: Optional[ConnectorAuthorityStore] = None
+    store: Optional[ConnectorAuthorityStore] = None,
+    target_region: Optional[str] = None
 ) -> ConnectorBinding:
     """
-    G3 Secure Intake Contract:
-    Validates connector registration, state, clinic scope, and permitted resources.
+    G3/G6 Secure Intake Contract:
+    Validates connector registration, state, clinic scope, permitted resources,
+    and regional deployment boundary.
     Fails closed if any condition is not met.
     """
     active_store = store or connector_store
@@ -179,6 +182,17 @@ def validate_source_authority(
         raise CapabilityUnavailable(
             f"Capability unavailable: resource kind '{resource_kind}' is not permitted for connector '{instance_id}'"
         )
+
+    # G6 Regional Boundary: Prohibit cross-region PHI transport by default
+    from app.core.config import settings
+    active_region = target_region or getattr(settings, "DEPLOYMENT_REGION", "US")
+    connector_jurisdiction = getattr(binding, "jurisdiction", "US")
+    if connector_jurisdiction and active_region and connector_jurisdiction != active_region:
+        raise ScopeViolation(
+            f"Regional boundary violation: connector jurisdiction '{connector_jurisdiction}' "
+            f"cannot ingress data into '{active_region}' deployment scope"
+        )
+
     return binding
 
 
