@@ -85,16 +85,43 @@ class PolicyEngine(BaseService):
             return True, f"PASS: {p_id} v{p_ver}"
 
         elif p_id == "POL-003":
-            # CP-14: In production, POL-003 strictly requires authenticated Practice Fusion source.
-            from app.core.config import settings
+            if p_ver == "V1":
+                # Historical V1 truth: requires Practice Fusion in production
+                from app.core.config import settings
+                source = decision_context.get("source") or (evidence_package.get("source") if isinstance(evidence_package, dict) else None)
+                is_prod = getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION"
+                if is_prod:
+                    if not source or not any(pf in str(source).lower() for pf in ("practice fusion", "practice_fusion", "pf")):
+                        return False, f"BLOCKED: Source '{source}' is not authorized by {p_id} v{p_ver} (Practice Fusion required in production)."
+                else:
+                    if not source or source not in ("Practice Fusion", "PRACTICE_FUSION", "practice_fusion", "PF", "EHR_SYSTEM", "EHR", "System"):
+                        return False, f"BLOCKED: Source '{source}' is not authorized by {p_id} v{p_ver}."
+                return True, f"PASS: {p_id} v{p_ver}"
+
+            # G4 V2+: Verified source authority, clinic scope, and capability readiness
             source = decision_context.get("source") or (evidence_package.get("source") if isinstance(evidence_package, dict) else None)
-            is_prod = getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION"
-            if is_prod:
-                if not source or not any(pf in str(source).lower() for pf in ("practice fusion", "practice_fusion", "pf")):
-                    return False, f"BLOCKED: Source '{source}' is not authorized by {p_id} v{p_ver} (Practice Fusion required in production)."
-            else:
-                if not source or source not in ("Practice Fusion", "PRACTICE_FUSION", "practice_fusion", "PF", "EHR_SYSTEM", "EHR", "System"):
-                    return False, f"BLOCKED: Source '{source}' is not authorized by {p_id} v{p_ver}."
+            clinic_id = decision_context.get("clinic_id") or "default"
+            required_capability = decision_context.get("required_capability")
+            if not required_capability:
+                if event_type in ("Billing", "Claim", "Remittance"):
+                    required_capability = "claim.read"
+                else:
+                    required_capability = "encounter.read"
+
+            from app.integrations.core.source_authority import connector_store
+            from app.services.connector_manager import connector_manager
+
+            binding = connector_store.get(str(source))
+            if not binding:
+                return False, f"BLOCKED: Source '{source}' is not registered with connector authority for {p_id} v{p_ver}."
+            if binding.state != "AUTHORIZED_READY":
+                return False, f"BLOCKED: Source '{source}' state is {binding.state} (AUTHORIZED_READY required) for {p_id} v{p_ver}."
+            if binding.allowed_clinic_id != clinic_id and clinic_id != "default":
+                return False, f"BLOCKED: Scope violation: clinic '{clinic_id}' does not match connector scope '{binding.allowed_clinic_id}'."
+
+            if not connector_manager.is_capability_ready(str(source), required_capability):
+                return False, f"BLOCKED: Capability '{required_capability}' is not ready for connector '{source}' for {p_id} v{p_ver}."
+
             return True, f"PASS: {p_id} v{p_ver}"
 
         return False, f"NOT_EVALUABLE: Unknown or unsupported policy {p_id} v{p_ver}"

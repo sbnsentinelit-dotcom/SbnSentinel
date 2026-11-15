@@ -96,6 +96,28 @@ class ConnectorManager:
         state = connector_runtime_state.get(connector_name)
         return state.capability_state == "AUTHORIZED_READY" and not state.is_stale
 
+    def is_capability_ready(self, connector_id: str, capability: str) -> bool:
+        """
+        G4 Capability-driven readiness:
+        Queries readiness per capability (e.g. claim.read), NOT whole connector or caps.supports_search("Patient").
+        Fail-closed: Returns False if technical state is not AUTHORIZED_READY,
+        or if capability grant transport, permission, or data contract is not verified.
+        """
+        from app.integrations.core.capabilities import capability_registry
+        from app.integrations.core.source_authority import connector_store
+
+        binding = connector_store.get(connector_id)
+        if not binding or binding.state != "AUTHORIZED_READY":
+            return False
+
+        # If explicit grant registered in capability registry, evaluate it
+        grant = capability_registry.get_grant(connector_id, capability)
+        if grant:
+            return grant.is_executable(source_evidence_is_sufficient=True)
+
+        # Fallback: check binding permitted_resources
+        return capability.lower() in {p.lower() for p in binding.permitted_resources}
+
 
 class ConnectorRuntimeStateDTO(BaseModel):
     capability_state: Literal["CONFIGURED", "AUTH_VERIFIED", "AUTHORIZED_READY", "DEGRADED", "STALE", "UNCONFIGURED"]

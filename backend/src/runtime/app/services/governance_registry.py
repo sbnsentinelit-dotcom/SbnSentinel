@@ -1423,7 +1423,7 @@ def initialize_registry_seeds():
             approved_by="System Administrator"
         ))
 
-    # 3. Production Source Authority Policy (Item 18)
+    # 3. Production Source Authority Policy (Item 18 / V1 Historical)
     if not governance_registry.get_policy_by_version("POL-003", "V1"):
         governance_registry.register_policy(PolicyVersion(
             policy_id="POL-003",
@@ -1433,6 +1433,19 @@ def initialize_registry_seeds():
             effective_from=datetime.utcnow() - timedelta(days=30),
             approval_state="APPROVED",
             approved_by="System Administrator"
+        ))
+
+    # G4: Capability-Driven Verified Source Authority Policy (V2 Approved)
+    if not governance_registry.get_policy_by_version("POL-003", "V2"):
+        governance_registry.register_policy(PolicyVersion(
+            policy_id="POL-003",
+            version="V2",
+            content="Production source execution requires verified connector authority, matching clinic scope, and active capability readiness.",
+            lifecycle_state=LifecycleState.ACTIVE,
+            effective_from=datetime.utcnow() - timedelta(days=1),
+            approval_state="APPROVED",
+            approved_by="System Administrator",
+            previous_version="V1"
         ))
 
     # 3. Clinic No-Show Rule

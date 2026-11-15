@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     BUILD_ID: str = "unknown"
     BOOTSTRAP_ADMIN_PASSWORD: str = "SBNAdmin@2024"  # Default for dev
 
+    ENABLE_PRACTICE_FUSION: bool = True
+
     # JWT / JWKS — System App (SMART Backend Services)
     # JWT_PRIVATE_KEY must be a PEM-encoded RSA private key.
     # Never commit a real private key. Set via environment variable in production.
@@ -69,13 +71,15 @@ class Settings(BaseSettings):
             if self.BOOTSTRAP_ADMIN_PASSWORD == "SBNAdmin@2024" or not self.BOOTSTRAP_ADMIN_PASSWORD:
                 raise ValueError(
                     "PRODUCTION_BOOTSTRAP_ERROR: BOOTSTRAP_ADMIN_PASSWORD must be explicitly provided in production and cannot be the default.")
-            # JWT System App key must be configured in production
-            if not self.JWT_PRIVATE_KEY:
-                raise ValueError(
-                    "PRODUCTION_JWT_ERROR: JWT_PRIVATE_KEY must be set in production for SMART System App authentication.")
-            if not self.JWT_KEY_ID:
-                raise ValueError(
-                    "PRODUCTION_JWT_ERROR: JWT_KEY_ID must be set in production.")
+            # G4: Validate credentials per active connector.
+            # JWT System App key must be configured in production only when Practice Fusion is enabled.
+            if self.ENABLE_PRACTICE_FUSION:
+                if not self.JWT_PRIVATE_KEY:
+                    raise ValueError(
+                        "PRODUCTION_JWT_ERROR: JWT_PRIVATE_KEY must be set in production for SMART System App authentication.")
+                if not self.JWT_KEY_ID:
+                    raise ValueError(
+                        "PRODUCTION_JWT_ERROR: JWT_KEY_ID must be set in production.")
             # F-29: Require PostgreSQL in PRODUCTION
             if not self.SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
                 raise ValueError("Production requires PostgreSQL")
