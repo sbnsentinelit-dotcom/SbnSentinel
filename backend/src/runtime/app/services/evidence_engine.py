@@ -193,7 +193,7 @@ class EvidenceEngine(BaseService):
         """
         Entry point from processing_orchestrator.
         """
-        canonical_event_data = payload.get("canonical_event", {})
+        canonical_event_data = payload.get("canonical_event") if "canonical_event" in payload else payload
 
         # ERP: Evidence Registration Pipeline
         raw_evidence_list = self._erp_registration(canonical_event_data)
@@ -256,13 +256,24 @@ class EvidenceEngine(BaseService):
 
         source = canonical_data.get("source_system", "Unknown")
 
-        # Audit 3 Item 18: PF-Only Admission in Production
+        # G3/G4: Verified Source Authority Admission
         if getattr(settings, "ENVIRONMENT", "DEVELOPMENT") == "PRODUCTION":
-            if "practice_fusion" not in source.lower() and "practicefusion" not in source.lower() and source != "PF":
-                self.logger.error(
-                    f"[EvidenceEngine] Production admission blocked: Source {source} is not Practice Fusion.")
-                raise ValueError(
-                    "PRODUCTION_ADMISSION_REJECTED: Only Practice Fusion sources are permitted in V1 production.")
+            from app.integrations.core.source_authority import connector_store
+            binding = connector_store.get(source)
+            if binding:
+                if binding.state != "AUTHORIZED_READY":
+                    self.logger.error(
+                        f"[EvidenceEngine] Production admission blocked: Source {source} state is {binding.state}."
+                    )
+                    raise ValueError(
+                        f"PRODUCTION_ADMISSION_REJECTED: Source {source} is not in AUTHORIZED_READY state."
+                    )
+            else:
+                if "practice_fusion" not in source.lower() and "practicefusion" not in source.lower() and source != "PF":
+                    self.logger.error(
+                        f"[EvidenceEngine] Production admission blocked: Source {source} is not registered or authorized.")
+                    raise ValueError(
+                        "PRODUCTION_ADMISSION_REJECTED: Only authorized sources are permitted in V1 production.")
 
         evidence_items = []
         now = datetime.utcnow()
@@ -270,23 +281,34 @@ class EvidenceEngine(BaseService):
         detail = metadata.get("detail", "").lower()
         event_type = canonical_data.get("event_type", "Unknown")
 
-        if event_type == "EHR":
+        # Invariant: Never infer operational truth from descriptive keywords
+        typed_status = (
+            canonical_data.get("typed_status")
+            or metadata.get("typed_status")
+            or metadata.get("status")
+        )
+
+        if typed_status is not None:
+            # Explicit typed evidence is authoritative; free-text cannot override it
+            evidence_items.append(
+                self._create_eos_001(
+                    "Appointment" if event_type in ("EHR", "Unknown") else event_type,
+                    "status",
+                    typed_status.upper() if isinstance(typed_status, str) else str(typed_status),
+                    source,
+                    now))
+        elif event_type == "EHR":
+            # Invariant: If text says 'no-show' but typed status is not provided, do NOT fabricate NO_SHOW
             if "no-show" in detail:
-                evidence_items.append(
-                    self._create_eos_001(
-                        "Appointment",
-                        "status",
-                        "NO_SHOW",
-                        source,
-                        now))
+                self.logger.warning(
+                    "[EvidenceEngine] Free-text contains 'no-show' but typed status is absent. "
+                    "Refusing to infer operational truth from descriptive text."
+                )
             elif "wait time" in detail:
-                evidence_items.append(
-                    self._create_eos_001(
-                        "Appointment",
-                        "status",
-                        "WAIT_TIME_EXCEEDED",
-                        source,
-                        now))
+                self.logger.warning(
+                    "[EvidenceEngine] Free-text contains 'wait time' but typed status is absent. "
+                    "Refusing to infer operational truth from descriptive text."
+                )
             elif "booked" in detail or "appointment" in detail:
                 evidence_items.append(
                     self._create_eos_001(

@@ -41,8 +41,10 @@ class SentinelStateTransitionEngine:
                 f"[SSTE] Unmapped entity type '{entity_type}'. Permitting transition to '{requested_state}'.")
             return True
 
-        allowed_states = cls.VALID_TRANSITIONS[entity_type].get(current_state, [])
-        if requested_state in allowed_states:
+        allowed_states = cls.VALID_TRANSITIONS[entity_type].get(current_state)
+        if allowed_states is None and isinstance(current_state, str):
+            allowed_states = cls.VALID_TRANSITIONS[entity_type].get(current_state.capitalize(), [])
+        if allowed_states is not None and requested_state in allowed_states:
             logger.info(
                 f"[SSTE] Permitted {entity_type} transition: {current_state} -> {requested_state}")
             return True
@@ -62,7 +64,10 @@ class SentinelStateTransitionEngine:
         # Check attribute name (often 'state' or 'status')
         current_state = None
         state_attr = None
-        if hasattr(entity, 'state'):
+        if entity_type == "Connector" and hasattr(entity, 'status'):
+            current_state = getattr(entity, 'status')
+            state_attr = 'status'
+        elif hasattr(entity, 'state'):
             current_state = getattr(entity, 'state')
             state_attr = 'state'
         elif hasattr(entity, 'status'):

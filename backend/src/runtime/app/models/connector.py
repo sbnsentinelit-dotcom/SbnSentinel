@@ -11,6 +11,13 @@ class ConnectorModel(Base):
     name = Column(String, nullable=False)
     type = Column(String, nullable=False)
 
+    # G3: Exact vendor and clinic binding; capability readiness state
+    vendor_id = Column(String, nullable=True)
+    clinic_id = Column(String, nullable=True)
+    secret_ref = Column(String, nullable=True)
+    permitted_resources = Column(JSON, nullable=True)
+    state = Column(String, default="CONFIGURED", nullable=True)
+
     # Configured, Authenticated, Connected, Synchronizing, Healthy, Warning, Retrying, Disconnected, Recovered
     status = Column(String, default="Configured")
 

@@ -9,6 +9,12 @@ from app.models.connector import ConnectorModel
 from app.schemas.reality import ConnectorSyncRequest
 from app.schemas.connector import ConnectorCreate
 from app.services.connector_manager import connector_manager
+from app.integrations.core.source_authority import (
+    validate_no_plaintext_secrets,
+    InsecureCredentialError,
+    connector_store,
+    ConnectorBinding
+)
 
 
 router = APIRouter()
@@ -59,7 +65,10 @@ def check_connectors_health(db: Session = Depends(get_db)):
 @router.post("/connect", status_code=status.HTTP_201_CREATED)
 async def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_db)):
     """
-    Connect a new EHR or billing system integration, verifying credentials first.
+    Connect a new EHR or billing system integration.
+    G3 Secure Onboarding:
+    - Rejects plaintext credentials in ordinary config JSON.
+    - Never assigns Connected / AUTHORIZED_READY before live credential verification.
     """
     existing = db.query(ConnectorModel).filter(ConnectorModel.id == connector_in.id).first()
     if existing:
@@ -67,33 +76,79 @@ async def connect_new_system(connector_in: ConnectorCreate, db: Session = Depend
             status_code=400,
             detail=f"Connector with ID '{connector_in.id}' already exists.")
 
-    # Live Verification for Practice Fusion
-    if "Practice Fusion" in connector_in.name and connector_in.config:
+    config = connector_in.config.copy() if connector_in.config else {}
+
+    # G3 Credential Safety: Disallow plaintext passwords/tokens in config JSON
+    try:
+        validate_no_plaintext_secrets(config)
+    except InsecureCredentialError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    verified = False
+
+    # Live Verification for Practice Fusion or registered adapters
+    if ("Practice Fusion" in connector_in.name or connector_in.name == "practice_fusion") and config:
         try:
             from app.integrations.core.registry import registry
-            config = connector_in.config.copy()
             adapter = registry.create("Practice Fusion", config=config)
             if not adapter:
                 raise ValueError("Adapter not available")
+            verified = True
         except Exception as e:
             # Prevent saving the connection if authentication fails
             raise HTTPException(
                 status_code=401,
                 detail=f"Invalid Practice Fusion Credentials: {str(e)}")
+    elif config.get("verified_live") is True:
+        verified = True
+
+    # Never assign Connected before verification
+    final_status = "Connected" if verified else "Configured"
+    final_state = "AUTHORIZED_READY" if verified else "CONFIGURED"
+
+    vendor_id = connector_in.vendor_id or config.get("vendor_id") or connector_in.name.lower().replace(" ", "_")
+    clinic_id = connector_in.clinic_id or config.get("clinic_id") or "default"
+    secret_ref = connector_in.secret_ref or config.get("secret_ref")
+    permitted = connector_in.permitted_resources or config.get("permitted_resources") or [
+        "Encounter", "Patient", "Coverage", "Claim", "Remittance"
+    ]
 
     new_connector = ConnectorModel(
         id=connector_in.id,
         name=connector_in.name,
         type=connector_in.type,
-        status=connector_in.status or "Connected",
+        vendor_id=vendor_id,
+        clinic_id=clinic_id,
+        secret_ref=secret_ref,
+        permitted_resources=permitted,
+        state=final_state,
+        status=final_status,
         latency_ms=random.randint(10, 80),
-        last_sync=datetime.utcnow(),
-        config=connector_in.config
+        last_sync=datetime.utcnow() if verified else None,
+        config=config
     )
     db.add(new_connector)
     db.commit()
     db.refresh(new_connector)
-    return {"message": "System connected successfully", "connector_id": new_connector.id}
+
+    # Register in authoritative authority store
+    connector_store.register(
+        ConnectorBinding(
+            connector_instance_id=new_connector.id,
+            vendor_id=vendor_id,
+            allowed_clinic_id=clinic_id,
+            state=final_state,
+            permitted_resources=set(permitted),
+            secret_ref=secret_ref,
+        )
+    )
+
+    return {
+        "message": "System registered successfully",
+        "connector_id": new_connector.id,
+        "status": final_status,
+        "state": final_state
+    }
 
 
 @router.post("/sync")
@@ -118,6 +173,7 @@ def disconnect_system(connector_id: str, db: Session = Depends(get_db)):
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
 
+    connector_store.revoke(connector_id)
     db.delete(connector)
     db.commit()
     return {"message": f"Successfully disconnected {connector_id}"}
