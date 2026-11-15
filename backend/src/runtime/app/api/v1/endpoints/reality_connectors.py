@@ -63,7 +63,7 @@ def check_connectors_health(db: Session = Depends(get_db)):
 
 
 @router.post("/connect", status_code=status.HTTP_201_CREATED)
-async def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_db)):
+def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_db)):
     """
     Connect a new EHR or billing system integration.
     G3 Secure Onboarding:

@@ -10,9 +10,11 @@ interface RevenueImpactProps {
 export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) => {
   const stats = useSelector((state: RootState) => state.signals.stats);
   
-  // Calculate dynamic revenue impact
-  const preventedLoss = (stats.actionsTaken) * 150;
-  const atRisk = Math.max(0, (stats.criticalEvents) * 150 - (stats.actionsTaken) * 150);
+  // HC16 & CP-15 compliant: Never fabricate financial figures by multiplying action counts.
+  // Financial exposure requires verified source claims/remittance evidence.
+  const hasFinancialEvidence = false; // Governed attribution boundary
+  const resolvedActions = stats.actionsTaken || 0;
+  const criticalCount = stats.criticalEvents || 0;
 
   return (
     <div className="relative overflow-hidden bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[32px] p-6 text-white premium-shadow flex flex-col h-[480px] hover:border-white/30 transition-all duration-500 hover:shadow-[0_20px_50px_rgba(79,70,229,0.2)] group">
@@ -42,25 +44,29 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-6 relative z-10">
-        {/* Prevented Loss */}
+        {/* Governed Operational Actions */}
         <div className="bg-[#0F172A]/40 border border-emerald-500/15 p-3 rounded-[20px] transition-all duration-300 hover:-translate-y-1 hover:border-emerald-500/30 hover:bg-emerald-950/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] cursor-default group/card">
-          <p className="text-[9px] text-slate-300 uppercase tracking-widest font-extrabold mb-2">Prevented Loss</p>
-          <p className="text-xl font-black text-[var(--color-semantic-positive)] mb-1 drop-shadow-[0_0_10px_rgba(16,185,129,0.2)]">+${preventedLoss.toLocaleString()}</p>
-          <p className="text-[9px] font-bold text-[var(--color-semantic-positive)] flex items-center gap-1"><TrendingUp className="w-3 h-3 animate-pulse" /> 18% vs yesterday</p>
+          <p className="text-[9px] text-slate-300 uppercase tracking-widest font-extrabold mb-2">Resolved Signals</p>
+          <p className="text-xl font-black text-[var(--color-semantic-positive)] mb-1 drop-shadow-[0_0_10px_rgba(16,185,129,0.2)]">{resolvedActions}</p>
+          <p className="text-[9px] font-bold text-slate-400 flex items-center gap-1">
+            {hasFinancialEvidence ? "+$0" : "Financial recovery requires remittance evidence"}
+          </p>
         </div>
 
-        {/* At Risk Today */}
+        {/* Operational Attention Needed */}
         <div className="bg-[#0F172A]/40 border border-rose-500/15 p-3 rounded-[20px] transition-all duration-300 hover:-translate-y-1 hover:border-rose-500/30 hover:bg-rose-950/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] cursor-default group/card">
-          <p className="text-[9px] text-slate-300 uppercase tracking-widest font-extrabold mb-2">At Risk Today</p>
-          <p className="text-xl font-black text-[var(--color-semantic-critical)] mb-1 drop-shadow-[0_0_10px_rgba(239,68,68,0.2)]">-${atRisk.toLocaleString()}</p>
-          <p className="text-[9px] font-bold text-[var(--color-semantic-critical)] flex items-center gap-1"><AlertCircle className="w-3 h-3" /> 5% vs yesterday</p>
+          <p className="text-[9px] text-slate-300 uppercase tracking-widest font-extrabold mb-2">Pending Attention</p>
+          <p className="text-xl font-black text-[var(--color-semantic-critical)] mb-1 drop-shadow-[0_0_10px_rgba(239,68,68,0.2)]">{criticalCount}</p>
+          <p className="text-[9px] font-bold text-slate-400 flex items-center gap-1"><AlertCircle className="w-3 h-3 text-rose-400" /> Active queues</p>
         </div>
 
-        {/* Optimization */}
+        {/* Operational Completion */}
         <div className="bg-[#0F172A]/40 border border-[var(--color-text-primary)]0/15 p-3 rounded-[20px] transition-all duration-300 hover:-translate-y-1 hover:border-white/30 hover:bg-indigo-950/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] cursor-default group/card">
-          <p className="text-[9px] text-slate-300 uppercase tracking-widest font-extrabold mb-2">Optimization</p>
-          <p className="text-xl font-black text-[#6366F1] mb-1 drop-shadow-[0_0_10px_rgba(99,102,241,0.2)]">{stats.actionsTaken > 0 ? Math.min(99.9, 50 + (stats.actionsTaken) * 0.5).toFixed(1) : "0.0"}%</p>
-          <p className="text-[9px] font-bold text-[var(--color-semantic-positive)] flex items-center gap-1"><CheckCircle className="w-3 h-3" /> {(stats.actionsTaken > 0 ? 7 : 0)}% vs yesterday</p>
+          <p className="text-[9px] text-slate-300 uppercase tracking-widest font-extrabold mb-2">Queue Resolution</p>
+          <p className="text-xl font-black text-[#6366F1] mb-1 drop-shadow-[0_0_10px_rgba(99,102,241,0.2)]">
+            {(resolvedActions + criticalCount) > 0 ? Math.round((resolvedActions / (resolvedActions + criticalCount)) * 100) : 0}%
+          </p>
+          <p className="text-[9px] font-bold text-slate-400 flex items-center gap-1"><CheckCircle className="w-3 h-3 text-indigo-400" /> Operational status</p>
         </div>
       </div>
 

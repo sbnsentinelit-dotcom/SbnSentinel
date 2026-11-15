@@ -120,13 +120,13 @@ export const ClinicalLogsView: React.FC = () => {
   // Export Patient Chart as SOAP Notes text & professional print format
   const handleDownloadChart = (enc: any) => {
     const todayStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
-    const notes = enc.clinical_notes || enc.clinicalNotes || "Patient reports standard symptoms. Checked vitals. Diagnostic codes mapped. Recommended regular check-up and follow-up consultation in 2 weeks.";
+    const notes = enc.clinical_notes || enc.clinicalNotes || "No clinical notes recorded in source system.";
     
-    // Parse notes into SOAP structure if possible, or fallback to beautiful paragraphs
+    // C19 / HC17: Export only actual source observations; never fabricate normal vitals or notes when absent
     const subjective = notes.includes("Subjective:") ? notes.split("Objective:")[0].replace("Subjective:", "").trim() : notes;
-    const objective = notes.includes("Objective:") ? notes.split("Objective:")[1].split("Assessment:")[0].trim() : "Vitals check: Temp 98.6°F, BP 120/80 mmHg, HR 72 bpm. Diagnostic verification secure.";
-    const assessment = notes.includes("Assessment:") ? notes.split("Assessment:")[1].split("Plan:")[0].trim() : `Primary diagnostic evaluation: ${enc.diagnosis}. Mapped ICD-10 and CPT codes for claims processing.`;
-    const plan = notes.includes("Plan:") ? notes.split("Plan:")[1].trim() : `1. Treatment & Prescriptions: ${enc.medications || 'None prescribed.'}\n2. Follow protocol guidelines.\n3. Schedule review if symptoms persist.`;
+    const objective = notes.includes("Objective:") ? notes.split("Objective:")[1].split("Assessment:")[0].trim() : "Vitals not recorded in source system.";
+    const assessment = notes.includes("Assessment:") ? notes.split("Assessment:")[1].split("Plan:")[0].trim() : (enc.diagnosis ? `Primary diagnostic evaluation: ${enc.diagnosis}.` : "No primary diagnosis recorded.");
+    const plan = notes.includes("Plan:") ? notes.split("Plan:")[1].trim() : `1. Treatment & Prescriptions: ${enc.medications || 'None recorded.'}\n2. Schedule review if symptoms persist.`;
 
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
@@ -576,7 +576,7 @@ export const ClinicalLogsView: React.FC = () => {
       });
       if (response.ok) {
         setBillingSuccess('Billed');
-        window.dispatchEvent(new CustomEvent('show-sentinel-toast', { detail: { message: '💰 Claim submitted & billed successfully to insurance clearinghouse!', type: 'success' } }));
+        window.dispatchEvent(new CustomEvent('show-sentinel-toast', { detail: { message: 'Internal billing status updated to Billed (Administrative record updated).', type: 'success' } }));
         await fetchEncounters();
       }
     } catch (err) {

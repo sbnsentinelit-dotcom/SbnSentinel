@@ -30,8 +30,7 @@ def clean_db():
 # 1. Event Case: Duplicate / Replayed Message
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_duplicate_replayed_message_idempotent_noop():
+def test_duplicate_replayed_message_idempotent_noop():
     """Duplicate/replayed message produces idempotent no-op and retains original evidence ID."""
     cid = "conn_sync_01"
     clinic = "clinic_alpha"
@@ -54,7 +53,7 @@ async def test_duplicate_replayed_message_idempotent_noop():
     }
 
     # Initial ingestion
-    res1 = await canonical_ingress.submit_batch(cid, [record], clinic_id=clinic)
+    res1 = canonical_ingress.submit_batch(cid, [record], clinic_id=clinic)
     assert res1["processed"] == 1
     assert res1["duplicates_skipped"] == 0
 
@@ -65,7 +64,7 @@ async def test_duplicate_replayed_message_idempotent_noop():
         assert ledger1 is not None
 
     # Replay same message
-    res2 = await canonical_ingress.submit_batch(cid, [record], clinic_id=clinic)
+    res2 = canonical_ingress.submit_batch(cid, [record], clinic_id=clinic)
     assert res2["processed"] == 0
     assert res2["duplicates_skipped"] == 1
 
@@ -80,8 +79,7 @@ async def test_duplicate_replayed_message_idempotent_noop():
 # 2. Event Case: Out-of-Order Correction & Version Preservation
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_out_of_order_correction_preserves_history():
+def test_out_of_order_correction_preserves_history():
     """Corrections create versioned records without overwriting historical rows."""
     cid = "conn_sync_02"
     clinic = "clinic_alpha"
@@ -103,7 +101,7 @@ async def test_out_of_order_correction_preserves_history():
             "meta": {"versionId": "1"},
         }
     }
-    await canonical_ingress.submit_batch(cid, [rec_v1], clinic_id=clinic)
+    canonical_ingress.submit_batch(cid, [rec_v1], clinic_id=clinic)
 
     # Version 2: Corrected Encounter
     rec_v2 = {
@@ -115,7 +113,7 @@ async def test_out_of_order_correction_preserves_history():
             "meta": {"versionId": "2"},
         }
     }
-    await canonical_ingress.submit_batch(cid, [rec_v2], clinic_id=clinic)
+    canonical_ingress.submit_batch(cid, [rec_v2], clinic_id=clinic)
 
     with SessionLocal() as db:
         history = db.query(EvidenceModel).filter(
@@ -135,8 +133,7 @@ async def test_out_of_order_correction_preserves_history():
 # 3. Event Case: Deletion / Revocation / Tombstone
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_deletion_creates_tombstone_and_restricts_use():
+def test_deletion_creates_tombstone_and_restricts_use():
     """Tombstoned record retains audit trail but restricts downstream decision emission."""
     cid = "conn_sync_03"
     clinic = "clinic_alpha"
@@ -156,7 +153,7 @@ async def test_deletion_creates_tombstone_and_restricts_use():
             "meta": {"versionId": "del_1"},
         }
     }
-    res = await canonical_ingress.submit_batch(cid, [rec_del], clinic_id=clinic)
+    res = canonical_ingress.submit_batch(cid, [rec_del], clinic_id=clinic)
     assert res["tombstoned"] == 1
 
     with SessionLocal() as db:
@@ -171,8 +168,7 @@ async def test_deletion_creates_tombstone_and_restricts_use():
 # 4. Checkpoints & Opaque Token Safety
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_opaque_cursor_preserved_without_lexical_sorting():
+def test_opaque_cursor_preserved_without_lexical_sorting():
     """Opaque cursor tokens are preserved without lexical sorting."""
     cid = "conn_rest_billing"
     clinic = "clinic_beta"
@@ -200,8 +196,7 @@ async def test_opaque_cursor_preserved_without_lexical_sorting():
 # 5. Crash Injection & Consistent Commit Recovery
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_crash_recovery_produces_no_duplicate_facts():
+def test_crash_recovery_produces_no_duplicate_facts():
     """Crash injection between data commit and restart recovery produces no duplicate facts."""
     cid = "conn_crash_01"
     clinic = "clinic_gamma"
@@ -221,7 +216,7 @@ async def test_crash_recovery_produces_no_duplicate_facts():
     ]
 
     # Ingest batch without advancing cursor (simulating crash before cursor commit)
-    await canonical_ingress.submit_batch(cid, batch_1, clinic_id=clinic)
+    canonical_ingress.submit_batch(cid, batch_1, clinic_id=clinic)
 
     # Cursor is still at initial_checkpoint
     assert cursor_store.get(cid, "Patient", clinic_id=clinic) == initial_checkpoint
@@ -233,7 +228,7 @@ async def test_crash_recovery_produces_no_duplicate_facts():
     ]
     next_checkpoint = "2026-11-01T02:00:00+00:00"
 
-    res_recovery = await canonical_ingress.submit_batch(
+    res_recovery = canonical_ingress.submit_batch(
         cid, batch_replay_and_next, clinic_id=clinic, checkpoint=next_checkpoint
     )
     assert res_recovery["processed"] == 1  # Only p_crash_2 processed

@@ -17,6 +17,7 @@ export const RevenueReportsView: React.FC = () => {
   const [mounted, setMounted] = useState(false);
   const [encounters, setEncounters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [backendSummary, setBackendSummary] = useState<any | null>(null);
 
   // Custom interactive states
   const [showClaimsModal, setShowClaimsModal] = useState(false);
@@ -30,8 +31,13 @@ export const RevenueReportsView: React.FC = () => {
         const data = await res.json();
         setEncounters(data);
       }
+      const repRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/financial-reports/summary`);
+      if (repRes.ok) {
+        const repData = await repRes.json();
+        setBackendSummary(repData);
+      }
     } catch (e) {
-      console.error("Error fetching encounters in revenue view:", e);
+      console.error("Error fetching data in revenue view:", e);
     } finally {
       setLoading(false);
     }
@@ -42,58 +48,35 @@ export const RevenueReportsView: React.FC = () => {
     fetchEncounters();
   }, [events.length]);
 
-  // Billing amount & CPT helper based on clinic departments
+  // Source-truth billing helper: Use actual encounter fields; never invent based on department (HC14)
   const getBillingDetails = (enc: any) => {
-    let payer = 'Medicare Part B';
-    let cpt = '99213 (Level 3 Outpatient Visit)';
-    let amount = 95.00;
-
-    if (enc.department === 'Cardiology') {
-      payer = 'BlueCross BlueShield';
-      cpt = '99214 (Level 4 Outpatient Visit)';
-      amount = 145.00;
-    } else if (enc.department === 'Radiology') {
-      payer = 'UnitedHealthcare';
-      cpt = '72100 (Routine X-Ray Interpret)';
-      amount = 120.00;
-    } else if (enc.department === 'Physical Therapy') {
-      payer = 'Aetna Health Plan';
-      cpt = '97110 (Therapeutic Exercise)';
-      amount = 110.00;
-    } else if (enc.department === 'Psychiatry') {
-      payer = 'Cigna Healthcare';
-      cpt = '90834 (Psychotherapy 45m)';
-      amount = 150.00;
-    }
-
+    const payer = enc.payer_network || 'Direct / Unspecified';
+    const cpt = enc.cpt_code || 'Unspecified';
+    const amount = typeof enc.billing_amount === 'number' ? enc.billing_amount : (typeof enc.copay === 'number' ? enc.copay : 0.0);
     return { payer, cpt, amount };
   };
 
-  // Dynamic multipliers based on filter selection
-  const filterMultiplier = filterRange === 'Today' ? 0.3 : filterRange === 'This Month' ? 4 : 1;
-
-  // Real backend calculations
-  const paidOrBilled = encounters.filter(e => e.billing_status === 'Paid' || e.billing_status === 'Billed' || e.status === 'Completed');
-  const baseRevenue = paidOrBilled.reduce((sum, e) => sum + getBillingDetails(e).amount, 0);
+  // C04 / HC15: True factual calculations; zero remains zero, no period multipliers, no invented fallback dollars
+  const paidOrBilled = encounters.filter(e => e.billing_status === 'Paid' || e.billing_status === 'Billed');
+  const baseRevenue = backendSummary?.metrics?.remittance_reported_payment ?? paidOrBilled.reduce((sum, e) => sum + getBillingDetails(e).amount, 0);
   
-  const pendingAmountList = encounters.filter(e => e.billing_status === 'Pending' || e.billing_status === 'Claim Denied');
-  const pendingAmount = pendingAmountList.length > 0 ? pendingAmountList.reduce((sum, e) => sum + getBillingDetails(e).amount, 0) : 540;
+  const pendingAmountList = encounters.filter(e => e.billing_status === 'Pending');
+  const pendingAmount = pendingAmountList.reduce((sum, e) => sum + getBillingDetails(e).amount, 0);
 
-  const dailyRevenue = Math.round((baseRevenue || 650) * filterMultiplier) + (claimsReviewed ? pendingAmount : 0);
-  
-  const savedRevenue = Math.round((encounters.filter(e => e.billing_status === 'Paid').length * 85 + (claimsReviewed ? pendingAmount : 0)) * filterMultiplier);
-  const pendingClaims = encounters.filter(e => e.billing_status === 'Pending' || e.status === 'Waiting').length;
+  const dailyRevenue = backendSummary?.metrics?.total_charges ?? (baseRevenue + pendingAmount);
+  const savedRevenue = backendSummary?.metrics?.confirmed_bank_receipts ?? paidOrBilled.reduce((sum, e) => sum + getBillingDetails(e).amount, 0);
+  const pendingClaims = encounters.filter(e => e.billing_status === 'Pending').length;
   const claimDenials = encounters.filter(e => e.billing_status === 'Claim Denied' || e.billing_status === 'Denied').length;
 
   // Claim status chart values
   const totalClaims = encounters.length || 1;
-  const paidCount = encounters.filter(e => e.billing_status === 'Paid' || e.billing_status === 'Billed' || e.status === 'Completed').length;
+  const paidCount = encounters.filter(e => e.billing_status === 'Paid').length;
   const pendingCount = pendingClaims;
   const deniedCount = claimDenials;
 
-  const paidPct = Math.round((paidCount / totalClaims) * 100) || 70;
-  const pendingPct = Math.round((pendingCount / totalClaims) * 100) || 20;
-  const deniedPct = Math.max(0, 100 - paidPct - pendingPct);
+  const paidPct = encounters.length > 0 ? Math.round((paidCount / totalClaims) * 100) : 0;
+  const pendingPct = encounters.length > 0 ? Math.round((pendingCount / totalClaims) * 100) : 0;
+  const deniedPct = encounters.length > 0 ? Math.max(0, 100 - paidPct - pendingPct) : 0;
 
   const showToast = (msg: string) => {
     setToast(msg);

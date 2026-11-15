@@ -45,8 +45,7 @@ def clean_conformance_env():
 # Matrix 01: Three Sources Normalize Equivalent Facts to Equivalent Meaning
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_m01_three_sources_normalize_equivalent_facts():
+def test_m01_three_sources_normalize_equivalent_facts():
     """
     Source A (FHIR EHR), Source B (REST Billing), and Source C (Structured Batch)
     all normalize equivalent facts to equivalent canonical meaning.
@@ -87,7 +86,7 @@ async def test_m01_three_sources_normalize_equivalent_facts():
             "meta": {"versionId": "1"},
         }
     }
-    await canonical_ingress.submit_batch("conn_source_a_fhir", [fhir_record], clinic_id=clinic)
+    canonical_ingress.submit_batch("conn_source_a_fhir", [fhir_record], clinic_id=clinic)
 
     # Source B (REST format)
     rest_record = {
@@ -100,7 +99,7 @@ async def test_m01_three_sources_normalize_equivalent_facts():
             "meta": {"versionId": "1"},
         }
     }
-    await canonical_ingress.submit_batch("conn_source_b_rest", [rest_record], clinic_id=clinic)
+    canonical_ingress.submit_batch("conn_source_b_rest", [rest_record], clinic_id=clinic)
 
     # Source C (Batch CSV-converted format)
     csv_row_record = {
@@ -113,7 +112,7 @@ async def test_m01_three_sources_normalize_equivalent_facts():
             "meta": {"versionId": "1"},
         }
     }
-    await canonical_ingress.submit_batch("conn_source_c_batch", [csv_row_record], clinic_id=clinic)
+    canonical_ingress.submit_batch("conn_source_c_batch", [csv_row_record], clinic_id=clinic)
 
     # Verify canonical facts across all 3 sources
     with SessionLocal() as db:
@@ -132,8 +131,7 @@ async def test_m01_three_sources_normalize_equivalent_facts():
 # Matrix 03 & 04: Source Unable to Provide Claim Response Does Not Fabricate Denial
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_m04_source_unable_to_provide_claim_response_does_not_fabricate_denial():
+def test_m04_source_unable_to_provide_claim_response_does_not_fabricate_denial():
     """
     Source unable to provide claim response fails closed (STATUS_UNRESOLVED),
     preventing fabricated denial finding or unauthorized decision.
@@ -170,7 +168,7 @@ async def test_m04_source_unable_to_provide_claim_response_does_not_fabricate_de
             # missing payer_id and response_timestamp
         }
     }
-    res = await canonical_ingress.submit_batch("conn_pending_claim", [incomplete_claim], clinic_id=clinic)
+    res = canonical_ingress.submit_batch("conn_pending_claim", [incomplete_claim], clinic_id=clinic)
     assert res["gated"] == 1
 
     with SessionLocal() as db:

@@ -2,7 +2,7 @@ from app.api.v1.endpoints import outcomes
 from fastapi import APIRouter, Depends
 # Import subsystem routers here when created
 from app.api.v1.endpoints import runtime, history
-from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, audit, settings, encounters, super_admin, billing, clinics, pasme, pipeline, health, decisions, actions, decision_basis, action_lifecycle
+from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, audit, settings, encounters, super_admin, billing, clinics, pasme, pipeline, health, decisions, actions, decision_basis, action_lifecycle, financial_reports
 
 
 from app.models.user import UserRole
@@ -72,6 +72,11 @@ api_router.include_router(
     clinics.router,
     prefix="/clinics",
     tags=["008_Clinics"],
+    dependencies=protected)
+api_router.include_router(
+    financial_reports.router,
+    prefix="/financial-reports",
+    tags=["010_Financial_Reports"],
     dependencies=protected)
 
 # SES-002: Event Processing Pipeline

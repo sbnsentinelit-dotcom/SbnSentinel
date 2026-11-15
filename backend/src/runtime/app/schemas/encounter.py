@@ -11,16 +11,16 @@ class EncounterCreate(BaseModel):
     type: str
     status: Optional[str] = "Waiting"
     billing_status: Optional[str] = "Pending"
-    copay: Optional[float] = 245.0
+    copay: Optional[float] = None
     priority: Optional[str] = "Normal"
     wait_time: Optional[str] = None
     department: Optional[str] = None
     avatar: Optional[str] = None
     clinical_notes: Optional[str] = None
     medications: Optional[str] = None
-    payer_network: Optional[str] = "Uninsured"
-    cpt_code: Optional[str] = "99213"
-    billing_amount: Optional[float] = 95.0
+    payer_network: Optional[str] = None
+    cpt_code: Optional[str] = None
+    billing_amount: Optional[float] = None
 
 
 class EncounterUpdate(BaseModel):
@@ -45,16 +45,16 @@ class EncounterResponse(BaseModel):
     type: str
     status: str
     billing_status: str
-    copay: float
+    copay: Optional[float] = None
     priority: str
     wait_time: Optional[str] = None
     department: Optional[str] = None
     avatar: Optional[str] = None
     clinical_notes: Optional[str] = None
     medications: Optional[str] = None
-    payer_network: str
-    cpt_code: str
-    billing_amount: float
+    payer_network: Optional[str] = None
+    cpt_code: Optional[str] = None
+    billing_amount: Optional[float] = None
 
     class Config:
         from_attributes = True

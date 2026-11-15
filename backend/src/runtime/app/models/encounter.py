@@ -14,14 +14,14 @@ class EncounterModel(Base):
     type = Column(String, nullable=False)  # Consultation, Urgent Care, Checkup, etc.
     status = Column(String, default="Completed")  # Waiting, In Room, Completed, Delayed
     billing_status = Column(String, default="Pending")  # Pending, Billed, Paid, Claim Denied
-    copay = Column(Float, default=245.0)
+    copay = Column(Float, nullable=True)
     priority = Column(String, default="Normal")  # High, Normal, Urgent
     wait_time = Column(String, nullable=True)
     department = Column(String, nullable=True)
     avatar = Column(String, nullable=True)
     clinical_notes = Column(String, nullable=True)
     medications = Column(String, nullable=True)
-    payer_network = Column(String, default="Uninsured")
-    cpt_code = Column(String, default="99213")
-    billing_amount = Column(Float, default=95.0)
+    payer_network = Column(String, nullable=True)
+    cpt_code = Column(String, nullable=True)
+    billing_amount = Column(Float, nullable=True)
     denial_reason = Column(String, nullable=True)  # e.g. "Coverage Expired", "Invalid CPT Code"

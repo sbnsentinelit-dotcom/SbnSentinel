@@ -100,7 +100,7 @@ class CanonicalIngressService:
     def __init__(self):
         self.logger = logging.getLogger("CanonicalIngress")
 
-    async def submit_batch(
+    def submit_batch(
         self,
         connector_id: str,
         records: List[Dict[str, Any]],

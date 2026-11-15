@@ -1,0 +1,229 @@
+from fastapi import APIRouter, Depends, Query, Response
+from typing import Optional
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.api.deps import get_current_user
+from app.models.user import User
+from app.services.financial_reporting_service import financial_reporting_service
+
+router = APIRouter()
+
+
+def _default_dates():
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=30)
+    return start, end
+
+
+@router.get("/summary")
+def get_owner_summary(
+    clinic_id: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    currency: str = Query("AED"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    s_date, e_date = start_date, end_date
+    if not s_date or not e_date:
+        def_s, def_e = _default_dates()
+        s_date = s_date or def_s
+        e_date = e_date or def_e
+
+    return financial_reporting_service.generate_owner_summary(
+        clinic_id=target_clinic,
+        period_start=s_date,
+        period_end=e_date,
+        currency=currency,
+        db=db,
+    )
+
+
+@router.get("/payer-summary")
+def get_payer_summary(
+    clinic_id: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    s_date, e_date = start_date, end_date
+    if not s_date or not e_date:
+        def_s, def_e = _default_dates()
+        s_date = s_date or def_s
+        e_date = e_date or def_e
+
+    return financial_reporting_service.generate_payer_plan_summary(
+        clinic_id=target_clinic,
+        period_start=s_date,
+        period_end=e_date,
+        db=db,
+    )
+
+
+@router.get("/claim-register")
+def get_claim_register(
+    clinic_id: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    s_date, e_date = start_date, end_date
+    if not s_date or not e_date:
+        def_s, def_e = _default_dates()
+        s_date = s_date or def_s
+        e_date = e_date or def_e
+
+    return financial_reporting_service.generate_claim_register(
+        clinic_id=target_clinic,
+        period_start=s_date,
+        period_end=e_date,
+        db=db,
+    )
+
+
+@router.get("/unpaid-lines")
+def get_unpaid_lines(
+    clinic_id: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    s_date, e_date = start_date, end_date
+    if not s_date or not e_date:
+        def_s, def_e = _default_dates()
+        s_date = s_date or def_s
+        e_date = e_date or def_e
+
+    return financial_reporting_service.generate_unpaid_procedure_lines(
+        clinic_id=target_clinic,
+        period_start=s_date,
+        period_end=e_date,
+        db=db,
+    )
+
+
+@router.get("/denials")
+def get_denials(
+    clinic_id: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    s_date, e_date = start_date, end_date
+    if not s_date or not e_date:
+        def_s, def_e = _default_dates()
+        s_date = s_date or def_s
+        e_date = e_date or def_e
+
+    return financial_reporting_service.generate_denials_and_rejections(
+        clinic_id=target_clinic,
+        period_start=s_date,
+        period_end=e_date,
+        db=db,
+    )
+
+
+@router.get("/reconciliation")
+def get_reconciliation(
+    clinic_id: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    s_date, e_date = start_date, end_date
+    if not s_date or not e_date:
+        def_s, def_e = _default_dates()
+        s_date = s_date or def_s
+        e_date = e_date or def_e
+
+    return financial_reporting_service.generate_reconciliation_report(
+        clinic_id=target_clinic,
+        period_start=s_date,
+        period_end=e_date,
+        db=db,
+    )
+
+
+@router.get("/ageing")
+def get_ageing(
+    clinic_id: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    return financial_reporting_service.generate_ageing_report(
+        clinic_id=target_clinic,
+        db=db,
+    )
+
+
+@router.get("/completeness")
+def get_completeness(
+    clinic_id: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    return financial_reporting_service.generate_completeness_exceptions(
+        clinic_id=target_clinic,
+        db=db,
+    )
+
+
+@router.post("/snapshot")
+def create_report_snapshot(
+    report_code: str = Query(..., pattern="^FR0[1-8]$"),
+    clinic_id: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    s_date, e_date = start_date, end_date
+    if not s_date or not e_date:
+        def_s, def_e = _default_dates()
+        s_date = s_date or def_s
+        e_date = e_date or def_e
+
+    snapshot = financial_reporting_service.create_snapshot(
+        clinic_id=target_clinic,
+        report_code=report_code,
+        period_start=s_date,
+        period_end=e_date,
+        db=db,
+    )
+    return {
+        "status": "Success",
+        "snapshot_id": snapshot.snapshot_id,
+        "run_key": snapshot.run_key,
+        "revision": snapshot.revision,
+        "completeness_status": snapshot.completeness_status,
+    }
+
+
+@router.get("/export/{snapshot_id}/csv")
+def download_snapshot_csv(
+    snapshot_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    csv_data = financial_reporting_service.export_csv(snapshot_id=snapshot_id, db=db)
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="report_{snapshot_id}.csv"'}
+    )

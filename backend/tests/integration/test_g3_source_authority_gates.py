@@ -155,8 +155,7 @@ def test_unsupported_resource_fails_closed():
 # 5. Negative Gate: Ambiguous / Incomplete Code Fails Closed (No Decision)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_ambiguous_and_unmapped_code_gated_at_ingress():
+def test_ambiguous_and_unmapped_code_gated_at_ingress():
     """
     Ingress of ambiguous status code (when_incomplete: STATUS_UNRESOLVED,
     when_unmapped: NOT_EVALUABLE) is gated from decision emission.
@@ -194,7 +193,7 @@ async def test_ambiguous_and_unmapped_code_gated_at_ingress():
             # missing code_system and status_stage
         }
     }
-    res_incomplete = await canonical_ingress.submit_batch(
+    res_incomplete = canonical_ingress.submit_batch(
         "conn_billing", [incomplete_record], clinic_id="clinic_alpha"
     )
     assert res_incomplete["status"] == "Success"
@@ -210,7 +209,7 @@ async def test_ambiguous_and_unmapped_code_gated_at_ingress():
             "raw_status": "UnknownVendorStatus",
         }
     }
-    res_unmapped = await canonical_ingress.submit_batch(
+    res_unmapped = canonical_ingress.submit_batch(
         "conn_billing", [unmapped_record], clinic_id="clinic_alpha"
     )
     assert res_unmapped["status"] == "Success"
@@ -347,21 +346,21 @@ def test_payload_safety_limits():
 
 def test_api_onboarding_never_assigns_connected_before_verification():
     """Connecting a system without verification initializes state as Configured/CONFIGURED."""
-    response = client.post(
-        "/api/v1/reality/connect",
-        json={
-            "id": "conn_unverified_01",
-            "name": "Generic EHR",
-            "type": "EHR System",
-            "clinic_id": "clinic_charlie",
-            "config": {
-                "base_url": "https://ehr.example.com",
-                "secret_ref": "env://EHR_SECRET",
-            }
+    from app.api.v1.endpoints.reality_connectors import connect_new_system
+    from app.schemas.connector import ConnectorCreate
+
+    conn_in = ConnectorCreate(
+        id="conn_unverified_01",
+        name="Generic EHR",
+        type="EHR System",
+        clinic_id="clinic_charlie",
+        config={
+            "base_url": "https://ehr.example.com",
+            "secret_ref": "env://EHR_SECRET",
         }
     )
-    assert response.status_code == 201
-    data = response.json()
+    with SessionLocal() as db:
+        data = connect_new_system(conn_in, db=db)
     assert data["status"] == "Configured"
     assert data["state"] == "CONFIGURED"
 
@@ -372,17 +371,21 @@ def test_api_onboarding_never_assigns_connected_before_verification():
 
 def test_api_onboarding_rejects_plaintext_password():
     """Connecting a system with a plaintext password raises HTTP 400."""
-    response = client.post(
-        "/api/v1/reality/connect",
-        json={
-            "id": "conn_insecure_02",
-            "name": "Generic EHR",
-            "type": "EHR System",
-            "config": {
-                "username": "doctor",
-                "password": "plaintext_password_in_body",
-            }
+    from app.api.v1.endpoints.reality_connectors import connect_new_system
+    from app.schemas.connector import ConnectorCreate
+    from fastapi import HTTPException
+
+    conn_in = ConnectorCreate(
+        id="conn_insecure_02",
+        name="Generic EHR",
+        type="EHR System",
+        config={
+            "username": "doctor",
+            "password": "plaintext_password_in_body",
         }
     )
-    assert response.status_code == 400
-    assert "plaintext credential detected" in response.json()["detail"].lower()
+    with pytest.raises(HTTPException) as excinfo:
+        with SessionLocal() as db:
+            connect_new_system(conn_in, db=db)
+    assert excinfo.value.status_code == 400
+    assert "plaintext credential detected" in excinfo.value.detail.lower()
