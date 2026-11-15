@@ -344,6 +344,9 @@ export const ConnectorsView: React.FC = () => {
                      {conn.status === 'Connected' && <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-semantic-positive)]" />}
                      {conn.status === 'Syncing' && <RefreshCw className="w-3.5 h-3.5 text-[var(--color-semantic-attention)] animate-spin" />}
                      {conn.status === 'Needs attention' && <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-semantic-critical)]" />}
+                     {conn.status === 'Warning' && <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-semantic-attention)]" />}
+                     {conn.status === 'Configured' && <Server className="w-3.5 h-3.5 text-white/50" />}
+                     {conn.status === 'Disconnected' && <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />}
                      <span className="text-[11px] font-extrabold text-white">{conn.status}</span>
                   </div>
                   <span className="text-[11px] font-bold text-white/50 flex items-center gap-1">
