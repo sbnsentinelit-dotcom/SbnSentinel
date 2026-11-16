@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from enum import Enum
 from datetime import datetime
 
@@ -35,7 +35,7 @@ class Recommendation(BaseModel):
     action: str
     expected_outcome: str
     risk_level: RiskLevel
-    priority_score: int
+    priority_score: Optional[int] = None
     explainability_log: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     status: str = "Active"  # Active, Acknowledged, Resolved
