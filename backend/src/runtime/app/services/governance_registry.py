@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from dateutil.parser import parse as dateutil_parse
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from uuid import UUID  # noqa
@@ -12,6 +11,23 @@ from app.models.governance_storage import (
     RuleEvaluationModel
 )
 import logging
+
+
+def dateutil_parse(val: Any) -> Optional[datetime]:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    try:
+        from dateutil.parser import parse
+        return parse(str(val))
+    except (ImportError, Exception):
+        val_str = str(val).replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(val_str)
+        except Exception:
+            return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -496,13 +512,12 @@ class GovernanceRegistry:
         from app.db.database import SessionLocal
         from app.models.governance_storage import RuleEvaluationModel
         import json
-        from dateutil.parser import parse
         db = SessionLocal()
         try:
             row = db.query(RuleEvaluationModel).filter(
                 RuleEvaluationModel.evaluation_id == evaluation_id).first()
             if row:
-                ts = parse(row.evaluation_timestamp) if isinstance(
+                ts = dateutil_parse(row.evaluation_timestamp) if isinstance(
                     row.evaluation_timestamp, str) else row.evaluation_timestamp
                 inputs = json.loads(row.input_values_json) if row.input_values_json else {}
                 return RuleEvaluationRecord(
@@ -615,7 +630,6 @@ class GovernanceRegistry:
     def get_recommendation(self, recommendation_id: str) -> Optional[RecommendationRecord]:
         from app.db.database import SessionLocal
         from app.models.governance_storage import RecommendationModel
-        from dateutil.parser import parse
         db = SessionLocal()
         try:
             db_record = db.query(RecommendationModel).filter(RecommendationModel.recommendation_id == recommendation_id).first()
@@ -638,7 +652,7 @@ class GovernanceRegistry:
                     business_impact=getattr(db_record, "business_impact", "") or "",
                     expected_outcome=getattr(db_record, "expected_outcome", "") or "",
                     problem=getattr(db_record, "problem", "") or "",
-                    generated_at=parse(db_record.generated_at),
+                    generated_at=dateutil_parse(db_record.generated_at),
                     journey_id=db_record.journey_id,
                     intended_target_reference=db_record.intended_target_reference
                 )
@@ -1269,17 +1283,16 @@ class GovernanceRegistry:
     def get_policy_by_version(self, policy_id: str, version: str) -> Optional[PolicyVersion]:
         from app.db.database import SessionLocal
         from app.models.governance_storage import GovernedPolicyVersionModel
-        from dateutil.parser import parse
         db = SessionLocal()
         try:
             row = db.query(GovernedPolicyVersionModel).filter_by(
                 policy_id=policy_id, version=version
             ).one_or_none()
             if row:
-                eff_from = parse(row.effective_from) if row.effective_from else None
-                eff_until = parse(row.effective_until) if row.effective_until else None
-                app_ts = parse(row.approval_timestamp) if row.approval_timestamp else None
-                cr_at = parse(row.created_at) if row.created_at else datetime.utcnow()
+                eff_from = dateutil_parse(row.effective_from) if row.effective_from else None
+                eff_until = dateutil_parse(row.effective_until) if row.effective_until else None
+                app_ts = dateutil_parse(row.approval_timestamp) if row.approval_timestamp else None
+                cr_at = dateutil_parse(row.created_at) if row.created_at else datetime.utcnow()
                 ls = LifecycleState(row.lifecycle_state) if row.lifecycle_state in [e.value for e in LifecycleState] else LifecycleState.ACTIVE
                 return PolicyVersion(
                     policy_id=row.policy_id,
@@ -1306,17 +1319,16 @@ class GovernanceRegistry:
         import json
         from app.db.database import SessionLocal
         from app.models.governance_storage import GovernedRuleVersionModel
-        from dateutil.parser import parse
         db = SessionLocal()
         try:
             row = db.query(GovernedRuleVersionModel).filter_by(
                 rule_id=rule_id, version=version
             ).one_or_none()
             if row:
-                eff_from = parse(row.effective_from) if row.effective_from else None
-                eff_until = parse(row.effective_until) if row.effective_until else None
-                app_ts = parse(row.approval_timestamp) if row.approval_timestamp else None
-                cr_at = parse(row.created_at) if row.created_at else datetime.utcnow()
+                eff_from = dateutil_parse(row.effective_from) if row.effective_from else None
+                eff_until = dateutil_parse(row.effective_until) if row.effective_until else None
+                app_ts = dateutil_parse(row.approval_timestamp) if row.approval_timestamp else None
+                cr_at = dateutil_parse(row.created_at) if row.created_at else datetime.utcnow()
                 raw_inputs = json.loads(row.inputs_json) if row.inputs_json else []
                 inputs = [
                     RuleInputDefinition(
@@ -1358,7 +1370,6 @@ class GovernanceRegistry:
             version: str) -> Optional[RecommendationMapping]:
         from app.db.database import SessionLocal
         from app.models.governance_storage import GovernedRecommendationMappingModel
-        from dateutil.parser import parse
         import json
         db = SessionLocal()
         try:
@@ -1366,8 +1377,8 @@ class GovernanceRegistry:
                 mapping_id=mapping_id, version=version
             ).one_or_none()
             if row:
-                eff_from = parse(row.effective_from) if row.effective_from else None
-                cr_at = parse(row.created_at) if row.created_at else datetime.utcnow()
+                eff_from = dateutil_parse(row.effective_from) if row.effective_from else None
+                cr_at = dateutil_parse(row.created_at) if row.created_at else datetime.utcnow()
                 ar = AuthorityRequirement(row.authority_requirement) if row.authority_requirement in [e.value for e in AuthorityRequirement] else AuthorityRequirement.UNAVAILABLE
                 ls = LifecycleState(row.lifecycle_state) if row.lifecycle_state in [e.value for e in LifecycleState] else LifecycleState.ACTIVE
                 return RecommendationMapping(

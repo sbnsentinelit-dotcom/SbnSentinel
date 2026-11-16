@@ -1,7 +1,10 @@
 import os
 import time
 
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 from app.api.deps import RoleChecker  # noqa
 from app.core.config import settings
 from app.db.database import get_db
@@ -11,7 +14,11 @@ from app.schemas.audit import AuditLogCreate
 from app.services.data_audit_engine import data_audit_engine
 from fastapi import (APIRouter, Depends, HTTPException, WebSocket,
                      WebSocketDisconnect)
-from jose import JWTError, jwt
+try:
+    from jose import JWTError, jwt
+except ImportError:
+    import jwt
+    from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.orm import Session
 
 router = APIRouter()
@@ -125,8 +132,16 @@ def get_platform_health(current_user: User = Depends(
     Returns PASME Platform Health monitoring metrics.
     CP-30: Keep liveness, readiness and capability separate.
     """
-    process = psutil.Process(os.getpid())
-    memory_info = process.memory_info()
+    if psutil:
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        cpu_pct = psutil.cpu_percent()
+        mem_mb = round(memory_info.rss / 1024 / 1024, 2)
+        uptime_sec = round(time.time() - process.create_time(), 2)
+    else:
+        cpu_pct = 0.0
+        mem_mb = 0.0
+        uptime_sec = 0.0
 
     from app.services.rules_engine import rules_engine
     readiness = rules_engine.validate_governance_readiness()
@@ -153,9 +168,9 @@ def get_platform_health(current_user: User = Depends(
         "status": "healthy" if not MAINTENANCE_MODE else "maintenance",
         "maintenance_mode": MAINTENANCE_MODE,
         "metrics": {
-            "cpu_percent": psutil.cpu_percent(),
-            "memory_usage_mb": round(memory_info.rss / 1024 / 1024, 2),
-            "uptime_seconds": round(time.time() - process.create_time(), 2)
+            "cpu_percent": cpu_pct,
+            "memory_usage_mb": mem_mb,
+            "uptime_seconds": uptime_sec
         },
         "modules": {
             "connector_engine": connector_status,

@@ -136,7 +136,12 @@ def _build_historical_lifecycle(rec: RecommendationModel, db: Session) -> Dict[s
     if not decision_context_id:
         errors.append("missing_context")
     else:
-        evidence_records = db.query(ContextEvidenceModel).filter(ContextEvidenceModel.context_id == decision_context_id).all()
+        try:
+            evidence_records = db.query(ContextEvidenceModel).filter(
+                ContextEvidenceModel.context_id == decision_context_id
+            ).all()
+        except Exception:
+            evidence_records = []
         for ev in evidence_records:
             evidence = db.query(EvidenceModel).filter(EvidenceModel.evidence_id == ev.id).all()
             if len(evidence) > 1:

@@ -220,8 +220,8 @@ class CanonicalIngressService:
                 raw_effective = detail.get("effective_time") or detail.get("period", {}).get("start")
                 if raw_effective:
                     try:
-                        from dateutil.parser import parse as parse_date
-                        effective_dt = parse_date(raw_effective)
+                        val_str = str(raw_effective).replace("Z", "+00:00")
+                        effective_dt = datetime.fromisoformat(val_str)
                     except Exception:
                         pass
 

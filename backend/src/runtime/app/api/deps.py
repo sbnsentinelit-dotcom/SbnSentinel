@@ -6,7 +6,11 @@ from app.models.user import User, UserRole
 from app.services.data_audit_engine import data_audit_engine
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+try:
+    from jose import JWTError, jwt
+except ImportError:
+    import jwt
+    from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.orm import Session
 
 # This expects the token in the Authorization header: `Bearer <token>`

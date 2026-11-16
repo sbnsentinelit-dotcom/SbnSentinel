@@ -1,5 +1,8 @@
 import os
-import razorpay
+try:
+    import razorpay
+except ImportError:
+    razorpay = None
 import hmac
 import hashlib
 import uuid
@@ -17,7 +20,7 @@ razorpay_key_secret = os.getenv("RAZORPAY_KEY_SECRET", "mock_secret")
 razorpay_webhook_secret = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mock_webhook_secret")
 
 client = None
-if razorpay_key_id and razorpay_key_secret:
+if razorpay and razorpay_key_id and razorpay_key_secret:
     try:
         client = razorpay.Client(auth=(razorpay_key_id, razorpay_key_secret))
     except Exception as e:
