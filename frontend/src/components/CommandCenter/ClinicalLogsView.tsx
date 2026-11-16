@@ -415,11 +415,11 @@ export const ClinicalLogsView: React.FC = () => {
             </thead>
             <tbody>
               <tr>
-                <td>${enc.billing_status === 'Paid' ? '99213 / CPT' : '99213 / CPT'}</td>
-                <td>Outpatient Office Visit (Level 3)</td>
+                <td>${enc.cpt_code ? enc.cpt_code + ' / CPT' : 'Not Coded'}</td>
+                <td>${enc.reason_for_visit || 'Clinical Consultation'}</td>
                 <td rowspan="2" style="vertical-align: middle;">
                   <span class="badge ${enc.billing_status === 'Paid' ? 'badge-success' : 'badge-warning'}">
-                    $${(enc.copay || 30.00).toFixed(2)} - ${enc.billing_status === 'Paid' ? 'Paid' : 'Pending'}
+                    ${enc.copay !== null && enc.copay !== undefined ? '$' + enc.copay.toFixed(2) : 'No Copay'} - ${enc.billing_status || 'Pending'}
                   </span>
                 </td>
                 <td rowspan="2" style="vertical-align: middle;">
@@ -786,30 +786,26 @@ export const ClinicalLogsView: React.FC = () => {
                             </div>
                             <div className="text-right">
                               <p className="text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-0.5">Charge amount</p>
-                              <p className="text-xl font-extrabold text-white">$245.00</p>
+                              <p className="text-xl font-extrabold text-white">{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'Unavailable'}</p>
                             </div>
                           </div>
 
                           <div className="space-y-2.5">
                             <div className="flex justify-between text-xs font-semibold">
-                              <span className="text-white/60">99213 (Level 3 Visit)</span>
-                              <span className="text-white">$120.00</span>
+                              <span className="text-white/60">{activeEncounter?.cpt_code ? `${activeEncounter.cpt_code} (Source Procedure)` : 'Source Code Pending'}</span>
+                              <span className="text-white">{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'N/A'}</span>
                             </div>
                             <div className="flex justify-between text-xs font-semibold">
-                              <span className="text-white/60">36415 (Venipuncture)</span>
-                              <span className="text-white">$45.00</span>
-                            </div>
-                            <div className="flex justify-between text-xs font-semibold">
-                              <span className="text-white/60">80053 (Comp Metabolic)</span>
-                              <span className="text-white">$80.00</span>
+                              <span className="text-white/60">Patient Copay / Responsibility</span>
+                              <span className="text-white">{activeEncounter?.copay !== null && activeEncounter?.copay !== undefined ? `$${activeEncounter.copay.toFixed(2)}` : 'N/A'}</span>
                             </div>
                           </div>
 
                           <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between">
                             <span className="text-[10px] font-bold text-blue-400 bg-blue-500/20 px-2 py-0.5 rounded flex items-center gap-1">
-                              <Sparkles className="w-2.5 h-2.5" /> AI Auto-Coded
+                              <FileText className="w-2.5 h-2.5" /> Governed Source Record
                             </span>
-                            <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-0.5"><Check className="w-3 h-3" /> 99% Accuracy</span>
+                            <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-0.5"><Check className="w-3 h-3" /> Source Verified</span>
                           </div>
                         </div>
 
@@ -1032,20 +1028,12 @@ export const ClinicalLogsView: React.FC = () => {
             </thead>
             <tbody>
               <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                <td style={{ padding: '8px 0' }}>99213 - Outpatient Visit (Level 3)</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>$120.00</td>
-              </tr>
-              <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
-                <td style={{ padding: '8px 0' }}>36415 - Routine Venipuncture</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>$45.00</td>
-              </tr>
-              <tr style={{ borderBottom: '2px solid #111827' }}>
-                <td style={{ padding: '8px 0' }}>80053 - Comprehensive Metabolic Panel</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>$80.00</td>
+                <td style={{ padding: '8px 0' }}>{activeEncounter?.cpt_code ? `${activeEncounter.cpt_code} - ${activeEncounter.reason_for_visit || 'Clinical Consultation'}` : 'Not Coded'}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'Unavailable'}</td>
               </tr>
               <tr style={{ fontWeight: 'bold', fontSize: '13px' }}>
                 <td style={{ padding: '12px 0' }}>TOTAL ENCOUNTER CHARGES</td>
-                <td style={{ padding: '12px 0', textAlign: 'right' }}>$245.00</td>
+                <td style={{ padding: '12px 0', textAlign: 'right' }}>{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'Unavailable'}</td>
               </tr>
             </tbody>
           </table>

@@ -19,9 +19,6 @@ export const RevenueReportsView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [backendSummary, setBackendSummary] = useState<any | null>(null);
 
-  // Custom interactive states
-  const [showClaimsModal, setShowClaimsModal] = useState(false);
-  const [claimsReviewed, setClaimsReviewed] = useState(false);
   const [selectedClaimDetail, setSelectedClaimDetail] = useState<any | null>(null);
 
   const fetchEncounters = async () => {
@@ -100,12 +97,6 @@ export const RevenueReportsView: React.FC = () => {
     document.body.removeChild(link);
     showToast("📊 Real-time billing CSV file exported successfully!");
     setTimeout(() => setIsExporting(false), 1500);
-  };
-
-  const handleApproveRecode = () => {
-    setClaimsReviewed(true);
-    setShowClaimsModal(false);
-    showToast(`✨ AI Suggestion Approved: Undercoded claim recoded from 99213 to 99214 (+$${pendingAmount} revenue recovered)!`);
   };
 
   return (
@@ -287,25 +278,17 @@ export const RevenueReportsView: React.FC = () => {
              <div className="absolute top-[-30px] right-[-30px] w-32 h-32 bg-[var(--color-semantic-positive)] opacity-20 rounded-full blur-[40px] animate-pulse"></div>
              
              <h3 className="text-sm font-bold text-white flex items-center gap-2 mb-4">
-               <BrainCircuit className="w-5 h-5 text-emerald-400 animate-pulse" /> AI Claims Audit & Recovery
+               <ShieldCheck className="w-5 h-5 text-emerald-400" /> Revenue Integrity & Governance
              </h3>
              <div className="bg-[var(--color-surface)]/10 border border-white/20 rounded-[16px] p-4 backdrop-blur-sm shadow-sm mb-4">
-                <p className="text-[10px] text-[#A7F3D0] uppercase font-extrabold tracking-widest mb-1">Opportunity Detected</p>
-                <p className="text-sm font-medium text-white leading-relaxed">
-                  {claimsReviewed ? (
-                    <span>All detected undercoded claims have been successfully optimized. ${pendingAmount} recovered.</span>
-                  ) : (
-                    <span>Sentinel identified <span className="font-bold text-emerald-400 animate-pulse">${pendingAmount}</span> in undercoded claims for Dr. Jenkins' visits today.</span>
-                  )}
+                <p className="text-[10px] text-[#A7F3D0] uppercase font-extrabold tracking-widest mb-1">Source Authority Lock</p>
+                <p className="text-xs font-medium text-white/90 leading-relaxed">
+                  Sentinel preserves a strict read-only boundary over clinic billing. Claims, CPT codes, and remittances remain source-authoritative; Sentinel never manufactures codes or posts payments.
                 </p>
              </div>
-             <button 
-               onClick={() => setShowClaimsModal(true)}
-               disabled={claimsReviewed}
-               className={`w-full font-bold py-2.5 rounded-[10px] text-xs transition-transform hover:scale-[1.02] active:scale-95 shadow-lg select-none cursor-pointer ${claimsReviewed ? 'bg-gray-700 text-white/50 cursor-not-allowed shadow-none' : 'bg-[var(--color-semantic-positive)] hover:bg-[#059669] text-white shadow-[var(--color-semantic-positive)]/30'}`}
-             >
-               {claimsReviewed ? 'Claims Optimized' : 'Review Suggestion'}
-             </button>
+             <div className="w-full text-center text-xs font-semibold py-2 px-3 rounded-[10px] bg-white/10 border border-white/20 text-white/90">
+               Read-Only Governance Mode
+             </div>
           </div>
         </div>
       </div>
@@ -439,68 +422,6 @@ export const RevenueReportsView: React.FC = () => {
                     {selectedClaimDetail.status}
                   </span>
                 </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
- 
-      {/* AI Revenue Review Suggestion Modal */}
-      {showClaimsModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[var(--color-surface)] border border-white/10 rounded-[24px] premium-shadow max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-300">
-            <div className="flex items-center justify-between px-6 py-5 border-b border-white/10 bg-white/5">
-              <div className="flex items-center gap-2">
-                <BrainCircuit className="w-5 h-5 text-white" />
-                <h4 className="text-base font-extrabold text-white">AI Coding Correction</h4>
-              </div>
-              <button 
-                onClick={() => setShowClaimsModal(false)} 
-                className="w-8 h-8 rounded-full bg-[var(--color-surface)] border border-white/10 flex items-center justify-center hover:bg-[var(--color-surface)]/5 transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4 text-white/70" />
-              </button>
-            </div>
-            
-            <div className="p-6 space-y-4">
-              <p className="text-xs text-white/70 leading-relaxed">
-                Sentinel's NLP processor analyzed Dr. Jenkins' clinical SOAP notes for today's visits and found matching evidence for higher complexity coding.
-              </p>
-              
-              <div className="bg-blue-500/20 border border-blue-500/30 rounded-[16px] p-4 space-y-3">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-white/70 font-semibold">Patient Encounters</span>
-                  <span className="font-extrabold text-blue-400">4 Encounters</span>
-                </div>
-                <div className="h-px bg-blue-500/30"></div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-white/70 font-semibold">Current Billing Code</span>
-                  <span className="font-bold text-slate-700">99213 (Level 3 Visit)</span>
-                </div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-white/70 font-semibold">AI Recommended Code</span>
-                  <span className="font-extrabold text-emerald-400">99214 (Level 4 Visit)</span>
-                </div>
-                <div className="h-px bg-blue-500/30"></div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-slate-800 font-extrabold">Estimated Revenue Gain</span>
-                  <span className="text-sm font-extrabold text-emerald-400">+${pendingAmount.toFixed(2)}</span>
-                </div>
-              </div>
- 
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={() => setShowClaimsModal(false)}
-                  className="flex-1 bg-[var(--color-surface)] border border-white/10 hover:bg-[var(--color-surface)]/5 text-white/60 font-bold py-2.5 rounded-[10px] text-xs transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleApproveRecode}
-                  className="flex-1 bg-[var(--color-semantic-positive)] hover:bg-[#059669] text-white font-bold py-2.5 rounded-[10px] text-xs shadow-lg shadow-emerald-500/20 transition-transform hover:scale-[1.01] active:scale-95 cursor-pointer"
-                >
-                  Approve Recode
-                </button>
               </div>
             </div>
           </div>

@@ -653,15 +653,15 @@ export const PatientFlowView: React.FC = () => {
         <div class="vitals-grid">
           <div class="vital-box">
             <span>Blood Pressure</span>
-            <p>${enc.clinical_notes?.includes('BP') ? enc.clinical_notes.split('BP')[1].split(',')[0].trim() : '120/80 mmHg'}</p>
+            <p>${enc.clinical_notes?.includes('BP') ? enc.clinical_notes.split('BP')[1].split(',')[0].trim() : 'Not Recorded'}</p>
           </div>
           <div class="vital-box">
             <span>Heart Rate</span>
-            <p>${enc.clinical_notes?.includes('HR') ? enc.clinical_notes.split('HR')[1].split(',')[0].trim() : '72 bpm'}</p>
+            <p>${enc.clinical_notes?.includes('HR') ? enc.clinical_notes.split('HR')[1].split(',')[0].trim() : 'Not Recorded'}</p>
           </div>
           <div class="vital-box">
             <span>Oxygen Saturation</span>
-            <p>98%</p>
+            <p>${enc.clinical_notes?.includes('SpO2') ? enc.clinical_notes.split('SpO2')[1].split(',')[0].trim() : 'Not Recorded'}</p>
           </div>
         </div>
 
@@ -1617,19 +1617,19 @@ export const PatientFlowView: React.FC = () => {
 
                               {/* Vitals Stream Mockup */}
                               <div className="bg-white/5 border border-white/10 rounded-[16px] p-3 space-y-2 mt-2">
-                                <span className="text-[9px] text-white/50 font-bold uppercase tracking-wider block">Real-time Vitals Stream</span>
+                                <span className="text-[9px] text-white/50 font-bold uppercase tracking-wider block">Observed Telemetry</span>
                                 <div className="grid grid-cols-3 gap-2 text-center">
                                   <div className="bg-white/5 p-2 rounded-lg border border-white/10">
                                     <span className="text-[8px] text-white/50 block font-bold">BP</span>
-                                    <span className="text-xs font-black text-emerald-600">120/80</span>
+                                    <span className="text-xs font-black text-emerald-600">{enc.clinical_notes?.includes('BP') ? enc.clinical_notes.split('BP')[1].split(',')[0].trim() : 'N/A'}</span>
                                   </div>
                                   <div className="bg-white/5 p-2 rounded-lg border border-white/10">
                                     <span className="text-[8px] text-white/50 block font-bold">HR</span>
-                                    <span className="text-xs font-black text-blue-400">${enc.clinical_notes?.includes('HR') ? enc.clinical_notes.split('HR')[1].split(',')[0].trim() : '72 bpm'}</span>
+                                    <span className="text-xs font-black text-blue-400">{enc.clinical_notes?.includes('HR') ? enc.clinical_notes.split('HR')[1].split(',')[0].trim() : 'N/A'}</span>
                                   </div>
                                   <div className="bg-white/5 p-2 rounded-lg border border-white/10">
                                     <span className="text-[8px] text-white/50 block font-bold">SpO2</span>
-                                    <span className="text-xs font-black text-[var(--color-accent)]">98%</span>
+                                    <span className="text-xs font-black text-[var(--color-accent)]">{enc.clinical_notes?.includes('SpO2') ? enc.clinical_notes.split('SpO2')[1].split(',')[0].trim() : 'N/A'}</span>
                                   </div>
                                 </div>
                               </div>
@@ -1856,19 +1856,19 @@ export const PatientFlowView: React.FC = () => {
                                 <div className="space-y-4 animate-in fade-in duration-200">
                                   {/* Vitals summary */}
                                   <div className="bg-white/5 border border-white/10 rounded-[16px] p-4 space-y-2">
-                                    <span className="text-[9px] text-white/50 font-bold uppercase tracking-wider block">Real-time Telemetry Streams</span>
+                                    <span className="text-[9px] text-white/50 font-bold uppercase tracking-wider block">Observed Telemetry Streams</span>
                                     <div className="grid grid-cols-3 gap-2 text-center">
                                       <div className="bg-white/5 p-2.5 rounded-lg border border-white/10">
                                         <span className="text-[8px] text-white/50 block font-bold">BP</span>
-                                        <span className="text-xs font-black text-emerald-600">120/80</span>
+                                        <span className="text-xs font-black text-emerald-600">{enc.clinical_notes?.includes('BP') ? enc.clinical_notes.split('BP')[1].split(',')[0].trim() : 'N/A'}</span>
                                       </div>
                                       <div className="bg-white/5 p-2.5 rounded-lg border border-white/10">
                                         <span className="text-[8px] text-white/50 block font-bold">HR</span>
-                                        <span className="text-xs font-black text-blue-400">${enc.clinical_notes?.includes('HR') ? enc.clinical_notes.split('HR')[1].split(',')[0].trim() : '72 bpm'}</span>
+                                        <span className="text-xs font-black text-blue-400">{enc.clinical_notes?.includes('HR') ? enc.clinical_notes.split('HR')[1].split(',')[0].trim() : 'N/A'}</span>
                                       </div>
                                       <div className="bg-white/5 p-2.5 rounded-lg border border-white/10">
                                         <span className="text-[8px] text-white/50 block font-bold">SpO2</span>
-                                        <span className="text-xs font-black text-[var(--color-accent)]">98%</span>
+                                        <span className="text-xs font-black text-[var(--color-accent)]">{enc.clinical_notes?.includes('SpO2') ? enc.clinical_notes.split('SpO2')[1].split(',')[0].trim() : 'N/A'}</span>
                                       </div>
                                     </div>
                                   </div>
