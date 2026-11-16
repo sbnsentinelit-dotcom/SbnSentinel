@@ -83,6 +83,17 @@ def _compute_source_version(resource: Dict[str, Any]) -> str:
     return f"hash:{hashlib.sha256(payload_bytes).hexdigest()[:16]}"
 
 
+class IngressBatchResult(dict):
+    """
+    Dual sync/async compatible dictionary result.
+    Can be used directly as a dict or awaited in async contexts.
+    """
+    def __await__(self):
+        async def _coro():
+            return self
+        return _coro().__await__()
+
+
 class CanonicalIngressService:
     """
     G5 Replay-Safe Ingestion Service with Durable Ingestion Ledger.
@@ -114,7 +125,7 @@ class CanonicalIngressService:
         and ingestion ledger, and advances checkpoints consistently.
         """
         if not records:
-            return {"status": "Success", "processed": 0, "gated": 0, "tombstoned": 0, "duplicates_skipped": 0}
+            return IngressBatchResult({"status": "Success", "processed": 0, "gated": 0, "tombstoned": 0, "duplicates_skipped": 0})
 
         # G3/G5 Input Safety: Payload size enforcement
         payload_bytes = json.dumps(records).encode("utf-8")
@@ -133,6 +144,7 @@ class CanonicalIngressService:
         last_context_type = "Unknown"
 
         with SessionLocal() as db:
+            seen_in_batch = set()
             for r in records:
                 context_type = r.get("context_type", "Unknown")
                 last_context_type = context_type
@@ -154,6 +166,10 @@ class CanonicalIngressService:
                 )
                 fact_key = hashlib.sha256(source_key_str.encode()).hexdigest()
 
+                # Within-batch duplicate check
+                if fact_key in seen_in_batch:
+                    continue
+
                 # G5 Event Case 1: Deduplication / Replay check against DB
                 existing = db.query(EvidenceModel).filter(
                     EvidenceModel.source_connector == connector_id,
@@ -161,6 +177,7 @@ class CanonicalIngressService:
                 ).first()
 
                 if existing:
+                    seen_in_batch.add(fact_key)
                     continue  # ALREADY_PROCESSED — idempotent no-op; retain original evidence ID
 
                 # G5 Event Case 3: Deletion / Revocation / Tombstone
@@ -270,6 +287,7 @@ class CanonicalIngressService:
                         db.add(evidence)
                         db.add(ledger_entry)
                     processed += 1
+                    seen_in_batch.add(fact_key)
                 except exc.IntegrityError:
                     pass  # Idempotent duplicate at DB constraint level
 
@@ -290,7 +308,7 @@ class CanonicalIngressService:
             f"[{connector_id}] Processed {processed} records ({duplicates_skipped} duplicates skipped, "
             f"{tombstoned} tombstoned, {gated} ambiguous/gated)."
         )
-        return {
+        return IngressBatchResult({
             "status": "Success",
             "processed": processed,
             "gated": gated,
@@ -298,7 +316,7 @@ class CanonicalIngressService:
             "duplicates_skipped": duplicates_skipped,
             "connector_id": connector_id,
             "clinic_id": resolved_clinic,
-        }
+        })
 
 
 canonical_ingress = CanonicalIngressService()
