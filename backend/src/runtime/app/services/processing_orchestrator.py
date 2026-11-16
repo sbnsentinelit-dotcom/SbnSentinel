@@ -486,20 +486,27 @@ class ProcessingOrchestrator:
 
             from app.models.intelligence import RuleFindingModel
             findings_list = response.result_payload.get("findings", [])
-            # Only keep findings that actually met the condition
-            active_findings = [f for f in findings_list if f.get("result") == "CONDITION_MET"]
+            # CP-07 / C03: Prioritize CONDITION_MET; retain NOT_EVALUABLE/INSUFFICIENT/UNSUPPORTED if conditions un-evaluable
+            condition_met_findings = [f for f in findings_list if f.get("result") == "CONDITION_MET"]
+            if condition_met_findings:
+                active_findings = condition_met_findings
+            else:
+                active_findings = [
+                    f for f in findings_list
+                    if f.get("result") in ("NOT_EVALUABLE", "INSUFFICIENT", "UNSUPPORTED")
+                ]
 
-            # If no CONDITION_MET finding exists, we shouldn't arbitrarily pick the first one
+            # If no active finding exists, intelligence engine handles NO_RECOMMENDATION
             if not active_findings:
                 # F-11: we pass an empty array, intelligence engine handles NO_RECOMMENDATION
                 event.rule_findings = []
                 event.rule_version = "Unknown"
             else:
-                # CP-07: Persist all findings that belong to the context
+                # CP-07 / C03: Persist all findings that belong to the context
                 event.rule_findings = [
                     RuleFindingModel(
                         rule_id=f.get("rule_id", "Unknown"),
-                        severity=f.get("severity") or f.get("result", "Information"),
+                        severity=f.get("severity") or ("High" if f.get("result") in ("NOT_EVALUABLE", "INSUFFICIENT") else "Information"),
                         description=f.get("result", ""),
                         evaluation_id=f.get("evaluation_id", "UNKNOWN_EVALUATION")
                     )

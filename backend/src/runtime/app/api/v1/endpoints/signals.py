@@ -49,7 +49,9 @@ def get_historical_signals(db: Session = Depends(get_db),
 
 @router.on_event("startup")
 async def startup_event():
-    simulation_engine.start()
+    from app.core.config import settings
+    if getattr(settings, "SYNTHETIC_TEST_ENABLED", False) and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION":
+        simulation_engine.start()
 
 
 @router.on_event("shutdown")

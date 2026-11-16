@@ -92,12 +92,23 @@ class DataAuditEngine:
         """
         db = SessionLocal()
         try:
+            actor = (
+                getattr(audit_data, "user_system", None)
+                or getattr(audit_data, "user_email", None)
+                or "system@sentinel.local"
+            )
+            mod = (
+                getattr(audit_data, "module", None)
+                or getattr(audit_data, "resource", None)
+                or "Audit"
+            )
+            corr_id = getattr(audit_data, "correlation_id", None)
             self._log_internal(
                 db,
-                user_system=audit_data.user_email,
+                user_system=actor,
                 action=audit_data.action,
-                module=audit_data.resource,
-                correlation_id=None
+                module=mod,
+                correlation_id=corr_id
             )
             return True
         except Exception as e:

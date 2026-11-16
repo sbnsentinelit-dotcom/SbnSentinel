@@ -310,33 +310,48 @@ class EvidenceEngine(BaseService):
                     "Refusing to infer operational truth from descriptive text."
                 )
             elif "booked" in detail or "appointment" in detail:
-                evidence_items.append(
-                    self._create_eos_001(
-                        "Appointment",
-                        "status",
-                        "BOOKED",
-                        source,
-                        now))
+                if getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION":
+                    self.logger.warning(
+                        "[EvidenceEngine] Production runtime: Refusing to infer BOOKED appointment from free-text keyword."
+                    )
+                else:
+                    evidence_items.append(
+                        self._create_eos_001(
+                            "Appointment",
+                            "status",
+                            "BOOKED",
+                            source,
+                            now))
 
         elif event_type == "Phone":
             if "missed call" in detail:
-                evidence_items.append(
-                    self._create_eos_001(
-                        "PhoneInteraction",
-                        "status",
-                        "MISSED_CALL",
-                        source,
-                        now))
+                if getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION":
+                    self.logger.warning(
+                        "[EvidenceEngine] Production runtime: Refusing to infer MISSED_CALL from free-text keyword."
+                    )
+                else:
+                    evidence_items.append(
+                        self._create_eos_001(
+                            "PhoneInteraction",
+                            "status",
+                            "MISSED_CALL",
+                            source,
+                            now))
 
         elif event_type == "Email":
             if "lab" in detail:
-                evidence_items.append(
-                    self._create_eos_001(
-                        "LabReport",
-                        "status",
-                        "PENDING_REVIEW",
-                        source,
-                        now))
+                if getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION":
+                    self.logger.warning(
+                        "[EvidenceEngine] Production runtime: Refusing to infer PENDING_REVIEW from free-text keyword."
+                    )
+                else:
+                    evidence_items.append(
+                        self._create_eos_001(
+                            "LabReport",
+                            "status",
+                            "PENDING_REVIEW",
+                            source,
+                            now))
 
         # Provenance
         evidence_items.append(

@@ -4,9 +4,11 @@ from datetime import datetime
 
 
 class AuditLogCreate(BaseModel):
-    user_system: str
+    user_system: Optional[str] = "system@sentinel.local"
+    user_email: Optional[str] = None
     action: str
     module: Optional[str] = None
+    resource: Optional[str] = None
     correlation_id: Optional[str] = None
     error_category: Optional[str] = None
     severity: Optional[str] = None

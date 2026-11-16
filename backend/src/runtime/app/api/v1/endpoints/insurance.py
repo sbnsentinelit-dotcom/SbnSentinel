@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 import random
 from typing import Optional
 
+from app.core.config import settings
 from app.db.database import get_db
 from app.models.insurance import PatientInsuranceModel
 from app.schemas.insurance import PatientInsuranceCreate, PatientInsuranceResponse, OCRScanResponse
@@ -17,6 +18,11 @@ def simulate_ocr_scan(file_type: str = "image/png"):
     Simulate OCR scanning on a patient's uploaded health insurance card (front/back).
     Extracts Payer Name, Member ID, Group Number, etc.
     """
+    if getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION" or not getattr(settings, "SYNTHETIC_TEST_ENABLED", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Synthetic simulation disabled in production runtime. Requires source-verified document."
+        )
     # Simple list of mock insurance providers
     providers = [
         {"name": "Blue Cross Blue Shield", "payer_id": "BCBS8902"},
@@ -56,6 +62,11 @@ def verify_patient_eligibility(insurance_in: PatientInsuranceCreate, db: Session
     Verify patient insurance eligibility against simulated clearinghouse (EDI 270/271).
     Saves or updates the record in the database.
     """
+    if getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION" or not getattr(settings, "SYNTHETIC_TEST_ENABLED", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Synthetic clearinghouse simulation disabled in production runtime. Requires authenticated EDI 270/271 connection."
+        )
     # Check if there is an existing record for the patient
     existing = db.query(PatientInsuranceModel).filter(
         PatientInsuranceModel.patient_name == insurance_in.patient_name
