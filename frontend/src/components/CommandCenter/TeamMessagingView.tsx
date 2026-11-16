@@ -74,7 +74,7 @@ export const TeamMessagingView: React.FC<{ currentUser?: { full_name: string }; 
   useEffect(() => { activeContactRef.current = activeContact; }, [activeContact]);
   useEffect(() => { myNameRef.current = myName; }, [myName]);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+   
   useEffect(() => {
     if (activeContact) {
       setActiveMessages(loadThread(myName, activeContact));

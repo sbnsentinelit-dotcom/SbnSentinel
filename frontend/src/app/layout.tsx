@@ -1,17 +1,13 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
-
 import StoreProvider from '@/providers/StoreProvider';
+import { ErrorScreen } from '@/components/CommandCenter/ErrorScreen';
 
 export const metadata: Metadata = {
   title: "SBN Sentinel",
   description: "Platform Foundation",
 };
-
-import { ErrorScreen } from '@/components/CommandCenter/ErrorScreen';
 
 // SDS-D9: Localization/RTL readiness contract
 const uiLocale = {
@@ -26,7 +22,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang={uiLocale.locale} dir={uiLocale.dir} className="dark">
-      <body className={`${inter.className} antialiased bg-[var(--color-canvas)] text-[var(--color-text-primary)]`}>
+      <body className="font-sans antialiased bg-[var(--color-canvas)] text-[var(--color-text-primary)]">
         <StoreProvider>
           <ErrorScreen>
             <div className="min-h-screen relative w-full overflow-hidden animate-fade-in">

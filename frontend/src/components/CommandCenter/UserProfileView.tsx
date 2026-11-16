@@ -11,7 +11,7 @@ export const UserProfileView = () => {
     clinic: 'Sentinel Main Hub'
   });
   
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+   
   React.useEffect(() => {
     const userStr = localStorage.getItem('user');
     if (userStr) {
