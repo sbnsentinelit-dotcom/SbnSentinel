@@ -116,7 +116,7 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
               <circle cx="260" cy="80" r="5" fill="var(--color-semantic-positive)" stroke="#FFFFFF" strokeWidth="2.5" className="animate-pulse" />
               <g transform="translate(230, 42)">
                  <rect width="60" height="24" rx="12" fill="#1E293B" stroke="var(--color-semantic-positive)" strokeWidth="1" />
-                 <text x="30" y="15" fill="var(--color-semantic-positive)" fontSize="9" fontWeight="black" textAnchor="middle">${preventedLoss.toLocaleString()}</text>
+                 <text x="30" y="15" fill="var(--color-semantic-positive)" fontSize="9" fontWeight="black" textAnchor="middle">{hasFinancialEvidence ? '$0.00' : 'Audit Lock'}</text>
                  <polygon points="30,24 26,28 34,28" fill="#1E293B" transform="rotate(180 30 26)" />
               </g>
            </svg>
