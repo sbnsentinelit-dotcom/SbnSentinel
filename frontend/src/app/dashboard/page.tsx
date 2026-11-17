@@ -386,9 +386,6 @@ export default function Dashboard() {
                 <p className="text-[9px] font-black text-white/60 uppercase tracking-[0.2em] mb-3 px-4">Administration</p>
                 <div className="space-y-1">
                   <SidebarItem icon={Users} label="User Management" active={activeTab === 'settings-team'} onClick={() => { setActiveTab('settings-team'); setIsMobileMenuOpen(false); }} />
-                  {['super_admin', 'org_admin', 'clinic_admin'].includes(userRole) && (
-                    <SidebarItem icon={Database} label="Connect Your API" active={activeTab === 'settings-integrations' || activeTab === 'connectors'} onClick={() => { setActiveTab('settings-integrations'); setIsMobileMenuOpen(false); }} />
-                  )}
                   <SidebarItem icon={ClipboardList} label="Audit Logs" active={activeTab === 'audit-logs'} onClick={() => { setActiveTab('audit-logs'); setIsMobileMenuOpen(false); }} />
                 </div>
               </div>
@@ -398,14 +395,16 @@ export default function Dashboard() {
               <div>
                 <p className="text-[9px] font-black text-white/60 uppercase tracking-[0.2em] mb-3 px-4">Settings</p>
                 <div className="space-y-1">
-                  {['super_admin'].includes(userRole) && (
-                    <SidebarItem icon={Building2} label="Organization Details" active={activeTab === 'settings-general'} onClick={() => { setActiveTab('settings-general'); setIsMobileMenuOpen(false); }} />
-                  )}
+                  <SidebarItem icon={Database} label="Connect Your API" active={activeTab === 'settings-integrations' || activeTab === 'connectors'} onClick={() => { setActiveTab('settings-integrations'); setIsMobileMenuOpen(false); }} />
                   {['super_admin', 'org_admin'].includes(userRole) && (
                     <SidebarItem icon={Building2} label="Clinics & Facilities" active={activeTab === 'settings-clinics'} onClick={() => { setActiveTab('settings-clinics'); setIsMobileMenuOpen(false); }} />
                   )}
+                  <SidebarItem icon={CreditCard} label="Billing & Plans" active={activeTab === 'settings-billing'} onClick={() => { setActiveTab('settings-billing'); setIsMobileMenuOpen(false); }} />
                   <SidebarItem icon={Bell} label="Notifications" active={activeTab === 'settings-notifications'} onClick={() => { setActiveTab('settings-notifications'); setIsMobileMenuOpen(false); }} />
-                  <SidebarItem icon={Settings} label="Preferences" active={activeTab === 'settings-security'} onClick={() => { setActiveTab('settings-security'); setIsMobileMenuOpen(false); }} />
+                  <SidebarItem icon={Shield} label="Security & Compliance" active={activeTab === 'settings-security'} onClick={() => { setActiveTab('settings-security'); setIsMobileMenuOpen(false); }} />
+                  {['super_admin'].includes(userRole) && (
+                    <SidebarItem icon={Building2} label="Organization Details" active={activeTab === 'settings-general'} onClick={() => { setActiveTab('settings-general'); setIsMobileMenuOpen(false); }} />
+                  )}
                 </div>
               </div>
             )}
@@ -964,6 +963,7 @@ export default function Dashboard() {
                 ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> 
                 : <SettingsView
                     activeMenuProp={activeTab === 'settings' || activeTab === 'settings-general' ? 'general' : activeTab === 'settings-ai' ? 'ai' : activeTab === 'settings-team' ? 'team' : activeTab === 'settings-notifications' ? 'notifications' : activeTab === 'settings-integrations' ? 'integrations' : activeTab === 'settings-billing' ? 'billing' : activeTab === 'settings-security' ? 'security' : activeTab === 'settings-clinics' ? 'settings-clinics' : 'general'}
+                    onTabChange={(tabKey) => setActiveTab(tabKey)}
                     onSaveSettings={(data) => {
                       if (data.practiceName) setPracticeName(data.practiceName);
                       if (data.activePlan) setActivePlan(data.activePlan);

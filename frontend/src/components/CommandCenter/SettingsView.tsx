@@ -11,12 +11,29 @@ import { createPortal } from 'react-dom';
 interface SettingsViewProps {
   onSaveSettings?: (data: any) => void;
   activeMenuProp?: string;
+  onTabChange?: (tabKey: string) => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, activeMenuProp = 'general' }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, activeMenuProp = 'general', onTabChange }) => {
   const [localActiveMenu, setLocalActiveMenu] = useState(activeMenuProp);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [mounted, setMounted] = useState(false);
+
+  const handleSelectTab = (tabId: string) => {
+    setLocalActiveMenu(tabId);
+    if (onTabChange) {
+      const tabKeyMap: Record<string, string> = {
+        general: 'settings-general',
+        integrations: 'settings-integrations',
+        clinics: 'settings-clinics',
+        team: 'settings-team',
+        notifications: 'settings-notifications',
+        security: 'settings-security',
+        billing: 'settings-billing',
+      };
+      onTabChange(tabKeyMap[tabId] || 'settings-general');
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -551,7 +568,7 @@ document.body
             return (
               <button
                 key={tab.id}
-                onClick={() => setLocalActiveMenu(tab.id)}
+                onClick={() => handleSelectTab(tab.id)}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-[14px] text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                   isActive
                     ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-900/30 border border-purple-400/30'
