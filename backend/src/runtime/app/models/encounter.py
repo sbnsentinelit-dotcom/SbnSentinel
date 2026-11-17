@@ -25,3 +25,19 @@ class EncounterModel(Base):
     cpt_code = Column(String, nullable=True)
     billing_amount = Column(Float, nullable=True)
     denial_reason = Column(String, nullable=True)  # e.g. "Coverage Expired", "Invalid CPT Code"
+
+    @property
+    def patient_name(self) -> str:
+        return self.patient_id
+
+    @patient_name.setter
+    def patient_name(self, value: str):
+        self.patient_id = value
+
+    @property
+    def provider_name(self) -> str:
+        return self.provider_id
+
+    @provider_name.setter
+    def provider_name(self, value: str):
+        self.provider_id = value
