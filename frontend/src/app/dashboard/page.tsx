@@ -235,12 +235,13 @@ export default function Dashboard() {
     
     // Map backend roles to frontend internal roles
     const normalizeRole = (r: string) => {
-      if (r === 'System Administrator') return 'super_admin';
-      if (r === 'Organization Administrator') return 'org_admin';
-      if (r === 'Clinic Administrator') return 'clinic_admin';
-      if (r === 'Operations Manager') return 'ops_manager';
-      if (r === 'Practice Manager') return 'practice_manager';
-      if (r === 'Staff') return 'staff';
+      const lower = (r || '').toLowerCase().trim();
+      if (lower === 'system administrator' || lower === 'super_admin' || lower === 'system_administrator') return 'super_admin';
+      if (lower === 'organization administrator' || lower === 'org_admin' || lower === 'organization_administrator') return 'org_admin';
+      if (lower === 'clinic administrator' || lower === 'clinic_admin' || lower === 'clinic_administrator' || lower === 'clinic manager') return 'clinic_admin';
+      if (lower === 'operations manager' || lower === 'ops_manager' || lower === 'operations_manager') return 'ops_manager';
+      if (lower === 'practice manager' || lower === 'practice_manager') return 'practice_manager';
+      if (lower === 'staff' || lower === 'staff user' || lower === 'front desk') return 'staff';
       return r;
     };
     

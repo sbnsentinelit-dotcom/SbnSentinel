@@ -1,8 +1,12 @@
 from fastapi import APIRouter
 from typing import List, Dict, Any
 from datetime import datetime, timedelta
+import os
+import json
 
 router = APIRouter()
+
+_cached_patients = None
 
 # Deterministic specifications matching the UAE Dubai Demo Dataset
 EMIRATES = ["Dubai", "Abu Dhabi", "Sharjah", "Ajman", "Fujairah", "Ras Al Khaimah", "Umm Al Quwain", "Al Ain"]
@@ -18,6 +22,49 @@ def get_all_uae_patients():
     """
     Returns the complete 500 UAE Patient Master Directory matching the Dubai Clinic dataset.
     """
+    global _cached_patients
+    if _cached_patients:
+        return _cached_patients
+
+    # Try to load exact records from client_excel.json
+    for path in [
+        os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'client_excel.json'),
+        '/app/client_excel.json',
+        'client_excel.json'
+    ]:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    p_list = data.get('Patients', [])
+                    if p_list:
+                        formatted = []
+                        for p in p_list:
+                            formatted.append({
+                                "patient_id": p.get("Patient_ID"),
+                                "mrn": p.get("MRN"),
+                                "first_name": p.get("First_Name"),
+                                "last_name": p.get("Last_Name"),
+                                "name": f"{p.get('First_Name')} {p.get('Last_Name')}",
+                                "dob": p.get("DOB"),
+                                "gender": p.get("Gender"),
+                                "nationality": p.get("Nationality"),
+                                "emirate": p.get("Emirate"),
+                                "mobile": p.get("Mobile"),
+                                "email": p.get("Email"),
+                                "payer": p.get("Payer"),
+                                "plan": p.get("Plan"),
+                                "member_id": p.get("Member_ID"),
+                                "policy_start": p.get("Policy_Start"),
+                                "policy_end": p.get("Policy_End"),
+                                "registration_date": p.get("Registration_Date"),
+                                "status": p.get("Status", "Active")
+                            })
+                        _cached_patients = formatted
+                        return formatted
+            except Exception:
+                pass
+
     patients = []
     base_dob = datetime(1960, 1, 1)
 

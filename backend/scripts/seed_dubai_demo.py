@@ -82,6 +82,14 @@ DENIAL_REASONS = [
 
 
 def seed_dubai_data():
+    # If exact client Excel json exists, delegate to seed_exact
+    try:
+        from scripts.seed_exact_excel import seed_exact
+        seed_exact()
+        return
+    except Exception as e:
+        print(f"Notice: seed_exact_excel not available, falling back to procedural seeder ({e})")
+
     print("===================================================================")
     print("🇦🇪 SBN Sentinel: Seeding UAE Dubai Healthcare Clinic Demo Dataset")
     print("===================================================================")
