@@ -46,10 +46,10 @@ def resolve_hospital_scope(db, actor, selection, *, for_update=False):
             raise HospitalAccessDenied("Department selection expands access")
         allowed = selected
     return VerifiedHospitalScope(org_id=facility.organization_id, clinic_id=clinic_id,
-        allowed_department_ids=allowed, all_departments=bool(grant.all_departments and not narrowed),
-        capabilities=frozenset(grant.capabilities or []), grant_revision=grant.grant_revision,
-        allow_unattributed=bool(grant.allow_unattributed and not narrowed),
-        full_record=bool(grant.full_record and not narrowed))
+                                 allowed_department_ids=allowed, all_departments=bool(grant.all_departments and not narrowed),
+                                 capabilities=frozenset(grant.capabilities or []), grant_revision=grant.grant_revision,
+                                 allow_unattributed=bool(grant.allow_unattributed and not narrowed),
+                                 full_record=bool(grant.full_record and not narrowed))
 
 
 def require_capability(scope, capability):
@@ -60,7 +60,11 @@ def require_capability(scope, capability):
 def hospital_facility_ids():
     """Canonical hospital IDs plus explicitly reconciled legacy aliases."""
     from app.models.hospital_processing import FacilityCrosswalk
-    canonical = select(HospitalDepartment.clinic_id).distinct()
+    from app.models.hospital_dimensions import HospitalFacilityEnrollment
+    # Retain pre-enrollment protection during upgrade and classify zero-department hospitals.
+    facilities = select(HospitalFacilityEnrollment.clinic_id).union(
+        select(HospitalDepartment.clinic_id).distinct()).subquery()
+    canonical = select(facilities.c.clinic_id)
     return canonical.union(select(FacilityCrosswalk.legacy_clinic_id).where(
         FacilityCrosswalk.status == "RESOLVED", FacilityCrosswalk.clinic_id.in_(canonical)))
 
@@ -93,14 +97,14 @@ def configure_membership(db, actor, clinic_id, target_actor_id, *, expected_revi
         or not set(capabilities).issubset(admin.capabilities)
         or (all_departments and not admin.all_departments)
         or (allow_unattributed and not admin.allow_unattributed)
-        or (full_record and not admin.full_record)):
+            or (full_record and not admin.full_record)):
         raise HospitalAccessDenied("Delegation expands the administrator's grant")
     # Facility lock also serializes creation of a previously absent actor grant.
     db.scalars(select(OrganizationClinicModel).where(
         OrganizationClinicModel.id == clinic_id).with_for_update()).one()
     grant = db.scalars(select(HospitalMembership).where(HospitalMembership.actor_id == target_actor_id,
-        HospitalMembership.clinic_id == clinic_id).with_for_update()
-        .execution_options(populate_existing=True)).first()
+                                                        HospitalMembership.clinic_id == clinic_id).with_for_update()
+                       .execution_options(populate_existing=True)).first()
     if (grant.grant_revision if grant else 0) != expected_revision:
         raise ValueError("Grant changed; refresh required")
     fields = ("department_ids", "capabilities", "all_departments", "allow_unattributed", "full_record", "is_active", "grant_revision")
@@ -116,5 +120,5 @@ def configure_membership(db, actor, clinic_id, target_actor_id, *, expected_revi
     db.flush()
     from app.services.hospital_audit import record_hospital_audit
     record_hospital_audit(db, admin, actor.id, "HOSPITAL_GRANT_CHANGED", grant.id, reason=reason,
-        old=before, new={field: getattr(grant, field) for field in fields})
+                          old=before, new={field: getattr(grant, field) for field in fields})
     return grant

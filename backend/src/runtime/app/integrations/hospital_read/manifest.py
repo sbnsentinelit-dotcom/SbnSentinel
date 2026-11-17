@@ -32,8 +32,11 @@ class HospitalReadProfile:
     resync_basis_ref: str | None = None
     department_map: dict[str, str] = field(default_factory=dict)
     department_ids_are_canonical: bool = False
+    attribution_time_basis: str = "parent_claim_service_date"
 
     def __post_init__(self):
+        if self.attribution_time_basis not in {"parent_claim_service_date", "line_service_date", "effective_time"}:
+            raise ValueError("Reviewed attribution business-time basis required")
         if (not isinstance(self.endpoints, Mapping) or not isinstance(self.status_map, Mapping)
                 or not isinstance(self.department_map, Mapping) or type(self.department_ids_are_canonical) is not bool):
             raise ValueError("Invalid profile mapping structure")
@@ -74,15 +77,17 @@ class HospitalReadProfile:
             kind: MappingProxyType(dict(mapping)) for kind, mapping in self.status_map.items()}))
 
     def cursor_binding(self, resource_kind, transport="rest"):
-        import hashlib, json
+        import hashlib
+        import json
         if resource_kind not in self.endpoints:
             raise ValueError("Resource unavailable")
         if transport not in {"rest", "csv"}:
             raise ValueError("Invalid extraction transport")
         definition = {"base_url": self.base_url, "endpoints": dict(self.endpoints),
-            "status_map": {key: dict(value) for key, value in self.status_map.items()},
-            "department_map": dict(self.department_map), "department_ids_are_canonical": self.department_ids_are_canonical,
-            "max_rows": self.max_rows, "max_bytes": self.max_bytes, "max_pages_per_run": self.max_pages_per_run}
+                      "status_map": {key: dict(value) for key, value in self.status_map.items()},
+                      "department_map": dict(self.department_map), "department_ids_are_canonical": self.department_ids_are_canonical,
+                      "attribution_time_basis": self.attribution_time_basis,
+                      "max_rows": self.max_rows, "max_bytes": self.max_bytes, "max_pages_per_run": self.max_pages_per_run}
         return hashlib.sha256(json.dumps([self.connector_id, self.clinic_id, resource_kind,
-            self.revision, self.cohort_hash, self.mapping_id, self.mapping_version,
-            transport, definition], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                                          self.revision, self.cohort_hash, self.mapping_id, self.mapping_version,
+                                          transport, definition], sort_keys=True, separators=(",", ":")).encode()).hexdigest()

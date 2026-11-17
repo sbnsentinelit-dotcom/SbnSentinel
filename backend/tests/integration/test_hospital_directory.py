@@ -57,6 +57,7 @@ def run_worker():
     class DirectoryTests(unittest.TestCase):
         def setUp(self):
             self.engine = create_engine("sqlite+pysqlite:///:memory:")
+
             @event.listens_for(self.engine, "connect")
             def foreign_keys(connection, _):
                 connection.execute("PRAGMA foreign_keys=ON")
@@ -218,6 +219,7 @@ def run_worker():
             b = self.department(code="RAD")
             old = self.service.add_provider_membership("org", "a", "qualified:p", a.id, day(1), "source:old")
             self.db.commit()
+
             def fail_insert(mapper, connection, target):
                 raise RuntimeError("Injected insert failure")
             event.listen(HospitalProviderMembership, "before_insert", fail_insert)
@@ -248,7 +250,7 @@ def run_worker():
             self.db.commit()
             with self.assertRaises(IntegrityError):
                 self.db.add(HospitalLocationMembership(clinic_id="a", location_id=room.id,
-                    department_id=department.id, valid_from=day(1), basis_ref="source:invalid"))
+                                                       department_id=department.id, valid_from=day(1), basis_ref="source:invalid"))
                 self.db.flush()
             self.db.rollback()
 
@@ -272,6 +274,7 @@ def run_worker():
         def test_rename_insert_failure_retains_original_history(self):
             a = self.department()
             self.db.commit()
+
             def fail_insert(mapper, connection, target):
                 raise RuntimeError("Injected rename insert failure")
             event.listen(HospitalDepartmentVersion, "before_insert", fail_insert)
@@ -289,6 +292,7 @@ def run_worker():
             # SQL compilation checks wiring only, not actual competing-worker behavior.
             from sqlalchemy.dialects import postgresql
             statements = []
+
             def capture(state):
                 if state.is_select:
                     statements.append(str(state.statement.compile(dialect=postgresql.dialect())))

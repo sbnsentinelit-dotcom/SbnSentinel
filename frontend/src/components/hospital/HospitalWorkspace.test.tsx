@@ -48,12 +48,53 @@ describe('HSP01 hospital workspace', () => {
     expect(screen.queryByText('A')).toBeNull();
   });
 
+  it('keeps review and assignment available without report permission', async () => {
+    const reviewerScope = { ...scope, capabilities: ['review.read', 'assignment.write'] };
+    mockedFetch.mockImplementation(async url => {
+      if (String(url).endsWith('/directory')) return response({ facilities: [{ ...facility, scope: reviewerScope }] });
+      if (String(url).includes('/queue')) return response({ scope: reviewerScope, unavailable_reason: '', items: [
+        { recommendation_id: 'review-only', status: 'ACTIVE', department_id: 'A', assignee: null, team: null, row_version: 1 },
+      ] });
+      throw new Error('Report must not be requested');
+    });
+    render(<HospitalWorkspace />);
+    expect(await screen.findByText(/review-only/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Assign' })).toBeTruthy();
+    expect(mockedFetch.mock.calls.some(([url]) => String(url).endsWith('/snapshots'))).toBe(false);
+  });
+
+  it('keeps a successful queue when financial snapshot fails', async () => {
+    mockedFetch.mockImplementation(async url => {
+      if (String(url).endsWith('/directory')) return response({ facilities: [facility] });
+      if (String(url).includes('/queue')) return response({ scope, unavailable_reason: '', items: [
+        { recommendation_id: 'retained-review', status: 'ACTIVE', department_id: 'A', assignee: null, team: null, row_version: 1 },
+      ] });
+      throw new Error('Snapshot failure');
+    });
+    render(<HospitalWorkspace />);
+    expect(await screen.findByText(/retained-review/)).toBeTruthy();
+    expect(screen.getByText(/Financial report unavailable/)).toBeTruthy();
+  });
+
+  it('shows the queue while the independent report request is still pending', async () => {
+    mockedFetch.mockImplementation(async url => {
+      if (String(url).endsWith('/directory')) return response({ facilities: [facility] });
+      if (String(url).includes('/queue')) return response({ scope, unavailable_reason: '', items: [
+        { recommendation_id: 'while-report-pending', status: 'ACTIVE', department_id: 'A', assignee: null, team: null, row_version: 1 },
+      ] });
+      return new Promise<Response>(() => {});
+    });
+    render(<HospitalWorkspace />);
+    expect(await screen.findByText(/while-report-pending/)).toBeTruthy();
+    expect(screen.getByText('Loading financial report...')).toBeTruthy();
+  });
+
   it('clears old-scope results and discards a late response', async () => {
     let finishA: ((value: Response) => void) | undefined;
     mockedFetch.mockImplementation(async (url, options) => {
       const path = String(url);
       if (path.endsWith('/directory')) return response({ facilities: [facility] });
-      if (path.includes('/queue')) return response({ items: [], unavailable_reason: '' });
+      if (path.includes('/queue')) return response({ items: [], unavailable_reason: '', scope });
       const body = JSON.parse(String(options?.body));
       if (body.department_id === 'A') return new Promise<Response>(resolve => { finishA = resolve; });
       return response(snapshot(body.department_id === 'B' ? '222.00' : '111.00'));

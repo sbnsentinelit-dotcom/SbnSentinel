@@ -126,11 +126,10 @@ def get_all_encounters(db: Session = Depends(get_db)):
     """
     Get all clinical patient encounters. Auto-seeds UAE clinic data if empty.
     """
-    from app.models.hospital_dimensions import HospitalDepartment
-    from sqlalchemy import or_, select
+    from sqlalchemy import or_
     from app.services.hospital_scope_service import hospital_facility_ids
     legacy_only = or_(EncounterModel.clinic_id.is_(None),
-        EncounterModel.clinic_id.not_in(hospital_facility_ids()))
+                      EncounterModel.clinic_id.not_in(hospital_facility_ids()))
     encounters = db.query(EncounterModel).filter(legacy_only).all()
     if not encounters:
         try:

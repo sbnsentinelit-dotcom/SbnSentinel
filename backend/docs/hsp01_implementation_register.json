@@ -186,7 +186,7 @@
   ],
   "release_status": "NOT COMPLETE: implemented components; mandatory integrated acceptance gates remain blocked",
   "migration_parent": "g8_financial_reporting",
-  "declared_migration_head": "hsp01_hospital_extension",
+  "declared_migration_head": "hsp01_auditor_corrections",
   "external_in_progress_work": "Unknown; user explicitly authorized shared edits and later conflict reconciliation",
   "existing_database_accessed_by_agent": false,
   "pending": [
@@ -195,5 +195,19 @@
     "Full combined governed-path restart and commit-to-UI latency gates; disposable PostgreSQL fresh/legacy upgrade, concurrency and backup/restore verified",
     "Real vendor/profile/hosting confirmation and hospital reconciliation",
     "Reviewed reconciliation for ambiguous legacy identity, receipt corrections and mapping reprocessing"
-  ]
+  ],
+  "auditor_corrections": {
+    "owner": "New developer",
+    "reviewed_commit": "d4bb1739ca2328bd31379f47c0b7c4b978160465",
+    "latest_main_adopted": "c27b257c7545864934a3779cac1c0ebebd19d790",
+    "local_integration_commit": "56084f8d471feefa631ccefe370a8c8513f8e425",
+    "migration_coordinator": "New developer, delegated by user",
+    "migration_parent": "hsp01_hospital_extension",
+    "correction_status": "Eight auditor sequences implemented and locally verified; remote CI/re-review pending",
+    "evidence_map": "hsp01_auditor_corrections.txt",
+    "existing_database_accessed": false,
+    "hsp02_stash_sha": "99e0c896e12925e1e7453e3a2c93716e567e048e",
+    "correction_commit_created": false,
+    "push_performed": false
+  }
 }

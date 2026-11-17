@@ -6,15 +6,15 @@ from decimal import Decimal, InvalidOperation
 from app.integrations.hospital_read.identity import entity_key, required_id
 
 MONEY = frozenset({"billed_amount", "allowed_amount", "paid_amount", "patient_share",
-    "adjusted_amount", "amount", "payer_balance", "denied_amount"})
+                   "adjusted_amount", "amount", "payer_balance", "denied_amount"})
 REFERENCES = frozenset({"patient_id", "provider_id", "payer_id", "tpa_id", "department_id",
-    "location_id", "encounter_id", "encounter_class", "claim_id", "line_id", "remittance_id",
-    "settlement_id", "payment_reference", "procedure_code", "code_system", "code_version",
-    "denial_code", "denial_reason", "rejection_reason", "attribution_basis", "allocation_basis", "receipt_type", "department_code"})
+                        "location_id", "encounter_id", "encounter_class", "claim_id", "line_id", "remittance_id",
+                        "settlement_id", "payment_reference", "procedure_code", "code_system", "code_version",
+                        "denial_code", "denial_reason", "rejection_reason", "attribution_basis", "allocation_basis", "receipt_type", "department_code"})
 TIME_FIELDS = frozenset({"source_time", "effective_time", "service_date", "submission_date",
-    "adjudication_date", "received_date"})
+                         "adjudication_date", "received_date"})
 FIELDS = MONEY | REFERENCES | TIME_FIELDS | {"id", "status", "source_version", "currency",
-    "units", "attempt_number", "source_sequence", "deleted", "bank_confirmed"}
+                                             "units", "attempt_number", "source_sequence", "deleted", "bank_confirmed"}
 
 
 def exact_money(value):
@@ -45,10 +45,12 @@ def normalize_record(raw, *, resource_kind, context):
         raise ValueError("Resource capability unavailable")
     if not isinstance(raw, dict):
         raise ValueError("Source row must be an object")
+    if not set(raw).issubset(FIELDS):
+        raise ValueError("Source row contains unreviewed fields")
     external_id = required_id(raw.get("id"), "id")
     key = entity_key(org_id=profile.org_id, clinic_id=profile.clinic_id,
-        connector_id=profile.connector_id, resource_kind=resource_kind,
-        external_id=external_id, parent_id=raw.get("claim_id") if resource_kind in {"ClaimLine", "SubmissionAttempt"} else None)
+                     connector_id=profile.connector_id, resource_kind=resource_kind,
+                     external_id=external_id, parent_id=raw.get("claim_id") if resource_kind in {"ClaimLine", "SubmissionAttempt"} else None)
     version = required_id(raw.get("source_version"), "source_version")
     deleted = raw.get("deleted") is True
     status = raw.get("status")
@@ -102,16 +104,26 @@ def normalize_record(raw, *, resource_kind, context):
         if facts.get(field) is not None:
             facts["source_" + field] = facts[field]
             facts[field] = entity_key(org_id=profile.org_id, clinic_id=profile.clinic_id,
-                connector_id=profile.connector_id, resource_kind=kind, external_id=facts[field])
+                                      connector_id=profile.connector_id, resource_kind=kind, external_id=facts[field])
     digest = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(",", ":"),
-        ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+                                       ensure_ascii=False, allow_nan=False).encode()).hexdigest()
     detail = {**facts, "id": key, "raw_id": external_id, "status": normalized_status,
-        "raw_status": status, "source_version": version, "source_digest": digest,
-        "meta": {"versionId": version}, "org_id": profile.org_id, "clinic_id": profile.clinic_id,
-        "quality_state": "VALID" if deleted or normalized_status else "STATUS_UNRESOLVED",
-        "profile_revision": profile.revision, "identity_scheme": "hospital-source-v1"}
+              "raw_status": status, "source_version": version, "source_digest": digest,
+              "meta": {"versionId": version}, "org_id": profile.org_id, "clinic_id": profile.clinic_id,
+              "quality_state": "VALID" if deleted or normalized_status else "STATUS_UNRESOLVED",
+              "profile_revision": profile.revision, "identity_scheme": "hospital-source-v1",
+              "attribution_time_basis": profile.attribution_time_basis}
     if raw.get("claim_id") is not None:
         detail["parent_claim_key"] = entity_key(org_id=profile.org_id, clinic_id=profile.clinic_id,
-            connector_id=profile.connector_id, resource_kind="Claim", external_id=raw["claim_id"])
+                                                connector_id=profile.connector_id, resource_kind="Claim", external_id=raw["claim_id"])
+    # Equivalent typed REST/CSV observations share semantic identity; raw bytes
+    # remain independently traceable through transport observation receipts.
+    semantic = {key: value for key, value in detail.items() if key != "source_digest"}
+    for field in MONEY:
+        if semantic.get(field) is not None:
+            semantic[field] = format(Decimal(semantic[field]).normalize(), "f")
+    detail["semantic_digest"] = hashlib.sha256(json.dumps(
+        semantic,
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
     return ({"context_type": resource_kind, "mapping_id": profile.mapping_id,
-        "mapping_version": profile.mapping_version, "detail": detail},)
+             "mapping_version": profile.mapping_version, "detail": detail},)

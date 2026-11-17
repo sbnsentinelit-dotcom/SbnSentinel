@@ -33,6 +33,15 @@ class HospitalCheckpoint(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False)
 
 
+class HospitalTransportObservation(Base):
+    """Immutable raw-transport digests; semantic evidence remains unchanged."""
+    __tablename__ = "hospital_transport_observations"
+    id = Column(String, primary_key=True)
+    ledger_id = Column(String, ForeignKey("ingestion_ledger.id"), nullable=False, index=True)
+    transport = Column(String, nullable=False)
+    raw_digest = Column(String, nullable=False)
+
+
 class HospitalQuarantine(Base):
     __tablename__ = "hospital_quarantine"
     id = Column(String, primary_key=True, default=new_id)
@@ -40,6 +49,12 @@ class HospitalQuarantine(Base):
     reason = Column(String, nullable=False)
     row_index = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
+    quarantine_key = Column(String, nullable=True, unique=True)
+    page_id = Column(String, nullable=True)
+    source_id = Column(String, nullable=True)
+    source_version = Column(String, nullable=True)
+    payload_digest = Column(String, nullable=True)
+    payload_json = Column(Text, nullable=True)
 
 
 class HospitalProjectionReceipt(Base):

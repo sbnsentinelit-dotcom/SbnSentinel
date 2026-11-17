@@ -40,7 +40,7 @@ class RestSource:
                 params["cursor"] = token
             try:
                 async with self.client.stream("GET", url, params=params, headers=self.headers,
-                    follow_redirects=False, timeout=30) as response:
+                                              follow_redirects=False, timeout=30) as response:
                     if response.status_code != 200:
                         raise ValueError("Source read failed")
                     if response.headers.get("content-encoding", "identity") != "identity":

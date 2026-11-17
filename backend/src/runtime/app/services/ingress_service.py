@@ -14,8 +14,9 @@ from app.integrations.core.source_authority import (
 from app.integrations.core.mapping_registry import mapping_registry
 from app.services.cursor_store import cursor_store
 
-logger = logging.getLogger(__name__)
 from app.integrations.hospital_read.intake import HospitalIntakeMixin
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_canonical_facts(
@@ -89,6 +90,7 @@ class IngressBatchResult(dict):
     Dual sync/async compatible dictionary result.
     Can be used directly as a dict or awaited in async contexts.
     """
+
     def __await__(self):
         async def _coro():
             return self

@@ -92,6 +92,7 @@ class OperationalEventModel(Base):
     lease_generation = Column(Integer, nullable=False, default=0)
     next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
     row_version = Column(Integer, nullable=False, default=0)
+    resume_from_revision = Column(Integer, nullable=True)
 
     def total_duration_ms(self) -> float:
         """Total processing time from received to completed."""

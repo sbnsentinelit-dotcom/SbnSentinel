@@ -35,7 +35,7 @@ class WorkAssignmentService:
             raise HospitalAccessDenied("Recommendation out of scope")
         existing = self.db.get(WorkAssignment, recommendation_id)
         if existing and (existing.clinic_id != scope.clinic_id or
-            existing.department_id != basis.get("department_id") or existing.journey_id != recommendation.journey_id):
+                         existing.department_id != basis.get("department_id") or existing.journey_id != recommendation.journey_id):
             raise AssignmentConflict("Recommendation attribution changed; refresh required")
         now = datetime.now(timezone.utc)
         values = dict(assignee=assignee, team=team, actor_id=actor.id, updated_at=now, row_version=expected_version + 1)
@@ -45,7 +45,7 @@ class WorkAssignmentService:
                 if existing:
                     raise AssignmentConflict("Assignment changed; refresh required")
                 row = WorkAssignment(recommendation_id=recommendation_id, journey_id=recommendation.journey_id,
-                    clinic_id=scope.clinic_id, department_id=basis.get("department_id"), **values)
+                                     clinic_id=scope.clinic_id, department_id=basis.get("department_id"), **values)
                 self.db.add(row)
                 self.db.flush()
             else:
@@ -56,10 +56,10 @@ class WorkAssignmentService:
                 if result.rowcount != 1:
                     raise AssignmentConflict("Assignment changed; refresh required")
             self.db.add(WorkAssignmentHistory(recommendation_id=recommendation_id,
-                row_version=expected_version + 1, actor_id=actor.id, grant_revision=scope.grant_revision, assignee=assignee, team=team,
-                reason=reason, changed_at=now))
+                                              row_version=expected_version + 1, actor_id=actor.id, grant_revision=scope.grant_revision, assignee=assignee, team=team,
+                                              reason=reason, changed_at=now))
             self.db.flush()
             from app.services.hospital_audit import record_hospital_audit
             record_hospital_audit(self.db, scope, actor.id, "HOSPITAL_ASSIGNMENT_CHANGED", recommendation_id,
-                reason=reason, new={"assignee": assignee, "team": team, "row_version": expected_version + 1})
+                                  reason=reason, new={"assignee": assignee, "team": team, "row_version": expected_version + 1})
         return expected_version + 1

@@ -1,0 +1,107 @@
+HSP01 PR #1 corrections (reviewed base d4bb1739)
+
+Ownership and branch boundaries
+- Correction owner and migration coordinator: new developer, user-authorized.
+- HSP02 work is held in the named stash "HSP02 checkpoint before HSP01 auditor corrections".
+- Latest main adopted: c27b257c. Local integration HEAD: 56084f8d.
+- No existing application database, startup seeding or vendor endpoint is used.
+- No correction commit, push or PR merge is performed by this change.
+
+Migration sequence
+g8_financial_reporting -> hsp01_hospital_extension -> hsp01_auditor_corrections
+The first HSP01 revision's SQLite rebuild path is repaired for installations
+that have not yet applied it. Its revision/parent and PostgreSQL semantics are
+retained. Already upgraded installations receive the new additive revision.
+No old evidence, frozen snapshot or legacy identifier is rewritten.
+Line currency backfill requires matching committed line identity, facility,
+parent, amount and validated source evidence. Unknown lineage stays NULL.
+Enrollment is backfilled from explicit existing hospital connectors/departments;
+new source configuration enrolls the canonical facility before ingestion.
+The application database's actual revision is intentionally NOT READ.
+
+Correction and regression mapping
+1. Enrollment independent of department rows:
+   models/hospital_dimensions.py; hospital_scope_service.py;
+   hospital_legacy_guard.py; hospital_source_service.py; intake.py; new migration.
+   test_auditor_zero_department_enrollment_guards_legacy_routes imports a claim
+   with zero departments and checks hospital, legacy summary and snapshot export
+   denials; adding the first department leaves the boundary unchanged.
+2. Line currency preserved independently of current parent currency:
+   models/financial_reporting.py; financial_projection_service.py;
+   financial_reporting_service.py; DepartmentSummary.tsx; new migration.
+   test_auditor_parent_currency_correction_never_relabels_line
+   test_auditor_currency_backfill_uses_line_evidence_not_parent
+3. DEGRADED verification retry and fenced success/failure:
+   hospital_source_service.py; api/v1/endpoints/hospital.py.
+   test_auditor_temporary_source_failure_can_reverify_unchanged_profile
+   test_auditor_revocation_during_failed_verification_is_not_overwritten
+4. Explicit resume API: POST /api/v1/hospital/jobs/{event_id}/resume
+   body: expected_revision, reason. Current source.read + full facility grant,
+   original profile/mapping/extraction/consumer binding and current readiness
+   are required. Caller commits event change and mandatory audit atomically.
+   Existing ledger/event/effect identities are reused. Materially changed or
+   missing historical bindings require governed reprocessing, not guessed resume.
+   test_auditor_blocked_delivery_resume_is_versioned_and_projects_once
+5. Reviewed attribution_time_basis in source profile:
+   parent_claim_service_date (default), line_service_date or effective_time.
+   Existing directory resolver selects the effective department version;
+   line attribution stores the immutable version reference and business time.
+   Unknown/ambiguous/ineffective attribution is deferred. Renames do not rewrite
+   an earlier line's recorded basis. Profile/mapping changes require new versions.
+   test_auditor_effective_department_date_is_required
+6. Quarantine: immutable page/import binding + original row index + digest,
+   available source ID/version and bounded protected payload_json in the database.
+   No ordinary log or unscoped API exposes this payload. Quarantine, transport
+   observations, ledger and checkpoint are committed in the intake transaction.
+   test_auditor_quarantine_page_rows_are_recoverable_and_atomic
+7. HospitalWorkspace keeps separate report/queue loading and error states;
+   assignment capability comes from the current verified directory scope.
+   Frontend tests cover review-only access, snapshot error, pending snapshot,
+   grant revision and stale-selection response cancellation.
+8. SQLite parent rebuild retains dependent rows in transaction-local backup
+   tables and restores them in dependency order, with foreign keys continuously
+   enabled and PRAGMA foreign_key_check after reconstruction.
+   test_forward_migration_preserves_legacy_ids_and_audits_money now includes
+   a legacy claim, line and submission attempt.
+
+REST/CSV fallback contract
+The SAME connector/entity/source version may arrive via either transport under
+the SAME reviewed profile/mapping. Stream cursors remain transport-specific.
+Typed mapped semantic digests establish equivalence. Decimal padding and typed
+CSV representations do not create new facts; raw transport digests are stored
+separately in hospital_transport_observations. Absent, null, zero and false remain
+distinct. Changed mapped values under one version are quarantined; unreviewed
+fields are rejected rather than silently discarded. Existing raw-hash receipts
+remain recognizable for exact redelivery. No duplicate projection is created.
+test_auditor_rest_csv_same_version_semantics_and_distinct_raw_digests
+
+Verification commands
+python -B -m flake8 src/runtime/app/ tests/
+python -B -m pytest --noconftest -p no:cacheprovider tests/integration/test_hospital_directory.py tests/integration/test_hospital_source_contract.py -v
+node node_modules/vitest/vitest.mjs run src/components/hospital/HospitalWorkspace.test.tsx
+node node_modules/typescript/bin/tsc --project tsconfig.json --noEmit --incremental false
+node node_modules/eslint/bin/eslint.js src/components/hospital
+
+CI
+Existing Flake8 gate is retained. quality_gate.yml explicitly selects both
+hospital integration suites and adds a separate disposable PostgreSQL job for
+fresh migrations and concurrency/recovery regressions. Remote CI results/links
+are pending the user's future commit/push; local checks are not labelled CI runs.
+
+Separate dependency register
+- Existing main startup/readiness failures: reported by auditor; not reproduced
+  by starting the real application, because startup can seed data. Track against
+  main c27b257c separately. Proposed owner: existing developer; handoff confirmation
+  and combined startup/readiness closure remain pending. No claim of repair here.
+- Approved governed billing rules/context/review/outcome, full FR01-FR08 schedules,
+  legacy reconciliation and complete hospital acceptance: HSP02/shared workstream,
+  NOT COMPLETE. New developer owns assigned repairs; other in-flight ownership
+  remains subject to explicit handoff. HSP02 is stashed, not mixed into these fixes.
+- Vendor interface, jurisdiction/hosting and hospital reconciliation require
+  operator/hospital confirmation. No real-vendor or live-pilot pass is claimed.
+- Prior generic quarantines without retained payload cannot be reconstructed
+  from row indexes; controlled source replay/reconciliation is required.
+
+Readiness
+These are incremental PR corrections. Merge/demo/pilot approval remains with
+the reviewer after the updated PR, CI and applicable integrated gates pass.

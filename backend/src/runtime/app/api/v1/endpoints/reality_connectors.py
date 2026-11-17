@@ -49,7 +49,7 @@ def check_connectors_health(db: Session = Depends(get_db)):
     """
     from sqlalchemy import or_
     connectors = db.query(ConnectorModel).filter(or_(ConnectorModel.vendor_id.is_(None),
-        ConnectorModel.vendor_id != "hospital_read")).all()
+                                                     ConnectorModel.vendor_id != "hospital_read")).all()
 
     response = []
     for c in connectors:

@@ -1,5 +1,7 @@
 """H04 read adapter. No direct report writes or rule/external-action calls."""
 import inspect
+import hashlib
+import json
 from app.integrations.core.contracts import IntegrationAdapter, ConnectorFactory
 from app.integrations.hospital_read.mappings import normalize_record
 from app.integrations.hospital_read.rest_source import RestSource
@@ -26,8 +28,8 @@ class HospitalReadAdapter(IntegrationAdapter):
             self.check(kind)
             resources.append({"type": kind, "interaction": [{"code": "read"}]})
         return {"resourceType": "CapabilityStatement", "status": "active", "kind": "instance",
-            "protocol": "REST/JSON", "fhir_supported": False,
-            "profile_revision": self.profile.revision, "rest": [{"mode": "server", "resource": resources}]}
+                "protocol": "REST/JSON", "fhir_supported": False,
+                "profile_revision": self.profile.revision, "rest": [{"mode": "server", "resource": resources}]}
 
     async def iter_pages(self, resource_kind, *, checkpoint=None):
         self.check(resource_kind)
@@ -48,15 +50,19 @@ class HospitalReadAdapter(IntegrationAdapter):
         self.check(resource_kind)
         if self.intake is None or getattr(self.intake, "hospital_contract_revision", None) != "hsp01-v1":
             raise RuntimeError("Hospital shared intake prerequisites are not ready")
-        records, rejected = [], []
+        records, rejected, positions = [], [], []
         for index, raw in enumerate(page.records):
             try:
                 records.extend(normalize_record(raw, resource_kind=resource_kind, context=self.profile))
+                positions.append(index)
             except (ValueError, TypeError):
                 # No raw data in diagnostics. Intake persists the quarantine receipt.
-                rejected.append({"row_index": index, "reason": "INVALID_SOURCE_ROW"})
+                rejected.append({"row_index": index, "reason": "INVALID_SOURCE_ROW", "payload": raw})
+        page_id = hashlib.sha256(json.dumps([page.binding, page.next_token, page.records],
+                                            sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
         result = self.intake.submit_hospital_page(self.profile, resource_kind, records, rejected,
-            {"binding": page.binding, "token": page.next_token, "transport": page.transport})
+                                                  {"binding": page.binding, "token": page.next_token, "transport": page.transport,
+                                                   "page_id": page_id, "record_positions": positions}, raw_rows=list(page.records))
         if inspect.isawaitable(result):
             result = await result
         required = {"accepted", "duplicate", "quarantined", "deferred", "failed"}
@@ -87,7 +93,7 @@ class HospitalReadAdapter(IntegrationAdapter):
             # Counts describe acknowledged durable rows only. The failed range
             # is explicitly unknown, never reported as successful empty data.
             return {"status": "PARTIAL", **counts, "unaccounted_range": True,
-                "source_error": "SOURCE_OR_INTAKE_UNAVAILABLE"}
+                    "source_error": "SOURCE_OR_INTAKE_UNAVAILABLE"}
         return {"status": "PARTIAL" if partial else "COMPLETE", **counts}
 
     async def import_csv(self, lines, resource_kind):
@@ -103,7 +109,7 @@ class HospitalReadAdapter(IntegrationAdapter):
             raise
         except Exception:
             return {"status": "PARTIAL", **counts, "unaccounted_range": True,
-                "source_error": "CSV_OR_INTAKE_UNAVAILABLE"}
+                    "source_error": "CSV_OR_INTAKE_UNAVAILABLE"}
         return {"status": "COMPLETE", **counts}
 
 
@@ -115,4 +121,4 @@ class HospitalReadFactory(ConnectorFactory):
                 or not callable(config.get("authorize"))):
             raise ValueError("Hospital source requires a reviewed profile and server-resolved transport/authority")
         return HospitalReadAdapter(HospitalReadProfile(**config["profile"]), config["client"],
-            authorize=config["authorize"], intake=config.get("intake"), headers=config.get("headers"))
+                                   authorize=config["authorize"], intake=config.get("intake"), headers=config.get("headers"))

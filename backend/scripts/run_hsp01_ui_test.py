@@ -63,6 +63,7 @@ def main():
         for facility, name in [("uat-a", "UAT Hospital A"), ("uat-b", "UAT Hospital B")]:
             db.add(organization.OrganizationClinicModel(id=facility, organization_id="uat-org", name=name))
         db.flush()
+        db.add_all([hospital_dimensions.HospitalFacilityEnrollment(clinic_id=value, basis_ref="synthetic:uat") for value in ("uat-a", "uat-b")]); db.flush()
         directory = HospitalDirectoryService(db)
         card = directory.create_department("uat-org", "uat-a", "CARD", "Cardiology", now-timedelta(days=365), "synthetic:uat").id
         rad = directory.create_department("uat-org", "uat-a", "RAD", "Radiology", now-timedelta(days=365), "synthetic:uat").id
@@ -93,7 +94,7 @@ def main():
             db.flush()
             for line_id, department, billed, paid in rows:
                 db.add(financial_reporting.FinancialClaimLineModel(line_id=line_id, claim_id=claim_id,
-                    clinic_id=facility, department_id=department, attribution_basis="synthetic:uat" if department else None,
+                    clinic_id=facility, currency=currency, department_id=department, attribution_basis="synthetic:uat" if department else None,
                     source_evidence_id="synthetic-fixture:"+line_id, procedure_code="TEST", code_system="TEST",
                     billed_amount=Decimal(billed), paid_amount=Decimal(paid) if paid is not None else None,
                     line_status="submitted"))

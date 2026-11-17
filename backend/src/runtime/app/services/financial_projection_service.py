@@ -12,7 +12,6 @@ from app.models.financial_reporting import (
     FinancialClaimModel, FinancialClaimLineModel, FinancialSubmissionAttemptModel,
     FinancialRemittanceModel, FinancialPaymentReceiptModel,
 )
-from app.integrations.hospital_read.identity import entity_key
 from app.integrations.hospital_read.mappings import exact_money
 
 
@@ -53,8 +52,8 @@ def apply_committed(db, evidence, *, consumer_version):
     key = facts["id"]
     parent = facts.get("parent_claim_key")
     model = {"Claim": FinancialClaimModel, "ClaimLine": FinancialClaimLineModel,
-        "SubmissionAttempt": FinancialSubmissionAttemptModel, "Remittance": FinancialRemittanceModel,
-        "Receipt": FinancialPaymentReceiptModel}.get(kind)
+             "SubmissionAttempt": FinancialSubmissionAttemptModel, "Remittance": FinancialRemittanceModel,
+             "Receipt": FinancialPaymentReceiptModel}.get(kind)
     if model is None:
         return ProjectionResult("DEFERRED", "Unsupported projection resource")
     if kind in {"ClaimLine", "SubmissionAttempt"}:
@@ -70,7 +69,7 @@ def apply_committed(db, evidence, *, consumer_version):
             return ProjectionResult("DEFERRED", "Settlement correction requires explicit reconciliation")
         key = settlement.economic_receipt_key
         prior_observation = db.scalars(select(HospitalSettlementObservation).join(EvidenceModel,
-            EvidenceModel.evidence_id == HospitalSettlementObservation.evidence_id).where(
+                                                                                  EvidenceModel.evidence_id == HospitalSettlementObservation.evidence_id).where(
             HospitalSettlementObservation.receipt_id == key,
             EvidenceModel.external_record_id == facts["id"],
             EvidenceModel.evidence_id != evidence.evidence_id).limit(1)).first()
@@ -88,7 +87,7 @@ def apply_committed(db, evidence, *, consumer_version):
             return ProjectionResult("DEFERRED", "Conflicting equal source order")
         if sequence < row.source_sequence:
             db.add(HospitalProjectionReceipt(ledger_id=ledger.id, evidence_id=evidence.evidence_id,
-                consumer_version=consumer_version, result="HISTORICAL", applied_at=datetime.now(timezone.utc)))
+                                             consumer_version=consumer_version, result="HISTORICAL", applied_at=datetime.now(timezone.utc)))
             db.flush()
             return ProjectionResult("HISTORICAL")
     if facts.get("deleted"):
@@ -99,47 +98,64 @@ def apply_committed(db, evidence, *, consumer_version):
         row.tombstone = True
     else:
         required = {"Claim": ("patient_id", "provider_id", "payer_id", "billed_amount", "currency", "service_date"),
-            "ClaimLine": ("procedure_code", "code_system", "code_version", "units", "billed_amount"),
-            "SubmissionAttempt": ("attempt_number", "submission_date"),
-            "Remittance": ("payer_id", "payment_reference", "amount", "currency", "received_date"),
-            "Receipt": ("amount", "currency", "received_date", "payment_reference", "receipt_type", "bank_confirmed")}[kind]
+                    "ClaimLine": ("procedure_code", "code_system", "code_version", "units", "billed_amount"),
+                    "SubmissionAttempt": ("attempt_number", "submission_date"),
+                    "Remittance": ("payer_id", "payment_reference", "amount", "currency", "received_date"),
+                    "Receipt": ("amount", "currency", "received_date", "payment_reference", "receipt_type", "bank_confirmed")}[kind]
         if any(facts.get(name) is None for name in required):
             return ProjectionResult("DEFERRED", "Required source facts unavailable")
         department_id = facts.get("department_id")
+        attribution_version_id, attribution_time = None, None
         if department_id is not None:
             department = db.get(HospitalDepartment, department_id)
             if not department or department.clinic_id != ledger.clinic_id or not facts.get("attribution_basis"):
                 return ProjectionResult("DEFERRED", "Department attribution unresolved")
+            if kind == "ClaimLine":
+                basis = facts.get("attribution_time_basis")
+                attribution_time = (claim.service_date if basis == "parent_claim_service_date" else
+                                    parsed_time(facts.get("service_date" if basis == "line_service_date" else "effective_time")))
+                if attribution_time is None:
+                    return ProjectionResult("DEFERRED", "Attribution business time unavailable")
+                from app.services.hospital_directory_service import HospitalDirectoryService
+                resolved = HospitalDirectoryService(db).resolve_department(
+                    facts["org_id"], ledger.clinic_id, department_id,
+                    attribution_time.replace(tzinfo=timezone.utc))
+                if resolved.status != "RESOLVED":
+                    return ProjectionResult("DEFERRED", "Department attribution not effective at business time")
+                attribution_version_id = resolved.records[0].id
+
         def money(name):
             return Decimal(exact_money(facts[name])) if facts.get(name) is not None else None
         if kind == "Claim":
             values = dict(clinic_id=ledger.clinic_id, org_id=facts["org_id"],
-                patient_id=facts["patient_id"], provider_id=facts["provider_id"], payer_id=facts["payer_id"],
-                tpa_id=facts.get("tpa_id"), status=facts["status"], billed_amount=money("billed_amount"),
-                allowed_amount=money("allowed_amount"), paid_amount=money("paid_amount"),
-                patient_share=money("patient_share"), currency=facts["currency"],
-                service_date=parsed_time(facts["service_date"]), submission_date=parsed_time(facts.get("submission_date")),
-                adjudication_date=parsed_time(facts.get("adjudication_date")), rejection_reason=facts.get("rejection_reason"), tombstone=False)
+                          patient_id=facts["patient_id"], provider_id=facts["provider_id"], payer_id=facts["payer_id"],
+                          tpa_id=facts.get("tpa_id"), status=facts["status"], billed_amount=money("billed_amount"),
+                          allowed_amount=money("allowed_amount"), paid_amount=money("paid_amount"),
+                          patient_share=money("patient_share"), currency=facts["currency"],
+                          service_date=parsed_time(facts["service_date"]), submission_date=parsed_time(facts.get("submission_date")),
+                          adjudication_date=parsed_time(facts.get("adjudication_date")), rejection_reason=facts.get("rejection_reason"), tombstone=False)
             primary = "claim_id"
         elif kind == "ClaimLine":
             if facts.get("currency") != claim.currency:
                 return ProjectionResult("DEFERRED", "Line currency differs from parent")
             values = dict(claim_id=parent, clinic_id=ledger.clinic_id, department_id=department_id,
-                attribution_basis=facts.get("attribution_basis"), procedure_code=facts["procedure_code"],
-                code_system=facts["code_system"], code_version=facts["code_version"], units=facts["units"],
-                billed_amount=money("billed_amount"), allowed_amount=money("allowed_amount"),
-                paid_amount=money("paid_amount"), adjusted_amount=money("adjusted_amount"),
-                line_status=facts["status"], denial_code=facts.get("denial_code"), denial_reason=facts.get("denial_reason"), tombstone=False)
+                          currency=facts["currency"], attribution_version_id=attribution_version_id,
+                          attribution_time=attribution_time,
+                          attribution_basis=facts.get("attribution_basis"), procedure_code=facts["procedure_code"],
+                          code_system=facts["code_system"], code_version=facts["code_version"], units=facts["units"],
+                          billed_amount=money("billed_amount"), allowed_amount=money("allowed_amount"),
+                          paid_amount=money("paid_amount"), adjusted_amount=money("adjusted_amount"),
+                          line_status=facts["status"], denial_code=facts.get("denial_code"), denial_reason=facts.get("denial_reason"), tombstone=False)
             primary = "line_id"
         elif kind == "SubmissionAttempt":
             values = dict(claim_id=parent, attempt_number=facts["attempt_number"],
-                submission_date=parsed_time(facts["submission_date"]), outcome=facts["status"],
-                rejection_reason=facts.get("rejection_reason"))
+                          submission_date=parsed_time(facts["submission_date"]), outcome=facts["status"],
+                          rejection_reason=facts.get("rejection_reason"))
             primary = "attempt_id"
         elif kind == "Remittance":
             values = dict(clinic_id=ledger.clinic_id, payer_id=facts["payer_id"],
-                payment_reference=facts["payment_reference"], total_paid=money("amount"),
-                currency=facts["currency"], remittance_date=parsed_time(facts["received_date"]))
+                          payment_reference=facts["payment_reference"], total_paid=money("amount"),
+                          currency=facts["currency"], remittance_date=parsed_time(facts["received_date"]))
             primary = "remittance_id"
         else:
             if facts["receipt_type"] not in {"payer_payment", "patient_copay", "patient_selfpay"}:
@@ -149,14 +165,14 @@ def apply_committed(db, evidence, *, consumer_version):
             allocated_department = department_id if facts.get("allocation_basis") else None
             if row:
                 if (row.clinic_id != ledger.clinic_id or row.amount != money("amount") or row.currency != facts["currency"]
-                    or row.department_id != allocated_department or row.claim_id != parent):
+                        or row.department_id != allocated_department or row.claim_id != parent):
                     return ProjectionResult("DEFERRED", "Settlement observations require reconciliation")
                 values = {"bank_confirmed": bool(row.bank_confirmed or facts["bank_confirmed"])}
             else:
                 values = dict(clinic_id=ledger.clinic_id, amount=money("amount"), currency=facts["currency"],
-                    received_date=parsed_time(facts["received_date"]), receipt_type=facts["receipt_type"],
-                    bank_confirmed=facts["bank_confirmed"], claim_id=parent, department_id=allocated_department,
-                    allocation_basis=facts.get("allocation_basis"), tombstone=False)
+                              received_date=parsed_time(facts["received_date"]), receipt_type=facts["receipt_type"],
+                              bank_confirmed=facts["bank_confirmed"], claim_id=parent, department_id=allocated_department,
+                              allocation_basis=facts.get("allocation_basis"), tombstone=False)
             primary = "receipt_id"
         if row is None:
             row = model(**{primary: key}, **values)
@@ -169,8 +185,8 @@ def apply_committed(db, evidence, *, consumer_version):
     if kind == "Receipt":
         db.flush()
         db.add(HospitalSettlementObservation(evidence_id=evidence.evidence_id, receipt_id=key,
-            basis_ref=settlement.basis_ref))
+                                             basis_ref=settlement.basis_ref))
     db.add(HospitalProjectionReceipt(ledger_id=ledger.id, evidence_id=evidence.evidence_id,
-        consumer_version=consumer_version, result="APPLIED", applied_at=datetime.now(timezone.utc)))
+                                     consumer_version=consumer_version, result="APPLIED", applied_at=datetime.now(timezone.utc)))
     db.flush()
     return ProjectionResult("APPLIED")

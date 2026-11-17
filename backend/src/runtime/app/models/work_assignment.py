@@ -8,7 +8,7 @@ from app.models.hospital_dimensions import new_id
 class WorkAssignment(Base):
     __tablename__ = "hospital_work_assignments"
     __table_args__ = (ForeignKeyConstraint(["department_id", "clinic_id"],
-        ["hospital_departments.id", "hospital_departments.clinic_id"], name="fk_hsp01_assignment_department"),)
+                                           ["hospital_departments.id", "hospital_departments.clinic_id"], name="fk_hsp01_assignment_department"),)
     recommendation_id = Column(String, ForeignKey("governed_recommendations.recommendation_id"), primary_key=True)
     journey_id = Column(String, nullable=False)
     clinic_id = Column(String, ForeignKey("org_clinics.id"), nullable=False, index=True)

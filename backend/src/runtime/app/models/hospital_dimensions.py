@@ -8,6 +8,13 @@ def new_id():
     return str(uuid.uuid4())
 
 
+class HospitalFacilityEnrollment(Base):
+    """Persistent security classification, independent of departments or feeds."""
+    __tablename__ = "hospital_facility_enrollments"
+    clinic_id = Column(String, ForeignKey("org_clinics.id"), primary_key=True)
+    basis_ref = Column(String, nullable=False)
+
+
 class HospitalDepartment(Base):
     __tablename__ = "hospital_departments"
     __table_args__ = (

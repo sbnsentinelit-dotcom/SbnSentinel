@@ -47,11 +47,11 @@ class FinancialReportingService:
         from app.services.hospital_scope_service import scope_predicate
         line, claim = FinancialClaimLineModel, FinancialClaimModel
         return (scope_predicate(scope, line.clinic_id, line.department_id)
-            & (claim.claim_id == line.claim_id) & (claim.clinic_id == scope.clinic_id)
-            & (claim.org_id == scope.org_id) & (claim.currency == currency)
-            & (claim.service_date >= period_start.astimezone(timezone.utc).replace(tzinfo=None))
-            & (claim.service_date < period_end.astimezone(timezone.utc).replace(tzinfo=None))
-            & line.tombstone.is_(False) & claim.tombstone.is_(False))
+                & (claim.claim_id == line.claim_id) & (claim.clinic_id == scope.clinic_id)
+                & (claim.org_id == scope.org_id) & (claim.currency == currency) & (line.currency == currency)
+                & (claim.service_date >= period_start.astimezone(timezone.utc).replace(tzinfo=None))
+                & (claim.service_date < period_end.astimezone(timezone.utc).replace(tzinfo=None))
+                & line.tombstone.is_(False) & claim.tombstone.is_(False))
 
     def _hospital_rows(self, db, scope, period_start, period_end, currency):
         from sqlalchemy import select
@@ -60,10 +60,10 @@ class FinancialReportingService:
             self._hospital_predicate(scope, period_start, period_end, currency)).order_by(line.line_id)
         for row in db.scalars(query).yield_per(100):
             yield {"line_id": row.line_id, "department_id": row.department_id,
-                "source_evidence_id": row.source_evidence_id,
-                "billed_amount": format(row.billed_amount, "f") if row.billed_amount is not None else None,
-                "paid_amount": format(row.paid_amount, "f") if row.paid_amount is not None else None,
-                "status": row.line_status}
+                   "source_evidence_id": row.source_evidence_id,
+                   "billed_amount": format(row.billed_amount, "f") if row.billed_amount is not None else None,
+                   "paid_amount": format(row.paid_amount, "f") if row.paid_amount is not None else None,
+                   "status": row.line_status}
 
     def generate_hospital_summary(self, db, scope, period_start, period_end, currency, *, limit=100):
         """Exact, scoped HSP01 line summary. No inferred balance or cash allocation.
@@ -72,7 +72,6 @@ class FinancialReportingService:
         returned separately from aggregate counts; restricted views never use
         whole-claim amounts or whole-claim metadata.
         """
-        from decimal import Decimal
         from sqlalchemy import select, func
         from app.services.hospital_scope_service import scope_predicate, require_capability
         require_capability(scope, "report.read")
@@ -83,27 +82,38 @@ class FinancialReportingService:
         claim = FinancialClaimModel
         predicate = self._hospital_predicate(scope, period_start, period_end, currency)
         aggregate = db.execute(select(func.count(line.line_id), func.count(func.distinct(line.claim_id)),
-            func.sum(line.billed_amount), func.sum(line.paid_amount), func.count(line.paid_amount))
-            .select_from(line).join(claim, claim.claim_id == line.claim_id).where(predicate)).one()
+                                      func.sum(line.billed_amount), func.sum(line.paid_amount), func.count(line.paid_amount))
+                               .select_from(line).join(claim, claim.claim_id == line.claim_id).where(predicate)).one()
         rows = db.execute(select(line).join(claim, claim.claim_id == line.claim_id)
-            .where(predicate).order_by(line.line_id).limit(limit + 1)).scalars().all()
+                          .where(predicate).order_by(line.line_id).limit(limit + 1)).scalars().all()
+        from sqlalchemy import or_
+        conflicts = db.scalar(select(func.count()).select_from(line).join(claim,
+                                                                          claim.claim_id == line.claim_id).where(
+            scope_predicate(scope, line.clinic_id, line.department_id),
+            claim.clinic_id == scope.clinic_id, claim.org_id == scope.org_id,
+            claim.service_date >= period_start.astimezone(timezone.utc).replace(tzinfo=None),
+            claim.service_date < period_end.astimezone(timezone.utc).replace(tzinfo=None),
+            line.tombstone.is_(False), claim.tombstone.is_(False),
+            or_(claim.currency == currency, line.currency == currency),
+            or_(line.currency.is_(None), line.currency != claim.currency)))
         total, distinct, billed, paid, known = aggregate
+
         def amount(value):
             return format(value, "f") if value is not None else None
         return {"report_code": "HSP01_LINES_V1", "clinic_id": scope.clinic_id,
-            "scope": scope.model_dump(mode="json"), "currency": currency,
-            "business_timezone": "Asia/Dubai", "period_start": period_start.isoformat(),
-            "period_end": period_end.isoformat(), "restricted": not scope.full_record,
-            "completeness_status": "PARTIAL", "coverage_exceptions": ["Source feed completeness not established"],
-            "metrics": {"line_count": total, "distinct_claim_count": distinct,
-                "known_billed_amount": amount(billed), "known_paid_amount": amount(paid),
-                "unknown_payment_lines": total - known, "facility_total": None,
-                "receivable": None, "confirmed_cash": None},
-            "rows": [{"line_id": row.line_id, "department_id": row.department_id,
-                "source_evidence_id": row.source_evidence_id,
-                "billed_amount": amount(row.billed_amount), "paid_amount": amount(row.paid_amount),
-                "status": row.line_status} for row in rows[:limit]],
-            "has_more": len(rows) > limit}
+                "scope": scope.model_dump(mode="json"), "currency": currency,
+                "business_timezone": "Asia/Dubai", "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(), "restricted": not scope.full_record,
+                "completeness_status": "PARTIAL", "coverage_exceptions": ["Source feed completeness not established"] + (["Line currency conflict or unknown source currency"] if conflicts else []),
+                "metrics": {"line_count": total, "distinct_claim_count": distinct,
+                            "known_billed_amount": amount(billed), "known_paid_amount": amount(paid),
+                            "unknown_payment_lines": total - known, "currency_conflict_lines": conflicts, "facility_total": None,
+                            "receivable": None, "confirmed_cash": None},
+                "rows": [{"line_id": row.line_id, "department_id": row.department_id,
+                          "source_evidence_id": row.source_evidence_id,
+                          "billed_amount": amount(row.billed_amount), "paid_amount": amount(row.paid_amount),
+                          "status": row.line_status} for row in rows[:limit]],
+                "has_more": len(rows) > limit}
 
     def freeze_hospital_summary(self, db, scope, period_start, period_end, currency):
         """A bounded immutable snapshot; same inputs/manifest reuse its identity."""
@@ -131,14 +141,14 @@ class FinancialReportingService:
         payload["input_manifest_ref"] = "hospital_snapshot_pages:" + run_key
         payload["knowledge_cutoff"] = datetime.now(timezone.utc).isoformat()
         db.add(ReportRunModel(run_key=run_key, clinic_id=scope.clinic_id,
-            definition_id="HSP01_LINES_V1", definition_version="1",
-            period_start=period_start.astimezone(timezone.utc).replace(tzinfo=None),
-            period_end=period_end.astimezone(timezone.utc).replace(tzinfo=None),
-            cutoff_time=datetime.now(timezone.utc).replace(tzinfo=None), status="partial"))
+                              definition_id="HSP01_LINES_V1", definition_version="1",
+                              period_start=period_start.astimezone(timezone.utc).replace(tzinfo=None),
+                              period_end=period_end.astimezone(timezone.utc).replace(tzinfo=None),
+                              cutoff_time=datetime.now(timezone.utc).replace(tzinfo=None), status="partial"))
         db.flush()
         row = ReportSnapshotModel(snapshot_id=run_key, run_key=run_key, clinic_id=scope.clinic_id,
-            report_code="HSP01_LINES_V1", payload_json=json.dumps(payload, sort_keys=True),
-            summary_metrics_json=json.dumps(payload["metrics"]), completeness_status="PARTIAL", revision=1)
+                                  report_code="HSP01_LINES_V1", payload_json=json.dumps(payload, sort_keys=True),
+                                  summary_metrics_json=json.dumps(payload["metrics"]), completeness_status="PARTIAL", revision=1)
         db.add(row)
         db.flush()
         page_rows, page_number = [], 0
@@ -146,7 +156,9 @@ class FinancialReportingService:
             page_rows.append(item)
             if len(page_rows) == 100:
                 page = HospitalSnapshotPage(snapshot_id=run_key, page_number=page_number, rows_json=json.dumps(page_rows))
-                db.add(page); db.flush(); db.expunge(page)
+                db.add(page)
+                db.flush()
+                db.expunge(page)
                 page_rows, page_number = [], page_number + 1
         if page_rows:
             db.add(HospitalSnapshotPage(snapshot_id=run_key, page_number=page_number, rows_json=json.dumps(page_rows)))

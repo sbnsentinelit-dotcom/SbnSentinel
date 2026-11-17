@@ -107,7 +107,7 @@ class HospitalDirectoryService:
         start, end = self._period(valid_from, valid_to)
         self._overlap(HospitalDepartmentVersion, [HospitalDepartmentVersion.department_id == department_id], start, end)
         return self._save(HospitalDepartmentVersion(department_id=department_id, name=required(name, "name"),
-            valid_from=start, valid_to=end, basis_ref=required(basis_ref, "basis_ref")))
+                                                    valid_from=start, valid_to=end, basis_ref=required(basis_ref, "basis_ref")))
 
     def rename_department(self, org_id, clinic_id, department_id, name, effective_at, basis_ref):
         self._lock_facility(org_id, clinic_id)
@@ -145,7 +145,7 @@ class HospitalDirectoryService:
         start, end = self._period(valid_from, valid_to)
         self._overlap(HospitalLocationMembership, [HospitalLocationMembership.location_id == location_id], start, end)
         return self._save(HospitalLocationMembership(clinic_id=clinic_id, location_id=location_id, department_id=department_id,
-            valid_from=start, valid_to=end, basis_ref=required(basis_ref, "basis_ref")))
+                                                     valid_from=start, valid_to=end, basis_ref=required(basis_ref, "basis_ref")))
 
     def add_provider_membership(self, org_id, clinic_id, provider_ref, department_id, valid_from, basis_ref, valid_to=None):
         self._lock_facility(org_id, clinic_id)
@@ -153,9 +153,9 @@ class HospitalDirectoryService:
         start, end = self._period(valid_from, valid_to)
         provider_ref = required(provider_ref, "provider_ref")
         self._overlap(HospitalProviderMembership, [HospitalProviderMembership.provider_ref == provider_ref,
-            HospitalProviderMembership.department_id == department_id], start, end)
+                                                   HospitalProviderMembership.department_id == department_id], start, end)
         return self._save(HospitalProviderMembership(provider_ref=provider_ref, department_id=department_id,
-            valid_from=start, valid_to=end, basis_ref=required(basis_ref, "basis_ref")))
+                                                     valid_from=start, valid_to=end, basis_ref=required(basis_ref, "basis_ref")))
 
     def _transfer(self, model, org_id, clinic_id, from_department_id, to_department_id,
                   filters, values, effective_at, basis_ref):
@@ -192,16 +192,16 @@ class HospitalDirectoryService:
             previous.valid_to = when
             self.db.flush()
             new = self._save(model(department_id=to_department_id, valid_from=when,
-                valid_to=end, basis_ref=basis_ref, **values))
+                                   valid_to=end, basis_ref=basis_ref, **values))
         return new
 
     def transfer_provider(self, org_id, clinic_id, provider_ref, from_department_id,
                           to_department_id, effective_at, basis_ref):
         provider_ref = required(provider_ref, "provider_ref")
         return self._transfer(HospitalProviderMembership, org_id, clinic_id,
-            from_department_id, to_department_id,
-            [HospitalProviderMembership.provider_ref == provider_ref],
-            {"provider_ref": provider_ref}, effective_at, basis_ref)
+                              from_department_id, to_department_id,
+                              [HospitalProviderMembership.provider_ref == provider_ref],
+                              {"provider_ref": provider_ref}, effective_at, basis_ref)
 
     def transfer_location(self, org_id, clinic_id, location_id, from_department_id,
                           to_department_id, effective_at, basis_ref):
@@ -210,17 +210,17 @@ class HospitalDirectoryService:
         if location is None or location.clinic_id != clinic_id:
             raise ValueError("Location does not belong to the expected facility")
         return self._transfer(HospitalLocationMembership, org_id, clinic_id,
-            from_department_id, to_department_id,
-            [HospitalLocationMembership.location_id == location_id],
-            {"location_id": location_id, "clinic_id": clinic_id}, effective_at, basis_ref)
+                              from_department_id, to_department_id,
+                              [HospitalLocationMembership.location_id == location_id],
+                              {"location_id": location_id, "clinic_id": clinic_id}, effective_at, basis_ref)
 
     def _resolve(self, model, filters, at):
         if at is None:
             return DirectoryResolution("UNKNOWN", reason="Missing effective time")
         when = instant(at)
         rows = tuple(self.db.scalars(select(model).where(*filters, model.valid_from <= when,
-            or_(model.valid_to.is_(None), model.valid_to > when))
-            .execution_options(populate_existing=True)).all())
+                                                         or_(model.valid_to.is_(None), model.valid_to > when))
+                                     .execution_options(populate_existing=True)).all())
         if not rows:
             return DirectoryResolution("UNKNOWN", reason="No source-backed match")
         return DirectoryResolution("RESOLVED" if len(rows) == 1 else "AMBIGUOUS", rows)
@@ -238,8 +238,8 @@ class HospitalDirectoryService:
             return DirectoryResolution("UNKNOWN", reason="Missing provider")
         required(provider_ref, "provider_ref")
         return self._resolve(HospitalProviderMembership, [HospitalProviderMembership.provider_ref == provider_ref,
-            HospitalProviderMembership.department_id.in_(select(HospitalDepartment.id).where(
-                HospitalDepartment.clinic_id == clinic_id))], at)
+                                                          HospitalProviderMembership.department_id.in_(select(HospitalDepartment.id).where(
+                                                              HospitalDepartment.clinic_id == clinic_id))], at)
 
     def resolve_location(self, org_id, clinic_id, location_id, at):
         self.facility(org_id, clinic_id)

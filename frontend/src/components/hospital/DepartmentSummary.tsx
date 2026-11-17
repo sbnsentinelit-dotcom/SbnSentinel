@@ -5,7 +5,7 @@ export interface HospitalSnapshot {
   restricted: boolean; completeness_status: string; coverage_exceptions: string[];
   has_more?: boolean;
   metrics: { line_count: number; distinct_claim_count: number; known_billed_amount: string | null;
-    known_paid_amount: string | null; unknown_payment_lines: number };
+    known_paid_amount: string | null; unknown_payment_lines: number; currency_conflict_lines?: number };
   rows: { line_id: string; department_id: string | null; billed_amount: string | null;
     paid_amount: string | null; status: string }[];
 }
@@ -28,6 +28,7 @@ export function DepartmentSummary({ snapshot, departments = [] }: {
       <div><dt>Known billed amount</dt><dd>{money(snapshot.metrics.known_billed_amount)}</dd></div>
       <div><dt>Known adjudicated payment</dt><dd>{money(snapshot.metrics.known_paid_amount)}</dd></div>
       <div><dt>Lines with unknown payment</dt><dd>{snapshot.metrics.unknown_payment_lines}</dd></div>
+      {!!snapshot.metrics.currency_conflict_lines && <div><dt>Lines with unresolved currency</dt><dd>{snapshot.metrics.currency_conflict_lines}</dd></div>}
     </dl>
     <p>Cash and whole-cohort receivable are unavailable without sufficient source evidence.</p>
     {snapshot.coverage_exceptions.map(item => <p key={item}>{item}</p>)}

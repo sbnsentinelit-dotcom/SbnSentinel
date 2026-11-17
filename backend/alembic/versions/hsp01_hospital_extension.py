@@ -7,11 +7,50 @@ blocked: application rollback must preserve new history and exact amounts.
 from decimal import Decimal, InvalidOperation
 from alembic import op
 import sqlalchemy as sa
+from contextlib import contextmanager
 
 revision = "hsp01_hospital_extension"
 down_revision = "g8_financial_reporting"
 branch_labels = None
 depends_on = None
+
+
+@contextmanager
+def sqlite_dependents(bind, parent):
+    """Rebuild a parent while keeping dependent rows in transaction-local tables.
+
+    Foreign keys remain ON. Children are restored in dependency order after
+    the parent's replacement exists. No IDs/values/relationships are rewritten.
+    """
+    if bind.dialect.name != "sqlite":
+        yield
+        return
+    inspector = sa.inspect(bind)
+    dependencies = {name: {fk["referred_table"] for fk in inspector.get_foreign_keys(name)}
+                    for name in inspector.get_table_names()}
+    ordered, seen = [], {parent}
+    def visit(table):
+        for child, parents in dependencies.items():
+            if child not in seen and table in parents:
+                seen.add(child)
+                visit(child)
+                ordered.append(child)
+    visit(parent)
+    quote = bind.dialect.identifier_preparer.quote
+    backups = []
+    for child in ordered:
+        columns = [column["name"] for column in inspector.get_columns(child)]
+        backup = "hsp01_rebuild_" + child
+        bind.exec_driver_sql(f"CREATE TEMP TABLE {quote(backup)} AS SELECT * FROM {quote(child)}")
+        bind.exec_driver_sql(f"DELETE FROM {quote(child)}")
+        backups.append((child, backup, columns))
+    yield
+    for child, backup, columns in reversed(backups):
+        names = ", ".join(quote(column) for column in columns)
+        bind.exec_driver_sql(f"INSERT INTO {quote(child)} ({names}) SELECT {names} FROM {quote(backup)}")
+        bind.exec_driver_sql(f"DROP TABLE {quote(backup)}")
+    if bind.exec_driver_sql("PRAGMA foreign_key_check").first():
+        raise RuntimeError("Foreign-key integrity failed after hospital upgrade")
 
 
 def upgrade():
@@ -44,65 +83,66 @@ def upgrade():
         "financial_submission_attempts", "financial_remittances", "financial_payment_receipts", "financial_adjustments",
         "report_snapshots", "report_runs", "report_definitions", "ingestion_ledger", "audit_logs"]
     for table_name in targets:
-        table = Base.metadata.tables[table_name]
-        columns = {column["name"]: column for column in sa.inspect(bind).get_columns(table_name)}
-        for column in table.columns:
-            if column.name not in columns:
-                default = None
-                if not column.nullable:
-                    if isinstance(column.type, sa.Boolean): default = sa.false()
-                    elif isinstance(column.type, sa.Integer): default = sa.text("0")
-                    else: raise RuntimeError(f"Required backfill missing for {table_name}.{column.name}")
-                op.add_column(table_name, sa.Column(column.name, column.type,
-                    nullable=column.nullable, server_default=default))
-            elif isinstance(column.type, sa.Numeric) and isinstance(columns[column.name]["type"], sa.Float):
-                primary = list(table.primary_key.columns)[0]
-                # Preserve the original round-trip decimal representation. Fail
-                # rather than silently round out-of-scale/out-of-range values.
-                legacy_table = sa.Table(table_name, sa.MetaData(), autoload_with=bind)
-                raw_column = legacy_table.c[column.name]
-                result = bind.execute(sa.select(legacy_table.c[primary.name], raw_column)
-                    .where(raw_column.is_not(None))).yield_per(500)
-                for key, value in result:
-                    original = str(value)
-                    try:
-                        exact = Decimal(original)
-                        quantized = exact.quantize(Decimal("0.00000001"))
-                    except (InvalidOperation, ValueError):
-                        raise RuntimeError("Legacy money requires explicit reconciliation") from None
-                    if not exact.is_finite() or exact != quantized or exact.adjusted() >= 20:
-                        raise RuntimeError("Legacy money requires explicit reconciliation")
-                    exists = bind.execute(sa.select(audit.c.row_key).where(
-                        audit.c.table_name == table_name, audit.c.row_key == str(key),
-                        audit.c.column_name == column.name)).first()
-                    if not exists:
-                        bind.execute(audit.insert().values(table_name=table_name, row_key=str(key),
-                            column_name=column.name, legacy_value_text=original, decimal_value_text=format(exact, "f")))
-                if bind.dialect.name == "postgresql":
-                    quoted = bind.dialect.identifier_preparer.quote(column.name)
-                    op.alter_column(table_name, column.name, type_=column.type,
-                        postgresql_using=f"{quoted}::text::numeric(28,8)")
-                else:
+        with sqlite_dependents(bind, table_name):
+            table = Base.metadata.tables[table_name]
+            columns = {column["name"]: column for column in sa.inspect(bind).get_columns(table_name)}
+            for column in table.columns:
+                if column.name not in columns:
+                    default = None
+                    if not column.nullable:
+                        if isinstance(column.type, sa.Boolean): default = sa.false()
+                        elif isinstance(column.type, sa.Integer): default = sa.text("0")
+                        else: raise RuntimeError(f"Required backfill missing for {table_name}.{column.name}")
+                    op.add_column(table_name, sa.Column(column.name, column.type,
+                        nullable=column.nullable, server_default=default))
+                elif isinstance(column.type, sa.Numeric) and isinstance(columns[column.name]["type"], sa.Float):
+                    primary = list(table.primary_key.columns)[0]
+                    # Preserve the original round-trip decimal representation. Fail
+                    # rather than silently round out-of-scale/out-of-range values.
+                    legacy_table = sa.Table(table_name, sa.MetaData(), autoload_with=bind)
+                    raw_column = legacy_table.c[column.name]
+                    result = bind.execute(sa.select(legacy_table.c[primary.name], raw_column)
+                        .where(raw_column.is_not(None))).yield_per(500)
+                    for key, value in result:
+                        original = str(value)
+                        try:
+                            exact = Decimal(original)
+                            quantized = exact.quantize(Decimal("0.00000001"))
+                        except (InvalidOperation, ValueError):
+                            raise RuntimeError("Legacy money requires explicit reconciliation") from None
+                        if not exact.is_finite() or exact != quantized or exact.adjusted() >= 20:
+                            raise RuntimeError("Legacy money requires explicit reconciliation")
+                        exists = bind.execute(sa.select(audit.c.row_key).where(
+                            audit.c.table_name == table_name, audit.c.row_key == str(key),
+                            audit.c.column_name == column.name)).first()
+                        if not exists:
+                            bind.execute(audit.insert().values(table_name=table_name, row_key=str(key),
+                                column_name=column.name, legacy_value_text=original, decimal_value_text=format(exact, "f")))
+                    if bind.dialect.name == "postgresql":
+                        quoted = bind.dialect.identifier_preparer.quote(column.name)
+                        op.alter_column(table_name, column.name, type_=column.type,
+                            postgresql_using=f"{quoted}::text::numeric(28,8)")
+                    else:
+                        with op.batch_alter_table(table_name) as batch:
+                            batch.alter_column(column.name, type_=column.type)
+                elif (bind.dialect.name == "postgresql" and isinstance(column.type, sa.String)
+                      and column.type.length is None and getattr(columns[column.name]["type"], "length", None)):
+                    op.alter_column(table_name, column.name, type_=sa.String())
+            known_indexes = {index["name"] for index in sa.inspect(bind).get_indexes(table_name)}
+            for index in table.indexes:
+                if index.name not in known_indexes:
+                    index.create(bind)
+            known_foreign_keys = {(tuple(item["constrained_columns"]), item["referred_table"],
+                tuple(item["referred_columns"])) for item in sa.inspect(bind).get_foreign_keys(table_name)}
+            for constraint in table.foreign_key_constraints:
+                local = [element.parent.name for element in constraint.elements]
+                referred = [element.column.name for element in constraint.elements]
+                referred_table = constraint.elements[0].column.table.name
+                identity = (tuple(local), referred_table, tuple(referred))
+                if identity not in known_foreign_keys:
+                    name = constraint.name or "fk_hsp01_" + table_name + "_" + "_".join(local)
                     with op.batch_alter_table(table_name) as batch:
-                        batch.alter_column(column.name, type_=column.type)
-            elif (bind.dialect.name == "postgresql" and isinstance(column.type, sa.String)
-                  and column.type.length is None and getattr(columns[column.name]["type"], "length", None)):
-                op.alter_column(table_name, column.name, type_=sa.String())
-        known_indexes = {index["name"] for index in sa.inspect(bind).get_indexes(table_name)}
-        for index in table.indexes:
-            if index.name not in known_indexes:
-                index.create(bind)
-        known_foreign_keys = {(tuple(item["constrained_columns"]), item["referred_table"],
-            tuple(item["referred_columns"])) for item in sa.inspect(bind).get_foreign_keys(table_name)}
-        for constraint in table.foreign_key_constraints:
-            local = [element.parent.name for element in constraint.elements]
-            referred = [element.column.name for element in constraint.elements]
-            referred_table = constraint.elements[0].column.table.name
-            identity = (tuple(local), referred_table, tuple(referred))
-            if identity not in known_foreign_keys:
-                name = constraint.name or "fk_hsp01_" + table_name + "_" + "_".join(local)
-                with op.batch_alter_table(table_name) as batch:
-                    batch.create_foreign_key(name, referred_table, local, referred)
+                        batch.create_foreign_key(name, referred_table, local, referred)
     queue_indexes = {item["name"] for item in sa.inspect(bind).get_indexes("pipeline_events")}
     if "uq_hsp01_delivery_key" not in queue_indexes:
         op.create_index("uq_hsp01_delivery_key", "pipeline_events", ["delivery_key"], unique=True)

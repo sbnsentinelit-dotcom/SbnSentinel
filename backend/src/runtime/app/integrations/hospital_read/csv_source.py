@@ -16,6 +16,7 @@ class CsvSource:
     def iter_pages(self, lines, resource_kind):
         binding = self.profile.cursor_binding(resource_kind, "csv")
         consumed = 0
+
         def bounded_lines():
             nonlocal consumed
             for line in lines:

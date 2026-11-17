@@ -7,8 +7,9 @@ from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, a
 
 from app.models.user import UserRole
 from app.api.deps import get_current_user, RoleChecker
-api_router = APIRouter()
 from app.api.v1.endpoints import hospital
+from app.services.hospital_legacy_guard import hospital_legacy_guard
+api_router = APIRouter()
 api_router.include_router(hospital.router, prefix="/hospital", tags=["Hospital"], dependencies=[Depends(get_current_user)])
 # Register Phase 2 Subsystems
 # Auth is public
@@ -17,7 +18,6 @@ api_router.include_router(auth.router, prefix="/auth", tags=["00_Authentication"
 # JWKS public endpoint
 # All other routes protected by SIAME Default Deny (Must be logged in)
 protected = [Depends(get_current_user)]
-from app.services.hospital_legacy_guard import hospital_legacy_guard
 protected.append(Depends(hospital_legacy_guard))
 
 api_router.include_router(reality_connectors.router,

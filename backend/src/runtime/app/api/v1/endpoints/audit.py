@@ -47,6 +47,6 @@ def get_audit_logs(
     """
     from sqlalchemy import or_
     logs = db.query(AuditLogModel).filter(or_(AuditLogModel.module.is_(None),
-        AuditLogModel.module != "Hospital")).order_by(
+                                              AuditLogModel.module != "Hospital")).order_by(
         AuditLogModel.timestamp.desc()).offset(skip).limit(limit).all()
     return logs

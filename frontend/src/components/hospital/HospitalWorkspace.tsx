@@ -16,7 +16,7 @@ export function HospitalWorkspace() {
   const [start, setStart] = useState(() => businessDate(new Date(Date.now() - 30 * 86400000)));
   const [end, setEnd] = useState(() => businessDate(new Date(Date.now() + 86400000)));
   const [directoryError, setDirectoryError] = useState('');
-  const [view, setView] = useState<{ key: string; snapshot?: HospitalSnapshot; queue?: HospitalQueueItem[]; reason?: string; error?: string } | null>(null);
+  const [view, setView] = useState<{ key: string; snapshot?: HospitalSnapshot; queue?: HospitalQueueItem[]; reason?: string; error?: string; reportError?: string; queueError?: string; reportLoading?: boolean; queueLoading?: boolean } | null>(null);
   const [exportError, setExportError] = useState('');
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
@@ -49,7 +49,10 @@ export function HospitalWorkspace() {
     const timer = setInterval(() => void load(), 5000);
     return () => { alive = false; controller.abort(); clearInterval(timer); };
   }, []);
-  const key = JSON.stringify([selection, start, end, currency, refresh]);
+  const verifiedScope = facilities.find(item => item.clinic_id === selection?.clinicId)?.scope;
+  const canReport = verifiedScope?.capabilities.includes('report.read') ?? false;
+  const canReview = verifiedScope?.capabilities.includes('review.read') ?? false;
+  const key = JSON.stringify([selection, start, end, currency, refresh, verifiedScope?.capabilities]);
   useEffect(() => {
     if (!selection) return;
     let alive = true;
@@ -61,16 +64,32 @@ export function HospitalWorkspace() {
       try {
         const query = new URLSearchParams({ clinic_id: selection.clinicId });
         if (selection.departmentId) query.set('department_id', selection.departmentId);
-        const [snapshotResponse, queue] = await Promise.all([
-          fetchWithAuth('/api/v1/hospital/snapshots', { method: 'POST', signal: controller.signal,
-            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clinic_id: selection.clinicId,
-              department_id: selection.departmentId || null, currency, start: `${start}T00:00:00+04:00`, end: `${end}T00:00:00+04:00` }) }),
-          fetchWithAuth(`/api/v1/hospital/queue?${query}`, { signal: controller.signal })
-            .then(response => response.json() as Promise<{ items: HospitalQueueItem[]; unavailable_reason: string }>)
-            .catch(() => ({ items: [], unavailable_reason: 'Review queue unavailable under current permissions.' })),
-        ]);
-        const snapshot = await snapshotResponse.json() as HospitalSnapshot;
-        if (alive && snapshot.scope.grant_revision === selection.revision) setView({ key, snapshot, queue: queue.items, reason: queue.unavailable_reason });
+        setView(previous => previous?.key === key ? previous : { key, reportLoading: canReport, queueLoading: canReview,
+          reportError: canReport ? undefined : 'Financial report unavailable under current permissions or source state.',
+          queueError: canReview ? undefined : 'Review queue unavailable under current permissions.' });
+        const reportTask = canReport ? fetchWithAuth('/api/v1/hospital/snapshots', { method: 'POST', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clinic_id: selection.clinicId,
+            department_id: selection.departmentId || null, currency, start: `${start}T00:00:00+04:00`, end: `${end}T00:00:00+04:00` }) })
+          .then(response => response.json() as Promise<HospitalSnapshot>)
+          .then(snapshot => {
+            if (snapshot.scope.grant_revision !== selection.revision) throw new Error('Scope changed');
+            if (alive) setView(previous => ({ ...previous, key, snapshot, reportLoading: false, reportError: undefined }));
+          }).catch(() => {
+            if (alive) setView(previous => ({ ...previous, key, snapshot: undefined, reportLoading: false,
+              reportError: 'Financial report unavailable under current permissions or source state.' }));
+          }) : Promise.resolve();
+        const queueTask = canReview ? fetchWithAuth(`/api/v1/hospital/queue?${query}`, { signal: controller.signal })
+          .then(response => response.json() as Promise<{ items: HospitalQueueItem[]; unavailable_reason: string;
+            scope: { grant_revision: number } }>)
+          .then(queue => {
+            if (queue.scope.grant_revision !== selection.revision) throw new Error('Scope changed');
+            if (alive) setView(previous => ({ ...previous, key, queue: queue.items, reason: queue.unavailable_reason,
+              queueLoading: false, queueError: undefined }));
+          }).catch(() => {
+            if (alive) setView(previous => ({ ...previous, key, queue: undefined, queueLoading: false,
+              queueError: 'Review queue unavailable under current permissions.' }));
+          }) : Promise.resolve();
+        await Promise.allSettled([reportTask, queueTask]);
       } catch {
         if (alive) setView({ key, error: 'Hospital results unavailable. Check current access and source readiness.' });
       } finally { loading = false; }
@@ -78,7 +97,7 @@ export function HospitalWorkspace() {
     void load();
     const timer = setInterval(() => void load(), 5000);
     return () => { alive = false; controller.abort(); clearInterval(timer); };
-  }, [key, selection, currency, start, end]);
+  }, [key, selection, currency, start, end, canReport, canReview]);
   const current = view?.key === key && selection ? view : null;
   async function assign(item: HospitalQueueItem, assignee: string, reason: string) {
     if (!selection) throw new Error('Select a facility');
@@ -113,11 +132,15 @@ export function HospitalWorkspace() {
     <p>Last accounted import batch: {facilities.find(item => item.clinic_id === selection?.clinicId)?.last_import_at ?? 'Unavailable'}</p>
     {selection && !current && <p role="status">Loading permitted results…</p>}
     {current?.error && <p role="alert">{current.error}</p>}
+    {current?.reportLoading && <p role="status">Loading financial report...</p>}
+    {current?.queueLoading && <p role="status">Loading review queue...</p>}
+    {current?.reportError && <p role="alert">{current.reportError}</p>}
+    {current?.queueError && <p role="alert">{current.queueError}</p>}
     {current?.snapshot && <><DepartmentSummary snapshot={current.snapshot}
       departments={facilities.find(item => item.clinic_id === selection?.clinicId)?.departments} />
       <button type="button" onClick={() => void download()} disabled={!current.snapshot.scope.capabilities.includes('report.export')}>Export this snapshot</button></>}
     {exportError && <p role="alert">{exportError}</p>}
     {current?.queue && <ReviewQueue key={key} items={current.queue} unavailableReason={current.reason}
-      canAssign={current.snapshot?.scope.capabilities.includes('assignment.write')} onAssign={assign} />}
+      canAssign={verifiedScope?.capabilities.includes('assignment.write')} onAssign={assign} />}
   </main>;
 }

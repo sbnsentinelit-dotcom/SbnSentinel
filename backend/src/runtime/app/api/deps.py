@@ -96,7 +96,7 @@ def get_signal_for_actor(db: Session, actor: User, signal_id: str):
     from app.services.hospital_scope_service import hospital_facility_ids
     from sqlalchemy import select
     if db.scalar(select(SignalModel.id).where(SignalModel.id == signal_id,
-            SignalModel.clinic_id.in_(hospital_facility_ids()))):
+                                              SignalModel.clinic_id.in_(hospital_facility_ids()))):
         raise HTTPException(status_code=403, detail="Hospital records require a scoped hospital view")
     q = db.query(SignalModel).filter(SignalModel.id == signal_id)
     if actor.role != UserRole.SYSTEM_ADMINISTRATOR.value:
