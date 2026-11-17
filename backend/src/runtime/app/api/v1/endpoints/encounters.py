@@ -124,10 +124,35 @@ def seed_default_encounters(db: Session):
 @router.get("/", response_model=List[EncounterResponse])
 def get_all_encounters(db: Session = Depends(get_db)):
     """
-    Get all clinical patient encounters from SQLite database.
+    Get all clinical patient encounters. Auto-seeds UAE clinic data if empty.
     """
     encounters = db.query(EncounterModel).all()
+    if not encounters:
+        try:
+            from app.services.dubai_seed_service import auto_seed_dubai_if_empty
+            auto_seed_dubai_if_empty(db)
+            encounters = db.query(EncounterModel).all()
+        except Exception as e:
+            print(f"[ERROR] Auto-seed dubai encounters failed: {e}")
     return encounters
+
+
+@router.post("/seed-dubai", status_code=status.HTTP_200_OK)
+def trigger_seed_dubai(db: Session = Depends(get_db)):
+    """
+    Explicit endpoint to seed or refresh the UAE Dubai clinic demo dataset.
+    """
+    try:
+        from app.services.dubai_seed_service import seed_dubai_data
+        seed_dubai_data(db)
+        count = db.query(EncounterModel).count()
+        return {
+            "status": "success",
+            "message": f"Successfully seeded UAE Dubai dataset ({count} encounters).",
+            "encounters_count": count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to seed Dubai data: {str(e)}")
 
 
 @router.post("/", response_model=EncounterResponse, status_code=status.HTTP_201_CREATED)

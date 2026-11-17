@@ -59,15 +59,31 @@ export const ClinicalLogsView: React.FC = () => {
     fetchDoctors();
   }, []);
 
+  const [isSeeding, setIsSeeding] = useState(false);
+
   const fetchEncounters = async () => {
     try {
-      const response = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters`);
+      const response = await fetchWithAuth('/api/v1/encounters');
       if (response.ok) {
         const data = await response.json();
         setEncounters(Array.isArray(data) ? [...data].reverse() : []);
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleManualSeed = async () => {
+    try {
+      setIsSeeding(true);
+      const res = await fetchWithAuth('/api/v1/encounters/seed-dubai', { method: 'POST' });
+      if (res.ok) {
+        await fetchEncounters();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSeeding(false);
     }
   };
 
@@ -640,7 +656,15 @@ export const ClinicalLogsView: React.FC = () => {
                 {filteredEncounters.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-12 text-center">
-                      <p className="text-sm text-white/50 font-bold">No clinical records found.</p>
+                      <p className="text-sm text-white/50 font-bold mb-3">No clinical records found.</p>
+                      <button
+                        onClick={handleManualSeed}
+                        disabled={isSeeding}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-[12px] shadow-lg transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        {isSeeding ? "Syncing UAE Clinical Records..." : "Load UAE Clinic Dataset (789 Records)"}
+                      </button>
                     </td>
                   </tr>
                 ) : null}

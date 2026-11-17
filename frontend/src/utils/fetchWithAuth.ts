@@ -23,10 +23,16 @@ export const fetchWithAuth = async (url: string | URL, options: RequestInit = {}
   const token = localStorage.getItem('token');
   const API = process.env.NEXT_PUBLIC_BACKEND_URL || '';
   
-  // Resolve URL
-  let resolvedUrl = url;
-  if (typeof url === 'string' && url.startsWith('/')) {
-    resolvedUrl = `${API}${url}`;
+  // Resolve URL and safely strip accidental undefined prefix
+  let resolvedUrl = typeof url === 'string' ? url : url.toString();
+  if (resolvedUrl.startsWith('undefined')) {
+    resolvedUrl = resolvedUrl.replace(/^undefined/, '');
+  }
+  if (!resolvedUrl.startsWith('http://') && !resolvedUrl.startsWith('https://')) {
+    if (!resolvedUrl.startsWith('/')) {
+      resolvedUrl = `/${resolvedUrl}`;
+    }
+    resolvedUrl = `${API}${resolvedUrl}`;
   }
   
   const parsedUrl = new URL(resolvedUrl.toString(), window.location.origin);

@@ -56,7 +56,7 @@ export const PatientFlowView: React.FC = () => {
 
   const fetchEncounters = async () => {
     try {
-      const response = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters`);
+      const response = await fetchWithAuth('/api/v1/encounters');
       if (response.ok) {
         const data = await response.json();
         setEncounters(Array.isArray(data) ? data : []);

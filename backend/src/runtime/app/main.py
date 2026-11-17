@@ -75,8 +75,17 @@ def create_app() -> FastAPI:
                 db.add(admin)
                 db.commit()
                 print("[SUCCESS] Super Admin seeded: superadmin@sbnsentinel.com / [HIDDEN]")
-            else:
-                print("[SUCCESS] Super Admin already exists.")
+            # Auto-seed UAE Dubai clinic demo dataset if encounters is empty
+            try:
+                from app.models.encounter import EncounterModel
+                from app.services.dubai_seed_service import auto_seed_dubai_if_empty
+                enc_count = db.query(EncounterModel).count()
+                if enc_count == 0:
+                    print("[INFO] Encounters empty on startup. Auto-seeding UAE Dubai clinic data...")
+                    auto_seed_dubai_if_empty(db)
+                    print("[SUCCESS] UAE Dubai clinic dataset seeded automatically.")
+            except Exception as seed_err:
+                print(f"[WARNING] Could not auto-seed dubai data: {seed_err}")
 
         except Exception as e:
             print(f"[WARNING] Could not seed bootstrap data: {e}")

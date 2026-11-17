@@ -23,12 +23,12 @@ export const RevenueReportsView: React.FC = () => {
 
   const fetchEncounters = async () => {
     try {
-      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters`);
+      const res = await fetchWithAuth('/api/v1/encounters');
       if (res.ok) {
         const data = await res.json();
         setEncounters(data);
       }
-      const repRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/financial-reports/summary`);
+      const repRes = await fetchWithAuth('/api/v1/financial-reports/summary');
       if (repRes.ok) {
         const repData = await repRes.json();
         setBackendSummary(repData);
