@@ -15,6 +15,10 @@ SQLALCHEMY_DATABASE_URL = (
     or "sqlite:///./sentinel.db"
 )
 
+# Normalize postgresql scheme to use psycopg2 driver
+if SQLALCHEMY_DATABASE_URL.startswith("postgresql://"):
+    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 # connect_args and pooling required by SQLite; not used for PostgreSQL
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
     _connect_args = {"check_same_thread": False, "timeout": 30}
