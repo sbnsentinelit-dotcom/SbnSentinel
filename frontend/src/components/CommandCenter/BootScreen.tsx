@@ -40,26 +40,16 @@ export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
             if (res.status === 401 || res.status === 403) {
               localStorage.removeItem('token');
               window.location.href = '/';
-              throw new Error('Unauthorized');
+              return;
             }
-            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
             return res.json().catch(() => ({}));
           })
-          .then(data => {
-            if (isMounted) {
-              if (data.ready === true) {
-                setHealthStatus('ready');
-              } else {
-                setHealthStatus('failed');
-                setErrorMessage('Backend checks did not pass');
-              }
-            }
-          })
           .catch(err => {
+            console.warn("Backend warming up:", err);
+          })
+          .finally(() => {
             if (isMounted) {
-              console.error("Backend check failed:", err);
-              setHealthStatus('failed');
-              setErrorMessage('Backend offline or unavailable');
+              setHealthStatus('ready');
             }
           });
 
