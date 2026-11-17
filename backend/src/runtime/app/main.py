@@ -75,6 +75,19 @@ def create_app() -> FastAPI:
                 db.add(admin)
                 db.commit()
                 print("[SUCCESS] Super Admin seeded: superadmin@sbnsentinel.com / [HIDDEN]")
+
+            existing_clinic = db.query(User).filter(User.email == "clinicadmin@sbnsentinel.com").first()
+            if not existing_clinic:
+                clinic_admin = User(
+                    email="clinicadmin@sbnsentinel.com",
+                    hashed_password=get_password_hash("ClinicPassword@123"),
+                    full_name="UAE Clinic Administrator",
+                    role=UserRole.ORGANIZATION_ADMINISTRATOR.value,
+                    is_active=True
+                )
+                db.add(clinic_admin)
+                db.commit()
+                print("[SUCCESS] Clinic Admin seeded: clinicadmin@sbnsentinel.com / ClinicPassword@123")
             # Auto-seed UAE Dubai clinic demo dataset if encounters is empty
             try:
                 from app.models.encounter import EncounterModel
