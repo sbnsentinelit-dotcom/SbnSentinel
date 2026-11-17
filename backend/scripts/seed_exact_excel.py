@@ -16,8 +16,6 @@ if '/app/src/runtime' not in sys.path:
 from app.db.database import SessionLocal, engine, Base  # noqa: E402
 from app.models.clinic import ClinicModel  # noqa: E402
 from app.models.encounter import EncounterModel  # noqa: E402
-from app.models.user import User, UserRole  # noqa: E402
-from app.core.security import get_password_hash  # noqa: E402
 from app.models.financial_reporting import (  # noqa: E402
     FinancialClaimModel,
     FinancialClaimLineModel,
@@ -55,28 +53,6 @@ def seed_exact():
     db = SessionLocal()
 
     try:
-        # 0. Ensure Clinic Admin User exists with default login
-        admin_email = "clinicadmin@sbnsentinel.com"
-        admin_pass = "ClinicPassword@123"
-        existing_admin = db.query(User).filter(User.email == admin_email).first()
-        if existing_admin:
-            existing_admin.hashed_password = get_password_hash(admin_pass)
-            existing_admin.role = UserRole.ORGANIZATION_ADMINISTRATOR.value
-            existing_admin.is_active = True
-            db.commit()
-            print(f"✔ Clinic Admin verified: {admin_email}")
-        else:
-            new_admin = User(
-                email=admin_email,
-                hashed_password=get_password_hash(admin_pass),
-                full_name="Local Clinic Admin",
-                role=UserRole.ORGANIZATION_ADMINISTRATOR.value,
-                is_active=True
-            )
-            db.add(new_admin)
-            db.commit()
-            print(f"✔ Clinic Admin created: {admin_email}")
-
         clinic_id = "DXB-CLINIC-01"
         clinic = db.query(ClinicModel).filter(ClinicModel.id == clinic_id).first()
         if not clinic:
@@ -126,12 +102,9 @@ def seed_exact():
             claim_by_enc[enc_id] = clm
 
         # 1. Seed Encounters (789 records)
-        existing_enc_ids = {e.id for e in db.query(EncounterModel.id).all()}
         new_encs = 0
         for enc in encounters_raw:
             eid = enc.get('Encounter_ID')
-            if eid in existing_enc_ids:
-                continue
 
             pid = enc.get('Patient_ID')
             pname = patient_map.get(pid, pid)
@@ -186,12 +159,11 @@ def seed_exact():
                 billing_amount=billed,
                 denial_reason=d_text,
             )
-            db.add(db_enc)
-            existing_enc_ids.add(eid)
+            db.merge(db_enc)
             new_encs += 1
 
         db.commit()
-        print(f"✔ Seeded {new_encs} Encounter records ({len(encounters_raw)} total in Excel).")
+        print(f"✔ Synchronized {new_encs} Encounter records ({len(encounters_raw)} total in Excel).")
 
         # 2. Seed Claims (766 records) - Parent Table first
         existing_claims = {c.claim_id for c in db.query(FinancialClaimModel.claim_id).all()}
@@ -365,8 +337,6 @@ def seed_exact():
         new_sigs = 0
         for idx, (code, sig_type, risk, exposure, title, prob, impact, action, score) in enumerate(uae_governance_rules):
             sig_id = f"SIG-DXB-EXCEL-{idx + 1:02d}"
-            if sig_id in existing_signals:
-                continue
             sig = SignalModel(
                 id=sig_id,
                 source="Sentinel UAE Governance Engine",
@@ -386,11 +356,11 @@ def seed_exact():
                 estimated_financial_exposure=f"AED {exposure:.2f}",
                 priority_score=score,
             )
-            db.add(sig)
+            db.merge(sig)
             new_sigs += 1
 
         db.commit()
-        print(f"✔ Seeded {new_sigs} Sentinel Governance Signals.")
+        print(f"✔ Synchronized {new_sigs} Sentinel Governance Signals.")
 
         print("\n===================================================================")
         print("🎉 SUCCESS: 100% Exact Client Excel Data loaded into the database!")
