@@ -106,6 +106,24 @@ def seed_dubai_data():
             db.commit()
             print(f"✔ Clinic established: {clinic.name}")
 
+        # 1b. Seed Clinical Settings
+        from app.models.settings import SettingsModel  # noqa: E402
+        settings_record = db.query(SettingsModel).first()
+        if not settings_record:
+            settings_record = SettingsModel(
+                clinic_name="Sentinel UAE Medical Center - Dubai",
+                address="Building 64, Dubai Healthcare City (DHCC), Dubai, UAE",
+                phone="+971 4 362 4700",
+                email="contact@sbnsentinel.com",
+                operating_hours="Mon-Sat: 08:00 AM - 08:00 PM",
+                emergency_contact="+971 4 362 4799",
+                auto_refresh=True,
+                audit_frequency="Daily"
+            )
+            db.add(settings_record)
+            db.commit()
+            print("✔ Seeded Dubai Clinic Settings.")
+
         # 2. Generate 500 UAE Patients
         patients = []
         for i in range(1, 501):

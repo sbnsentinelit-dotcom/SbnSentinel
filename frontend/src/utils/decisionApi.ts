@@ -37,7 +37,7 @@ export type RecommendationReviewDTO = {
  * Fetches the exact governed Recommendation and current Decision for a Signal.
  */
 export async function fetchRecommendationReview(signalId: string): Promise<RecommendationReviewDTO> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
   const res = await fetchWithAuth(`${backendUrl}/api/v1/decisions/review/${encodeURIComponent(signalId)}`);
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
@@ -63,7 +63,7 @@ export async function submitHumanDecision(input: {
   decisionType: string;
   reason?: string;
 }) {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
   const res = await fetchWithAuth(`${backendUrl}/api/v1/decisions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

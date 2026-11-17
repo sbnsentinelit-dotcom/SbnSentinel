@@ -14,11 +14,26 @@ router = APIRouter()
 @router.get("", response_model=SettingsResponse, dependencies=[Depends(RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value, UserRole.CLINIC_MANAGER.value]))])
 def get_settings(db: Session = Depends(get_db)):
     """
-    Retrieve clinical settings. Return default if none exists, but do not write to DB.
+    Retrieve clinical settings. Auto-initializes default clinic settings if none exists.
     """
     settings = db.query(SettingsModel).first()
     if not settings:
-        raise HTTPException(status_code=404, detail="Settings not configured")
+        settings = SettingsModel(
+            clinic_name="Sentinel UAE Medical Center - Dubai",
+            address="Building 64, Dubai Healthcare City, Dubai, UAE",
+            phone="+971 4 362 4700",
+            email="contact@sbnsentinel.com",
+            operating_hours="Mon-Sat: 08:00 AM - 08:00 PM",
+            emergency_contact="+971 4 362 4799",
+            auto_refresh=True,
+            audit_frequency="Daily"
+        )
+        db.add(settings)
+        try:
+            db.commit()
+            db.refresh(settings)
+        except Exception:
+            db.rollback()
     return settings
 
 

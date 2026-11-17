@@ -32,7 +32,7 @@ export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
 
         // Fire off readiness check concurrently while animation starts
         const token = localStorage.getItem('token');
-        fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'}/api/v1/health/ready`, {
+        fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/health/ready`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           cache: 'no-store'
         })
