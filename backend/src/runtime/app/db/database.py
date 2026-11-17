@@ -15,6 +15,22 @@ SQLALCHEMY_DATABASE_URL = (
     or "sqlite:///./sentinel.db"
 )
 
+# Normalize postgresql scheme to use psycopg2 driver
+if SQLALCHEMY_DATABASE_URL.startswith("postgresql://"):
+    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+# Self-heal passwords containing '@' symbol (e.g. postgres:Pass@123@db:5432/db)
+if "://" in SQLALCHEMY_DATABASE_URL:
+    scheme, rest = SQLALCHEMY_DATABASE_URL.split("://", 1)
+    if rest.count("@") > 1:
+        last_at = rest.rfind("@")
+        user_pass = rest[:last_at]
+        host_db = rest[last_at + 1:]
+        if ":" in user_pass:
+            u, p = user_pass.split(":", 1)
+            import urllib.parse
+            SQLALCHEMY_DATABASE_URL = f"{scheme}://{u}:{urllib.parse.quote_plus(p)}@{host_db}"
+
 # connect_args and pooling required by SQLite; not used for PostgreSQL
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
     _connect_args = {"check_same_thread": False, "timeout": 30}

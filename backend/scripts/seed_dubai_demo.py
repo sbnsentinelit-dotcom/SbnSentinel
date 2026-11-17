@@ -82,6 +82,14 @@ DENIAL_REASONS = [
 
 
 def seed_dubai_data():
+    # If exact client Excel json exists, delegate to seed_exact
+    try:
+        from scripts.seed_exact_excel import seed_exact
+        seed_exact()
+        return
+    except Exception as e:
+        print(f"Notice: seed_exact_excel not available, falling back to procedural seeder ({e})")
+
     print("===================================================================")
     print("🇦🇪 SBN Sentinel: Seeding UAE Dubai Healthcare Clinic Demo Dataset")
     print("===================================================================")
@@ -111,14 +119,13 @@ def seed_dubai_data():
         settings_record = db.query(SettingsModel).first()
         if not settings_record:
             settings_record = SettingsModel(
-                clinic_name="Sentinel UAE Medical Center - Dubai",
-                address="Building 64, Dubai Healthcare City (DHCC), Dubai, UAE",
-                phone="+971 4 362 4700",
-                email="contact@sbnsentinel.com",
-                operating_hours="Mon-Sat: 08:00 AM - 08:00 PM",
-                emergency_contact="+971 4 362 4799",
-                auto_refresh=True,
-                audit_frequency="Daily"
+                practice_name="Sentinel UAE Medical Center - Dubai",
+                practice_phone="+971 4 362 4700",
+                timezone="Asia/Dubai",
+                open_time="08:00",
+                close_time="20:00",
+                language="en",
+                theme_mode="system"
             )
             db.add(settings_record)
             db.commit()
@@ -224,6 +231,8 @@ def seed_dubai_data():
         # 4. Seed 766 Financial Claims & Lines
         existing_claims = {c.claim_id for c in db.query(FinancialClaimModel.claim_id).all()}
         new_claim_count = 0
+        claims_to_add = []
+        lines_to_add = []
 
         for i in range(1, 767):
             clm_id = f"CLM2026{i:06d}"
@@ -271,7 +280,7 @@ def seed_dubai_data():
                 rejection_reason=d_reason,
                 denial_code=d_code,
             )
-            db.add(claim)
+            claims_to_add.append(claim)
 
             # Claim Line
             line = FinancialClaimLineModel(
@@ -288,10 +297,18 @@ def seed_dubai_data():
                 denial_code=d_code,
                 denial_reason=d_reason,
             )
-            db.add(line)
+            lines_to_add.append(line)
             existing_claims.add(clm_id)
             new_claim_count += 1
 
+        # Commit claims first to satisfy FK constraints in PostgreSQL
+        for c in claims_to_add:
+            db.add(c)
+        db.commit()
+
+        # Now commit claim lines
+        for line_item in lines_to_add:
+            db.add(line_item)
         db.commit()
         print(f"✔ Seeded {new_claim_count} Financial Claims and Lines (AED currency).")
 
@@ -299,6 +316,8 @@ def seed_dubai_data():
         existing_receipts = {r.receipt_id for r in db.query(FinancialPaymentReceiptModel.receipt_id).all()}
         existing_remits = {rem.remittance_id for rem in db.query(FinancialRemittanceModel.remittance_id).all()}
         new_receipt_count = 0
+        remits_to_add = []
+        receipts_to_add = []
 
         for i in range(1, 327):
             rec_id = f"PAY2026{i:06d}"
@@ -308,6 +327,19 @@ def seed_dubai_data():
             enc = encounters_data[i - 1]
             paid_val = round(enc["billed_amt"] * 0.80, 2)
             remit_id = f"CHK-UAE-{202600 + i}"
+
+            if remit_id not in existing_remits:
+                remittance = FinancialRemittanceModel(
+                    remittance_id=remit_id,
+                    clinic_id=clinic_id,
+                    payer_id=enc["payer"],
+                    payment_reference=remit_id,
+                    remittance_date=datetime.strptime(enc["date"], "%Y-%m-%d") + timedelta(days=15),
+                    total_paid=paid_val,
+                    currency="AED",
+                )
+                remits_to_add.append(remittance)
+                existing_remits.add(remit_id)
 
             receipt = FinancialPaymentReceiptModel(
                 receipt_id=rec_id,
@@ -320,24 +352,18 @@ def seed_dubai_data():
                 claim_id=f"CLM2026{i:06d}",
                 bank_confirmed=True,
             )
-            db.add(receipt)
-
-            if remit_id not in existing_remits:
-                remittance = FinancialRemittanceModel(
-                    remittance_id=remit_id,
-                    clinic_id=clinic_id,
-                    payer_id=enc["payer"],
-                    payment_reference=remit_id,
-                    remittance_date=datetime.strptime(enc["date"], "%Y-%m-%d") + timedelta(days=15),
-                    total_paid=paid_val,
-                    currency="AED",
-                )
-                db.add(remittance)
-                existing_remits.add(remit_id)
-
+            receipts_to_add.append(receipt)
             existing_receipts.add(rec_id)
             new_receipt_count += 1
 
+        # Commit remittances first to satisfy FK constraints
+        for rem in remits_to_add:
+            db.add(rem)
+        db.commit()
+
+        # Now commit payment receipts
+        for rec in receipts_to_add:
+            db.add(rec)
         db.commit()
         print(f"✔ Seeded {new_receipt_count} Remittances & Payment Receipts.")
 

@@ -58,7 +58,7 @@ export const fetchHistoricalSignals = createAsyncThunk(
   'signals/fetchHistoricalSignals',
   async () => {
     try {
-      const response = await fetchWithAuth('http://localhost:8000/api/v1/signals');
+      const response = await fetchWithAuth('/api/v1/signals');
       if (!response.ok) {
         throw new Error('Failed to fetch signals');
       }

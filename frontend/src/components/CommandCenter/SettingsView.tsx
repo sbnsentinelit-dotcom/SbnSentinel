@@ -4,7 +4,7 @@ import {
   User, Bell, Shield, Database, BrainCircuit, CreditCard, Users, 
   Settings as SettingsIcon, Save, Building, Clock, Lock, Plus, X, 
   Check, HelpCircle, AlertCircle, Download, Activity, Globe, Sparkles,
-  Phone, CheckCircle2, Key, Info, ShieldAlert, ShieldCheck
+  Phone, CheckCircle2, Key, Info, ShieldAlert, ShieldCheck, Building2
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
@@ -421,6 +421,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
 
   const renderContent = () => {
     switch (localActiveMenu) {
+      case 'clinics':
       case 'settings-clinics':
         return (
           <div className="space-y-6 animate-in fade-in duration-300">
@@ -533,11 +534,48 @@ document.body
         </button>
       </div>
 
-      <div className="w-full">
+      <div className="w-full space-y-4">
+        {/* Sub-Navigation Tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-white/10 no-scrollbar">
+          {[
+            { id: 'general', label: 'Organization & Profile', icon: Building },
+            { id: 'integrations', label: 'Connect Your API', icon: Database, badge: 'UAE & US' },
+            { id: 'clinics', label: 'Clinics & Facilities', icon: Building2 },
+            { id: 'team', label: 'Users & Roles', icon: Users },
+            { id: 'notifications', label: 'Notifications', icon: Bell },
+            { id: 'security', label: 'Security & Compliance', icon: Shield },
+            { id: 'billing', label: 'Billing & Plans', icon: CreditCard },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = localActiveMenu === tab.id || (tab.id === 'clinics' && localActiveMenu === 'settings-clinics');
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setLocalActiveMenu(tab.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-[14px] text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  isActive
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-900/30 border border-purple-400/30'
+                    : 'bg-white/5 hover:bg-white/10 text-white/70 hover:text-white border border-white/5'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{tab.label}</span>
+                {tab.badge && (
+                  <span className="px-1.5 py-0.5 text-[9px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-md">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
         {/* Main Content Area */}
         <div className="bg-white/5 border border-white/10 rounded-[24px] p-8 text-white min-h-[580px] w-full">
            
+           {/* Clinics & Facilities */}
+           {(localActiveMenu === 'clinics' || localActiveMenu === 'settings-clinics') && renderContent()}
+
            {/* 1. GENERAL SETTINGS */}
            {localActiveMenu === 'general' && (
              <div className="space-y-8 animate-in fade-in">

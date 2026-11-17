@@ -236,12 +236,13 @@ export default function Dashboard() {
     
     // Map backend roles to frontend internal roles
     const normalizeRole = (r: string) => {
-      if (r === 'System Administrator') return 'super_admin';
-      if (r === 'Organization Administrator') return 'org_admin';
-      if (r === 'Clinic Administrator') return 'clinic_admin';
-      if (r === 'Operations Manager') return 'ops_manager';
-      if (r === 'Practice Manager') return 'practice_manager';
-      if (r === 'Staff') return 'staff';
+      const lower = (r || '').toLowerCase().trim();
+      if (lower === 'system administrator' || lower === 'super_admin' || lower === 'system_administrator') return 'super_admin';
+      if (lower === 'organization administrator' || lower === 'org_admin' || lower === 'organization_administrator') return 'org_admin';
+      if (lower === 'clinic administrator' || lower === 'clinic_admin' || lower === 'clinic_administrator' || lower === 'clinic manager') return 'clinic_admin';
+      if (lower === 'operations manager' || lower === 'ops_manager' || lower === 'operations_manager') return 'ops_manager';
+      if (lower === 'practice manager' || lower === 'practice_manager') return 'practice_manager';
+      if (lower === 'staff' || lower === 'staff user' || lower === 'front desk') return 'staff';
       return r;
     };
     
@@ -602,7 +603,7 @@ export default function Dashboard() {
                         <User className="w-4 h-4 text-blue-400" /> Profile Details
                       </button>
                       <button
-                        onClick={() => { setActiveTab('settings'); setIsProfileOpen(false); }}
+                        onClick={() => { setActiveTab('settings-general'); setIsProfileOpen(false); }}
                         className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-bold text-white/80 hover:text-white hover:bg-white/10 rounded-[12px] transition-all cursor-pointer"
                       >
                         <Settings className="w-4 h-4 text-purple-400" /> Account Settings
@@ -961,11 +962,11 @@ export default function Dashboard() {
             {activeTab === 'revenue-reports' && (['practice_manager', 'staff'].includes(userRole) ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <RevenueReportsView />)}
             {activeTab === 'team-messaging' && <TeamMessagingView currentUser={currentUser} activeContact={activeContact} onContactSelect={setActiveContact} />}
             {activeTab === 'audit-logs' && (['practice_manager', 'staff', 'ops_manager'].includes(userRole) ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <AuditLogsView />)}
-            {activeTab.startsWith('settings-') && (
+            {(activeTab === 'settings' || activeTab.startsWith('settings-')) && (
               (['practice_manager', 'staff', 'ops_manager'].includes(userRole) && ['settings-integrations', 'settings-clinics', 'settings-billing', 'settings-security', 'settings-team', 'settings-general'].includes(activeTab)) 
                 ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> 
                 : <SettingsView
-                    activeMenuProp={activeTab === 'settings-general' ? 'general' : activeTab === 'settings-ai' ? 'ai' : activeTab === 'settings-team' ? 'team' : activeTab === 'settings-notifications' ? 'notifications' : activeTab === 'settings-integrations' ? 'integrations' : activeTab === 'settings-billing' ? 'billing' : activeTab === 'settings-security' ? 'security' : activeTab === 'settings-clinics' ? 'settings-clinics' : 'general'}
+                    activeMenuProp={activeTab === 'settings' || activeTab === 'settings-general' ? 'general' : activeTab === 'settings-ai' ? 'ai' : activeTab === 'settings-team' ? 'team' : activeTab === 'settings-notifications' ? 'notifications' : activeTab === 'settings-integrations' ? 'integrations' : activeTab === 'settings-billing' ? 'billing' : activeTab === 'settings-security' ? 'security' : activeTab === 'settings-clinics' ? 'settings-clinics' : 'general'}
                     onSaveSettings={(data) => {
                       if (data.practiceName) setPracticeName(data.practiceName);
                       if (data.activePlan) setActivePlan(data.activePlan);
