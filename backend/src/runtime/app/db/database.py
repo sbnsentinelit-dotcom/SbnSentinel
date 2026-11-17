@@ -1,3 +1,4 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -6,9 +7,13 @@ from typing import Generator
 from app.core.config import settings
 
 # Database URL is environment-driven.
-# Default (dev): sqlite:///./sentinel.db
-# Production:    set SQLALCHEMY_DATABASE_URL=postgresql://user:pass@host/db
-SQLALCHEMY_DATABASE_URL = settings.SQLALCHEMY_DATABASE_URL
+# Supports both DATABASE_URL and SQLALCHEMY_DATABASE_URL.
+SQLALCHEMY_DATABASE_URL = (
+    os.getenv("DATABASE_URL")
+    or os.getenv("SQLALCHEMY_DATABASE_URL")
+    or getattr(settings, "SQLALCHEMY_DATABASE_URL", None)
+    or "sqlite:///./sentinel.db"
+)
 
 # connect_args and pooling required by SQLite; not used for PostgreSQL
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
@@ -31,10 +36,11 @@ def ensure_schema_compatibility():
         from app.services.cursor_store import CursorModel  # noqa: F401
     except Exception:
         pass
-    # F-28: Transitioned to Alembic migrations for production PostgreSQL.
-    # However, SQLite (used for tests) requires create_all to initialize memory DBs.
-    if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    # Ensure all tables exist in database
+    try:
         Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass
 
 
 ensure_schema_compatibility()
