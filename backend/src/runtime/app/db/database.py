@@ -34,6 +34,7 @@ def ensure_schema_compatibility():
             audit, telemetry, settings, rule, evidence, financial_reporting
         )
         from app.services.cursor_store import CursorModel  # noqa: F401
+        from app.models import hospital_dimensions, hospital_membership, hospital_processing, work_assignment  # noqa: F401
     except Exception:
         pass
     # Ensure all tables exist in database
@@ -43,7 +44,11 @@ def ensure_schema_compatibility():
         pass
 
 
-ensure_schema_compatibility()
+# Schema changes belong to coordinated forward migrations. Importing the app
+# must not silently change an existing clinic database during development reload.
+if (os.getenv("SENTINEL_ENABLE_LEGACY_SCHEMA_AUTOCREATE") == "1"
+        and os.getenv("SENTINEL_DISABLE_SCHEMA_AUTOCREATE") != "1"):
+    ensure_schema_compatibility()
 
 
 def get_db() -> Generator:

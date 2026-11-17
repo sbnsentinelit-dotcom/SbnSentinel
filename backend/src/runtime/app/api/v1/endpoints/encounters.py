@@ -126,12 +126,17 @@ def get_all_encounters(db: Session = Depends(get_db)):
     """
     Get all clinical patient encounters. Auto-seeds UAE clinic data if empty.
     """
-    encounters = db.query(EncounterModel).all()
+    from app.models.hospital_dimensions import HospitalDepartment
+    from sqlalchemy import or_, select
+    from app.services.hospital_scope_service import hospital_facility_ids
+    legacy_only = or_(EncounterModel.clinic_id.is_(None),
+        EncounterModel.clinic_id.not_in(hospital_facility_ids()))
+    encounters = db.query(EncounterModel).filter(legacy_only).all()
     if not encounters:
         try:
             from app.services.dubai_seed_service import auto_seed_dubai_if_empty
             auto_seed_dubai_if_empty(db)
-            encounters = db.query(EncounterModel).all()
+            encounters = db.query(EncounterModel).filter(legacy_only).all()
         except Exception as e:
             print(f"[ERROR] Auto-seed dubai encounters failed: {e}")
     return encounters

@@ -45,6 +45,8 @@ def get_audit_logs(
     """
     Retrieves a list of recent audit logs. (Read-only access, role-governed)
     """
-    logs = db.query(AuditLogModel).order_by(
+    from sqlalchemy import or_
+    logs = db.query(AuditLogModel).filter(or_(AuditLogModel.module.is_(None),
+        AuditLogModel.module != "Hospital")).order_by(
         AuditLogModel.timestamp.desc()).offset(skip).limit(limit).all()
     return logs

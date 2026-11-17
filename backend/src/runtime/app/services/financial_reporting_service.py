@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import uuid
+from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
@@ -42,6 +43,116 @@ class FinancialReportingService:
     # ─────────────────────────────────────────────────────────────────────────
     # FR01: Daily and Monthly Owner Summary
     # ─────────────────────────────────────────────────────────────────────────
+    def _hospital_predicate(self, scope, period_start, period_end, currency):
+        from app.services.hospital_scope_service import scope_predicate
+        line, claim = FinancialClaimLineModel, FinancialClaimModel
+        return (scope_predicate(scope, line.clinic_id, line.department_id)
+            & (claim.claim_id == line.claim_id) & (claim.clinic_id == scope.clinic_id)
+            & (claim.org_id == scope.org_id) & (claim.currency == currency)
+            & (claim.service_date >= period_start.astimezone(timezone.utc).replace(tzinfo=None))
+            & (claim.service_date < period_end.astimezone(timezone.utc).replace(tzinfo=None))
+            & line.tombstone.is_(False) & claim.tombstone.is_(False))
+
+    def _hospital_rows(self, db, scope, period_start, period_end, currency):
+        from sqlalchemy import select
+        line, claim = FinancialClaimLineModel, FinancialClaimModel
+        query = select(line).join(claim, claim.claim_id == line.claim_id).where(
+            self._hospital_predicate(scope, period_start, period_end, currency)).order_by(line.line_id)
+        for row in db.scalars(query).yield_per(100):
+            yield {"line_id": row.line_id, "department_id": row.department_id,
+                "source_evidence_id": row.source_evidence_id,
+                "billed_amount": format(row.billed_amount, "f") if row.billed_amount is not None else None,
+                "paid_amount": format(row.paid_amount, "f") if row.paid_amount is not None else None,
+                "status": row.line_status}
+
+    def generate_hospital_summary(self, db, scope, period_start, period_end, currency, *, limit=100):
+        """Exact, scoped HSP01 line summary. No inferred balance or cash allocation.
+
+        Kept under the existing calculation owner. A bounded detail page is
+        returned separately from aggregate counts; restricted views never use
+        whole-claim amounts or whole-claim metadata.
+        """
+        from decimal import Decimal
+        from sqlalchemy import select, func
+        from app.services.hospital_scope_service import scope_predicate, require_capability
+        require_capability(scope, "report.read")
+        if (period_start.tzinfo is None or period_end.tzinfo is None or period_end <= period_start
+                or not 1 <= limit <= 500 or len(currency) != 3 or currency != currency.upper()):
+            raise ValueError("Explicit valid period, currency and bounds required")
+        line = FinancialClaimLineModel
+        claim = FinancialClaimModel
+        predicate = self._hospital_predicate(scope, period_start, period_end, currency)
+        aggregate = db.execute(select(func.count(line.line_id), func.count(func.distinct(line.claim_id)),
+            func.sum(line.billed_amount), func.sum(line.paid_amount), func.count(line.paid_amount))
+            .select_from(line).join(claim, claim.claim_id == line.claim_id).where(predicate)).one()
+        rows = db.execute(select(line).join(claim, claim.claim_id == line.claim_id)
+            .where(predicate).order_by(line.line_id).limit(limit + 1)).scalars().all()
+        total, distinct, billed, paid, known = aggregate
+        def amount(value):
+            return format(value, "f") if value is not None else None
+        return {"report_code": "HSP01_LINES_V1", "clinic_id": scope.clinic_id,
+            "scope": scope.model_dump(mode="json"), "currency": currency,
+            "business_timezone": "Asia/Dubai", "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(), "restricted": not scope.full_record,
+            "completeness_status": "PARTIAL", "coverage_exceptions": ["Source feed completeness not established"],
+            "metrics": {"line_count": total, "distinct_claim_count": distinct,
+                "known_billed_amount": amount(billed), "known_paid_amount": amount(paid),
+                "unknown_payment_lines": total - known, "facility_total": None,
+                "receivable": None, "confirmed_cash": None},
+            "rows": [{"line_id": row.line_id, "department_id": row.department_id,
+                "source_evidence_id": row.source_evidence_id,
+                "billed_amount": amount(row.billed_amount), "paid_amount": amount(row.paid_amount),
+                "status": row.line_status} for row in rows[:limit]],
+            "has_more": len(rows) > limit}
+
+    def freeze_hospital_summary(self, db, scope, period_start, period_end, currency):
+        """A bounded immutable snapshot; same inputs/manifest reuse its identity."""
+        import hashlib
+        from sqlalchemy import select
+        from app.models.organization import OrganizationClinicModel
+        from app.models.hospital_processing import HospitalSnapshotPage
+        db.scalars(select(OrganizationClinicModel).where(
+            OrganizationClinicModel.id == scope.clinic_id).with_for_update()).one()
+        payload = self.generate_hospital_summary(db, scope, period_start, period_end, currency, limit=100)
+        digest = hashlib.sha256()
+        for item in self._hospital_rows(db, scope, period_start, period_end, currency):
+            if item["source_evidence_id"] is None:
+                raise ValueError("Snapshot contains unproven source lineage")
+            digest.update((json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n").encode())
+        payload["input_manifest_hash"] = digest.hexdigest()
+        payload["definition_version"] = "1"
+        payload["business_as_of"] = period_end.isoformat()
+        stable = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        run_key = "hospital:" + hashlib.sha256(stable.encode()).hexdigest()
+        old = db.query(ReportSnapshotModel).filter(ReportSnapshotModel.run_key == run_key).first()
+        if old:
+            return old
+        payload["snapshot_id"] = run_key
+        payload["input_manifest_ref"] = "hospital_snapshot_pages:" + run_key
+        payload["knowledge_cutoff"] = datetime.now(timezone.utc).isoformat()
+        db.add(ReportRunModel(run_key=run_key, clinic_id=scope.clinic_id,
+            definition_id="HSP01_LINES_V1", definition_version="1",
+            period_start=period_start.astimezone(timezone.utc).replace(tzinfo=None),
+            period_end=period_end.astimezone(timezone.utc).replace(tzinfo=None),
+            cutoff_time=datetime.now(timezone.utc).replace(tzinfo=None), status="partial"))
+        db.flush()
+        row = ReportSnapshotModel(snapshot_id=run_key, run_key=run_key, clinic_id=scope.clinic_id,
+            report_code="HSP01_LINES_V1", payload_json=json.dumps(payload, sort_keys=True),
+            summary_metrics_json=json.dumps(payload["metrics"]), completeness_status="PARTIAL", revision=1)
+        db.add(row)
+        db.flush()
+        page_rows, page_number = [], 0
+        for item in self._hospital_rows(db, scope, period_start, period_end, currency):
+            page_rows.append(item)
+            if len(page_rows) == 100:
+                page = HospitalSnapshotPage(snapshot_id=run_key, page_number=page_number, rows_json=json.dumps(page_rows))
+                db.add(page); db.flush(); db.expunge(page)
+                page_rows, page_number = [], page_number + 1
+        if page_rows:
+            db.add(HospitalSnapshotPage(snapshot_id=run_key, page_number=page_number, rows_json=json.dumps(page_rows)))
+            db.flush()
+        return row
+
     def generate_owner_summary(
         self,
         clinic_id: str,
@@ -58,11 +169,11 @@ class FinancialReportingService:
                 FinancialClaimModel.service_date <= period_end,
             ).all()
 
-            total_charges = sum(c.billed_amount or 0.0 for c in claims)
+            total_charges = sum(c.billed_amount or Decimal("0") for c in claims)
             submitted_claims = [c for c in claims if c.status in ("submitted", "adjudicated", "paid", "denied")]
-            submitted_amount = sum(c.billed_amount or 0.0 for c in submitted_claims)
-            remittance_paid = sum(c.paid_amount or 0.0 for c in claims if c.paid_amount is not None)
-            patient_share = sum(c.patient_share or 0.0 for c in claims if c.patient_share is not None)
+            submitted_amount = sum(c.billed_amount or Decimal("0") for c in submitted_claims)
+            remittance_paid = sum(c.paid_amount or Decimal("0") for c in claims if c.paid_amount is not None)
+            patient_share = sum(c.patient_share or Decimal("0") for c in claims if c.patient_share is not None)
 
             # Reconciled Receipts
             receipts = session.query(FinancialPaymentReceiptModel).filter(
@@ -82,7 +193,7 @@ class FinancialReportingService:
             total_refunds = sum(a.amount for a in adjustments if a.adjustment_type == "refund")
 
             # Outstanding Balance = Charges - Paid - Adjustments
-            outstanding_balance = max(0.0, total_charges - remittance_paid - total_adjustments)
+            outstanding_balance = max(Decimal("0"), total_charges - remittance_paid - total_adjustments)
 
             completeness = "COMPLETE" if claims or receipts else "EMPTY_PERIOD"
 
@@ -138,18 +249,18 @@ class FinancialReportingService:
                         "payer_id": c.payer_id,
                         "tpa_id": c.tpa_id or "Direct",
                         "claim_count": 0,
-                        "billed_total": 0.0,
-                        "allowed_total": 0.0,
-                        "paid_total": 0.0,
+                        "billed_total": Decimal("0"),
+                        "allowed_total": Decimal("0"),
+                        "paid_total": Decimal("0"),
                         "denied_count": 0,
                         "paid_count": 0,
                         "partial_count": 0,
                     }
                 g = payer_groups[key]
                 g["claim_count"] += 1
-                g["billed_total"] += c.billed_amount or 0.0
-                g["allowed_total"] += c.allowed_amount or 0.0
-                g["paid_total"] += c.paid_amount or 0.0
+                g["billed_total"] += c.billed_amount or Decimal("0")
+                g["allowed_total"] += c.allowed_amount or Decimal("0")
+                g["paid_total"] += c.paid_amount or Decimal("0")
 
                 if c.status == "denied":
                     g["denied_count"] += 1
@@ -209,7 +320,7 @@ class FinancialReportingService:
                     "submission_date": c.submission_date.isoformat() if c.submission_date else None,
                     "adjudication_date": c.adjudication_date.isoformat() if c.adjudication_date else None,
                     "status": c.status,
-                    "billed_amount": round(c.billed_amount or 0.0, 2),
+                    "billed_amount": round(c.billed_amount or Decimal("0"), 2),
                     "allowed_amount": round(c.allowed_amount, 2) if c.allowed_amount is not None else None,
                     "paid_amount": round(c.paid_amount, 2) if c.paid_amount is not None else None,
                     "attempt_count": len(attempts),
@@ -252,10 +363,10 @@ class FinancialReportingService:
 
             rows = []
             for line, claim in lines:
-                allowed = line.allowed_amount or 0.0
-                paid = line.paid_amount or 0.0
-                adjusted = line.adjusted_amount or 0.0
-                supported_balance = max(0.0, (line.billed_amount or 0.0) - paid - adjusted)
+                allowed = line.allowed_amount or Decimal("0")
+                paid = line.paid_amount or Decimal("0")
+                adjusted = line.adjusted_amount or Decimal("0")
+                supported_balance = max(Decimal("0"), (line.billed_amount or Decimal("0")) - paid - adjusted)
 
                 rows.append({
                     "line_id": line.line_id,
@@ -266,7 +377,7 @@ class FinancialReportingService:
                     "units": line.units,
                     "payer_id": claim.payer_id,
                     "service_date": claim.service_date.isoformat(),
-                    "billed_amount": round(line.billed_amount or 0.0, 2),
+                    "billed_amount": round(line.billed_amount or Decimal("0"), 2),
                     "allowed_amount": round(allowed, 2) if line.allowed_amount is not None else None,
                     "paid_amount": round(paid, 2) if line.paid_amount is not None else None,
                     "supported_balance": round(supported_balance, 2),
@@ -322,10 +433,10 @@ class FinancialReportingService:
                         "code": code,
                         "reason": line.denial_reason or "Reason unavailable from payer",
                         "affected_lines_count": 0,
-                        "total_denied_amount": 0.0,
+                        "total_denied_amount": Decimal("0"),
                     }
                 denial_groups[key]["affected_lines_count"] += 1
-                denial_groups[key]["total_denied_amount"] += line.billed_amount or 0.0
+                denial_groups[key]["total_denied_amount"] += line.billed_amount or Decimal("0")
 
             # Technical Rejections (from Submission Attempts)
             attempts = session.query(
@@ -346,10 +457,10 @@ class FinancialReportingService:
                         "code": "TECH_REJECT",
                         "reason": att.rejection_reason or "Technical format validation failure",
                         "affected_lines_count": 0,
-                        "total_denied_amount": 0.0,
+                        "total_denied_amount": Decimal("0"),
                     }
                 denial_groups[key]["affected_lines_count"] += 1
-                denial_groups[key]["total_denied_amount"] += claim.billed_amount or 0.0
+                denial_groups[key]["total_denied_amount"] += claim.billed_amount or Decimal("0")
 
             rows = list(denial_groups.values())
             for r in rows:
@@ -414,7 +525,7 @@ class FinancialReportingService:
                     "remittance_date": rem.remittance_date.isoformat(),
                     "payer_advised_amount": round(rem.total_paid, 2),
                     "received_cash_amount": round(receipt_amount, 2),
-                    "reconciliation_status": "MATCHED" if abs(rem.total_paid - receipt_amount) < 0.01 else "DISCREPANCY",
+                    "reconciliation_status": "MATCHED" if abs(rem.total_paid - receipt_amount) < Decimal("0.01") else "DISCREPANCY",
                     "bank_confirmed": is_bank_confirmed,
                 })
 
@@ -454,18 +565,18 @@ class FinancialReportingService:
             ).all()
 
             buckets = {
-                "0_30_days": {"count": 0, "amount": 0.0},
-                "31_60_days": {"count": 0, "amount": 0.0},
-                "61_90_days": {"count": 0, "amount": 0.0},
-                "91_120_days": {"count": 0, "amount": 0.0},
-                "120_plus_days": {"count": 0, "amount": 0.0},
+                "0_30_days": {"count": 0, "amount": Decimal("0")},
+                "31_60_days": {"count": 0, "amount": Decimal("0")},
+                "61_90_days": {"count": 0, "amount": Decimal("0")},
+                "91_120_days": {"count": 0, "amount": Decimal("0")},
+                "120_plus_days": {"count": 0, "amount": Decimal("0")},
             }
 
             for c in claims:
                 # Age basis: service_date
                 claim_date = c.service_date.replace(tzinfo=timezone.utc) if c.service_date.tzinfo is None else c.service_date
                 age_days = (cutoff - claim_date).days
-                unpaid = max(0.0, (c.billed_amount or 0.0) - (c.paid_amount or 0.0))
+                unpaid = max(Decimal("0"), (c.billed_amount or Decimal("0")) - (c.paid_amount or Decimal("0")))
 
                 if age_days <= 30:
                     b = "0_30_days"
@@ -623,8 +734,10 @@ class FinancialReportingService:
                 run_key=run_key,
                 clinic_id=clinic_id,
                 report_code=report_code,
-                payload_json=json.dumps(payload),
-                summary_metrics_json=json.dumps(payload.get("metrics") or {}),
+                # Preserve the legacy numeric JSON contract. Hospital snapshots
+                # use exact decimal strings in freeze_hospital_summary instead.
+                payload_json=json.dumps(payload, default=float),
+                summary_metrics_json=json.dumps(payload.get("metrics") or {}, default=float),
                 completeness_status=payload.get("completeness_status", "COMPLETE"),
                 revision=revision,
             )

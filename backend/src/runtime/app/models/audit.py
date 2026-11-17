@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, DateTime, event
+from sqlalchemy import Column, String, DateTime, Text, event
 from sqlalchemy.exc import InvalidRequestError
 from datetime import datetime
 from app.db.database import Base
@@ -18,6 +18,11 @@ class AuditLogModel(Base):
     action = Column(String, index=True, nullable=False)
     module = Column(String, nullable=True)
     correlation_id = Column(String, index=True, nullable=True)
+    org_id = Column(String, nullable=True, index=True)
+    clinic_id = Column(String, nullable=True, index=True)
+    entity_ref = Column(String, nullable=True)
+    reason = Column(Text, nullable=True)
+    details_json = Column(Text, nullable=True)
 
 
 @event.listens_for(AuditLogModel, 'before_update')

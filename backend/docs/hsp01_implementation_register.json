@@ -1,0 +1,199 @@
+{
+  "module": "HSP01",
+  "branch": "feature/hsp01-hospital-extension",
+  "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f",
+  "implementation_owner": "new developer",
+  "migration_coordinator": "New developer, delegated by user",
+  "shared_edit_authorization": "User authorized required shared changes despite unknown active branches; later conflicts require reconciliation.",
+  "existing_database": "DO NOT ACCESS OR MIGRATE",
+  "shared_files": [
+    {
+      "path": "src/runtime/app/integrations/core/source_contracts.py",
+      "purpose": "Hospital DTO extensions",
+      "dependency": "H02-H05",
+      "acceptance": "scope and source contract tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/integrations/core/registry.py",
+      "purpose": "Exact hospital adapter factory registration",
+      "dependency": "H04",
+      "acceptance": "adapter contract tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/services/ingress_service.py",
+      "purpose": "Existing intake hospital extension",
+      "dependency": "D01-D04",
+      "acceptance": "identity/replay/checkpoint tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/financial_reporting.py",
+      "purpose": "Exact money and source dimensions",
+      "dependency": "H05",
+      "acceptance": "projection and reconciliation tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/event.py",
+      "purpose": "Existing queue durable hospital projection delivery",
+      "dependency": "D04/H08",
+      "acceptance": "recovery/concurrent lease tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/encounter.py",
+      "purpose": "Nullable hospital dimensions",
+      "dependency": "H01",
+      "acceptance": "existing-clinic compatibility",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/db/database.py",
+      "purpose": "Metadata registration and explicit schema-autocreate opt-out",
+      "dependency": "migration/testing",
+      "acceptance": "isolated imports",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "alembic/env.py",
+      "purpose": "HSP01 metadata registration",
+      "dependency": "forward migration",
+      "acceptance": "fresh/upgrade tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/api.py",
+      "purpose": "Mount authenticated hospital routes",
+      "dependency": "H02/H07",
+      "acceptance": "route access tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/services/financial_reporting_service.py",
+      "purpose": "Scoped exact hospital report method in existing calculation owner",
+      "dependency": "H05/H07",
+      "acceptance": "snapshot/CSV reconciliation",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "frontend/src/app/dashboard/page.tsx",
+      "purpose": "Mount isolated hospital workspace",
+      "dependency": "H07",
+      "acceptance": "frontend integration",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/deps.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/audit.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/auth.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/clinics.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/encounters.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/reality_connectors.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/signals.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/audit.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/evidence.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/schemas/user.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/services/processing_orchestrator.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    }
+  ],
+  "release_status": "NOT COMPLETE: implemented components; mandatory integrated acceptance gates remain blocked",
+  "migration_parent": "g8_financial_reporting",
+  "declared_migration_head": "hsp01_hospital_extension",
+  "external_in_progress_work": "Unknown; user explicitly authorized shared edits and later conflict reconciliation",
+  "existing_database_accessed_by_agent": false,
+  "pending": [
+    "Approved governed billing evidence/context/policy/rule/review/outcome integration (HSP01 D06-D08; HSP02 R04-R08)",
+    "Full FR01-FR08 hospital reporting and schedules (HSP01 D09; HSP02 R09)",
+    "Full combined governed-path restart and commit-to-UI latency gates; disposable PostgreSQL fresh/legacy upgrade, concurrency and backup/restore verified",
+    "Real vendor/profile/hosting confirmation and hospital reconciliation",
+    "Reviewed reconciliation for ambiguous legacy identity, receipt corrections and mapping reprocessing"
+  ]
+}

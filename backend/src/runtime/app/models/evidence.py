@@ -50,7 +50,7 @@ class IngestionLedgerModel(Base):
     external_record_id = Column(String, nullable=False)
     source_version = Column(String, nullable=False)
     status = Column(String, default="COMMITTED", nullable=False)  # STAGED, COMMITTED, PUBLISHED, TOMBSTONED
-    evidence_id = Column(String, nullable=True)
+    evidence_id = Column(String, nullable=True, index=True)
     payload_hash = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     effective_at = Column(DateTime, nullable=True)

@@ -1,0 +1,24 @@
+{
+  "profile": {
+    "revision": "synthetic-example-v1",
+    "org_id": "REPLACE_WITH_CANONICAL_ORGANIZATION_ID",
+    "clinic_id": "REPLACE_WITH_ORG_CLINICS_ID",
+    "connector_id": "REPLACE_WITH_STABLE_CONNECTOR_INSTANCE_ID",
+    "base_url": "https://reviewed-source.invalid",
+    "endpoints": {"Claim": "/reviewed/claims", "ClaimLine": "/reviewed/claim-lines"},
+    "mapping_id": "synthetic.hospital.status",
+    "mapping_version": "1",
+    "status_map": {"Claim": {"SYNTHETIC_SUBMITTED": "submitted"}, "ClaimLine": {"SYNTHETIC_DENIED": "denied"}},
+    "department_map": {"REVIEWED_SOURCE_DEPARTMENT_CODE": "REPLACE_WITH_CANONICAL_DEPARTMENT_ID"},
+    "department_ids_are_canonical": false,
+    "max_rows": 500,
+    "max_bytes": 2097152,
+    "max_pages_per_run": 1000,
+    "cohort_hash": "REPLACE_WITH_REVIEWED_EXTRACTION_COHORT_HASH",
+    "business_timezone": "Asia/Dubai"
+  },
+  "secret_ref": "env://HOSPITAL_SOURCE_TOKEN",
+  "auth_header": "Authorization",
+  "auth_prefix": "Bearer ",
+  "reason": "TEMPLATE ONLY: replace synthetic endpoints, authentication and mappings after actual source review"
+}

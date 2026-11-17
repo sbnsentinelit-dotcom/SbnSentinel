@@ -13,6 +13,8 @@ runtime_dir = os.path.abspath(os.path.join(current_dir, "../src/runtime"))
 if runtime_dir not in sys.path:
     sys.path.insert(0, runtime_dir)
 
+# Migration imports must never create schema outside Alembic transactions.
+os.environ["SENTINEL_DISABLE_SCHEMA_AUTOCREATE"] = "1"
 from app.db.database import Base, SQLALCHEMY_DATABASE_URL
 from app.models import (  # noqa: F401
     event, signal, user, otp, governance_storage, intelligence,
@@ -20,6 +22,7 @@ from app.models import (  # noqa: F401
     audit, telemetry, settings, rule, evidence
 )
 from app.services.cursor_store import CursorModel  # noqa: F401
+from app.models import financial_reporting, hospital_dimensions, hospital_membership, hospital_processing, work_assignment  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

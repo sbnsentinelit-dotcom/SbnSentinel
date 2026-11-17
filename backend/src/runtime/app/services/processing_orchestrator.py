@@ -905,7 +905,8 @@ class ProcessingOrchestrator:
         """
         db = SessionLocal()
         try:
-            query = db.query(OperationalEventModel).order_by(
+            query = db.query(OperationalEventModel).filter(
+                OperationalEventModel.workflow_key.is_(None)).order_by(
                 OperationalEventModel.received_at.desc())
             if state:
                 query = query.filter(OperationalEventModel.state == state)
