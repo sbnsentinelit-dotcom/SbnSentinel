@@ -10,6 +10,13 @@ jobs:
   backend-quality:
     name: Backend Quality Assurance
     runs-on: ubuntu-latest
+    env:
+      # The runner context is not available in job-level env; use a fixed
+      # disposable path on the Ubuntu runner instead.
+      DATABASE_URL: sqlite:////tmp/hsp01_backend_quality.db
+      SQLALCHEMY_DATABASE_URL: sqlite:////tmp/hsp01_backend_quality.db
+      SENTINEL_DISABLE_SCHEMA_AUTOCREATE: "1"
+      SECRET_KEY: "test-secret-key-for-ci"
     
     defaults:
       run:
@@ -30,9 +37,18 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
 
+    - name: Migrate disposable quality database before application imports
+      run: python -B -m alembic upgrade head
+
     - name: SES-011 Linting (Flake8)
       run: |
         flake8 src/runtime/app/ tests/
+
+    - name: HSP01 isolated hospital regression suites
+      env:
+        SENTINEL_DISABLE_SCHEMA_AUTOCREATE: "1"
+      run: |
+        python -B -m pytest --noconftest -p no:cacheprovider tests/integration/test_hospital_directory.py tests/integration/test_hospital_source_contract.py tests/integration/test_hsp01_encounter_merge.py -v
 
     - name: SES-011 Unit Testing (Pytest)
       env:
@@ -101,6 +117,41 @@ jobs:
         PYTHONPATH: "src/runtime"
       run: |
         pytest tests/integration/test_round2_acceptance.py -v
+
+  hospital-postgresql:
+    name: HSP01 disposable PostgreSQL migration and recovery
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: hsp01_test
+          POSTGRES_PASSWORD: synthetic-ci-only
+          POSTGRES_DB: hsp01_ci
+        ports: ["55439:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hsp01_test -d hsp01_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: ./backend
+    env:
+      DATABASE_URL: postgresql+psycopg2://hsp01_test:synthetic-ci-only@127.0.0.1:55439/hsp01_ci
+      SQLALCHEMY_DATABASE_URL: postgresql+psycopg2://hsp01_test:synthetic-ci-only@127.0.0.1:55439/hsp01_ci
+      HSP01_TEST_DATABASE_URL: postgresql+psycopg2://hsp01_test:synthetic-ci-only@127.0.0.1:55439/hsp01_ci
+      DEPLOYMENT_REGION: UAE
+      CLINIC_TIMEZONE: Asia/Dubai
+      SENTINEL_DISABLE_SCHEMA_AUTOCREATE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Fresh forward migrations
+        run: python -B -m alembic upgrade head
+      - name: Hospital concurrency, authority recovery and regressions
+        run: python -B -m pytest --noconftest -p no:cacheprovider tests/integration/test_hospital_source_contract.py -v
 
   frontend-quality:
     name: Frontend Quality Assurance

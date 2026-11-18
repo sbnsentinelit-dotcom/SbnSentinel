@@ -14,6 +14,8 @@ from app.integrations.core.source_authority import (
 from app.integrations.core.mapping_registry import mapping_registry
 from app.services.cursor_store import cursor_store
 
+from app.integrations.hospital_read.intake import HospitalIntakeMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,13 +90,14 @@ class IngressBatchResult(dict):
     Dual sync/async compatible dictionary result.
     Can be used directly as a dict or awaited in async contexts.
     """
+
     def __await__(self):
         async def _coro():
             return self
         return _coro().__await__()
 
 
-class CanonicalIngressService:
+class CanonicalIngressService(HospitalIntakeMixin):
     """
     G5 Replay-Safe Ingestion Service with Durable Ingestion Ledger.
     Sequence:

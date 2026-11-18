@@ -150,6 +150,6 @@ def get_all_uae_patients(
         total_pages = max(1, math.ceil(total_count / p_size))
         response.headers["X-Total-Pages"] = str(total_pages)
         start = (page - 1) * p_size
-        return patients[start : start + p_size]
+        return patients[start:start + p_size]
 
     return patients

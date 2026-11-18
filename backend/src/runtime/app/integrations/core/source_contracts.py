@@ -1,7 +1,24 @@
 from datetime import datetime
 from typing import Optional, Union, Any
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
+
+
+class VerifiedHospitalScope(BaseModel):
+    """Server result only. Browser selections can narrow but never grant access."""
+    model_config = {"frozen": True}
+    org_id: str
+    clinic_id: str
+    allowed_department_ids: frozenset[str]
+    all_departments: bool = False
+    capabilities: frozenset[str]
+    grant_revision: int
+    allow_unattributed: bool = False
+    full_record: bool = False
+
+    @field_serializer("allowed_department_ids", "capabilities")
+    def serialize_sets(self, value):
+        return sorted(value)
 
 
 class EncounterSemanticStatus(str, Enum):
@@ -50,6 +67,18 @@ class SourceObservation(BaseModel):
     imported_at: datetime = Field(default_factory=datetime.utcnow)
     raw_status_code: Optional[str] = None
     payload_ref: str  # secured pointer, not raw PHI in logs
+    org_id: Optional[str] = None
+    clinic_id: Optional[str] = None
+    entity_key: Optional[str] = None
+    identity_scheme: Optional[str] = None
+    parent_identity: Optional[str] = None
+    source_digest: Optional[str] = None
+    mapping_id: Optional[str] = None
+    mapping_version: Optional[str] = None
+    extraction_profile_revision: Optional[str] = None
+    source_time: Optional[datetime] = None
+    effective_at: Optional[datetime] = None
+    quality_state: Optional[str] = None
 
     @property
     def namespaced_id(self) -> str:

@@ -17,7 +17,15 @@ def get_historical_signals(db: Session = Depends(get_db),
                            current_user=Depends(RoleChecker([UserRole.CLINIC_MANAGER.value,
                                                              UserRole.ORGANIZATION_ADMINISTRATOR.value,
                                                              UserRole.SYSTEM_ADMINISTRATOR.value]))):
-    signals = db.query(SignalModel).order_by(SignalModel.timestamp.desc()).limit(100).all()
+    from sqlalchemy import or_
+    from app.services.hospital_scope_service import hospital_facility_ids
+    query = db.query(SignalModel).filter(or_(SignalModel.clinic_id.is_(None),
+                                             SignalModel.clinic_id.not_in(hospital_facility_ids())))
+    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
+        query = query.filter(SignalModel.org_id == current_user.org_id)
+        if current_user.clinic_id:
+            query = query.filter(SignalModel.clinic_id == current_user.clinic_id)
+    signals = query.order_by(SignalModel.timestamp.desc()).limit(100).all()
     result = []
     for s in signals:
         result.append({

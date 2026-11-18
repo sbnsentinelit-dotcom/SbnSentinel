@@ -4,7 +4,7 @@ Event ORM Model — The central state record for every event in the pipeline.
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Integer, JSON, Float, Text
+from sqlalchemy import Column, String, DateTime, Integer, JSON, Float, Text, Index
 from sqlalchemy.orm import relationship
 from app.models.signal import Base
 
@@ -15,6 +15,7 @@ class OperationalEventModel(Base):
     Domain 2 - Operational Events
     """
     __tablename__ = "pipeline_events"
+    __table_args__ = (Index("ix_hsp01_queue_due", "workflow_key", "state", "next_attempt_at", "lease_until"),)
 
     # --- Identity ---
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -78,6 +79,20 @@ class OperationalEventModel(Base):
 
     # --- Ownership ---
     initiated_by = Column(String, default="system")    # user email or "system"
+    # Nullable additions preserve legacy event callers. Hospital work is claimed
+    # only through the bounded durable worker, never BackgroundTasks.
+    delivery_key = Column(String, nullable=True, unique=True)
+    ledger_id = Column(String, nullable=True, index=True)
+    workflow_key = Column(String, nullable=True, index=True)
+    consumer_version = Column(String, nullable=True)
+    org_id = Column(String, nullable=True)
+    clinic_id = Column(String, nullable=True, index=True)
+    lease_owner = Column(String, nullable=True)
+    lease_until = Column(DateTime(timezone=True), nullable=True)
+    lease_generation = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    row_version = Column(Integer, nullable=False, default=0)
+    resume_from_revision = Column(Integer, nullable=True)
 
     def total_duration_ms(self) -> float:
         """Total processing time from received to completed."""

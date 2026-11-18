@@ -1,0 +1,402 @@
+{
+  "module": "HSP01",
+  "branch": "feature/hsp01-hospital-extension",
+  "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f",
+  "implementation_owner": "new developer",
+  "migration_coordinator": "New developer, delegated by user",
+  "shared_edit_authorization": "User authorized required shared changes despite unknown active branches; later conflicts require reconciliation.",
+  "existing_database": "DO NOT ACCESS OR MIGRATE",
+  "shared_files": [
+    {
+      "path": "src/runtime/app/integrations/core/source_contracts.py",
+      "purpose": "Hospital DTO extensions",
+      "dependency": "H02-H05",
+      "acceptance": "scope and source contract tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/integrations/core/registry.py",
+      "purpose": "Exact hospital adapter factory registration",
+      "dependency": "H04",
+      "acceptance": "adapter contract tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/services/ingress_service.py",
+      "purpose": "Existing intake hospital extension",
+      "dependency": "D01-D04",
+      "acceptance": "identity/replay/checkpoint tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/financial_reporting.py",
+      "purpose": "Exact money and source dimensions",
+      "dependency": "H05",
+      "acceptance": "projection and reconciliation tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/event.py",
+      "purpose": "Existing queue durable hospital projection delivery",
+      "dependency": "D04/H08",
+      "acceptance": "recovery/concurrent lease tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/encounter.py",
+      "purpose": "Nullable hospital dimensions",
+      "dependency": "H01",
+      "acceptance": "existing-clinic compatibility",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/db/database.py",
+      "purpose": "Metadata registration and explicit schema-autocreate opt-out",
+      "dependency": "migration/testing",
+      "acceptance": "isolated imports",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "alembic/env.py",
+      "purpose": "HSP01 metadata registration",
+      "dependency": "forward migration",
+      "acceptance": "fresh/upgrade tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/api.py",
+      "purpose": "Mount authenticated hospital routes",
+      "dependency": "H02/H07",
+      "acceptance": "route access tests",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/services/financial_reporting_service.py",
+      "purpose": "Scoped exact hospital report method in existing calculation owner",
+      "dependency": "H05/H07",
+      "acceptance": "snapshot/CSV reconciliation",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "frontend/src/app/dashboard/page.tsx",
+      "purpose": "Mount isolated hospital workspace",
+      "dependency": "H07",
+      "acceptance": "frontend integration",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/deps.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/audit.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/auth.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/clinics.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/encounters.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/reality_connectors.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/api/v1/endpoints/signals.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/audit.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/models/evidence.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/schemas/user.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    },
+    {
+      "path": "src/runtime/app/services/processing_orchestrator.py",
+      "purpose": "Required HSP01 scoped integration",
+      "dependency": "HSP01",
+      "acceptance": "See isolated verification and blocked gate register",
+      "owner": "New developer (user-authorized branch edits)",
+      "base_commit": "17d18581998b28c8f187b1b4860c3e9fdc22155f"
+    }
+  ],
+  "release_status": "NOT COMPLETE: implemented components; mandatory integrated acceptance gates remain blocked",
+  "migration_parent": "g8_financial_reporting",
+  "declared_migration_head": "hsp01_schema_completion",
+  "external_in_progress_work": "Unknown; user explicitly authorized shared edits and later conflict reconciliation",
+  "existing_database_accessed_by_agent": false,
+  "pending": [
+    "Approved governed billing evidence/context/policy/rule/review/outcome integration (HSP01 D06-D08; HSP02 R04-R08)",
+    "Full FR01-FR08 hospital reporting and schedules (HSP01 D09; HSP02 R09)",
+    "Full combined governed-path restart and commit-to-UI latency gates; disposable PostgreSQL fresh/legacy upgrade, concurrency and backup/restore verified",
+    "Real vendor/profile/hosting confirmation and hospital reconciliation",
+    "Reviewed reconciliation for ambiguous legacy identity, receipt corrections and mapping reprocessing"
+  ],
+  "auditor_corrections": {
+    "owner": "New developer",
+    "reviewed_commit": "d4bb1739ca2328bd31379f47c0b7c4b978160465",
+    "latest_main_adopted": "c27b257c7545864934a3779cac1c0ebebd19d790",
+    "local_integration_commit": "56084f8d471feefa631ccefe370a8c8513f8e425",
+    "migration_coordinator": "New developer, delegated by user",
+    "migration_parent": "hsp01_hospital_extension",
+    "correction_status": "Published a9ee9895 reviewed: six original findings corrected for reviewed scenarios, two partially corrected; current follow-up tracked separately",
+    "evidence_map": "hsp01_auditor_corrections.txt",
+    "existing_database_accessed": false,
+    "hsp02_stash_sha": "99e0c896e12925e1e7453e3a2c93716e567e048e",
+    "correction_commit_created": true,
+    "push_performed": true,
+    "correction_commit_sha": "a9ee9895021186163f95006a42a51418265f9d87"
+  },
+  "main_integration": {
+    "owner": "New developer",
+    "base_commit": "a9ee9895021186163f95006a42a51418265f9d87",
+    "target_main_commit": "70503767215582d14431f7289d0bcebd503d17c9",
+    "state": "MERGED_AND_PUSHED",
+    "affected_files": [
+      "src/runtime/app/api/v1/endpoints/encounters.py",
+      "tests/integration/test_hsp01_encounter_merge.py"
+    ],
+    "dependency": "Main pagination/filtering plus HSP01 hospital classification and legacy guard",
+    "acceptance": "Rows, summary, count headers and fallback retain hospital exclusion and selected filters; no fabricated monetary fallback",
+    "authorization": "User approved no-commit integration, conflict resolution and isolated tests; no existing DB, push or stash deletion",
+    "approved_cleanup_files": [
+      "src/runtime/app/api/v1/endpoints/billing.py",
+      "src/runtime/app/api/v1/endpoints/financial_reports.py",
+      "src/runtime/app/api/v1/endpoints/patients.py",
+      "frontend/src/components/CommandCenter/SettingsView.tsx"
+    ],
+    "cleanup_scope": "User explicitly approved unused import/spacing/trailing whitespace only; no behavior or UI design change",
+    "verification": {
+      "new_encounter_cases": 9,
+      "isolated_suites": "3 passed in 15.28 seconds: Encounter merge, hospital directory and hospital source contract",
+      "backend_flake8": "PASS after explicitly approved narrow cleanups",
+      "diff_check": "PASS for index and working tree",
+      "frontend_full_ci": "NOT RUN; dependency advisory gate unresolved",
+      "postgres_for_this_merge": "NOT RUN; no new schema or concurrency change in this merge resolution"
+    },
+    "head_unchanged": "a9ee9895021186163f95006a42a51418265f9d87",
+    "merge_head": "70503767215582d14431f7289d0bcebd503d17c9",
+    "commit_created": true,
+    "push_performed": true,
+    "existing_application_database_accessed": false,
+    "hsp02_stashes_retained": [
+      "3d44cdc5447f27eef9e8a338e2e92aa5b98bb172",
+      "99e0c896e12925e1e7453e3a2c93716e567e048e"
+    ],
+    "remaining_auditor_items": [
+      "picomatch GHSA-fc5q-39xc-vjpf: closed - advisory withdrawn by GitHub on 2026-11-18; F-33 gate passes",
+      "BootScreen tests fail because main fc8ba599 ignores readiness failure; existing developer / shared frontend owner"
+    ],
+    "merge_commit_sha": "f58c08e7549065de72aac2a4bfb1992ab33ee06f"
+  },
+  "auditor_followup": {
+    "owner": "New developer",
+    "base_commit": "a9ee9895021186163f95006a42a51418265f9d87",
+    "integrated_main": "70503767215582d14431f7289d0bcebd503d17c9",
+    "files": [
+      "api/v1/endpoints/hospital.py",
+      "services/hospital_worker.py",
+      "services/financial_reporting_service.py",
+      ".github/workflows/quality_gate.yml",
+      "tests/integration/test_hospital_source_contract.py",
+      "frontend/src/components/hospital/DepartmentSummary.tsx",
+      "frontend/src/components/hospital/HospitalWorkspace.test.tsx",
+      "docs/hsp01_auditor_followup_reconciliation.txt"
+    ],
+    "authorization": "User requested urgent remaining auditor fixes; no new migration/security exception/commit/push/application DB access",
+    "dependencies": "Existing attribution columns, effective department versions, protected recovery and append-only source evidence",
+    "status": "FUNCTIONAL_FIXES_LOCALLY_VERIFIED_RELEASE_BLOCKED",
+    "frontend_dependency": "Owner approval unavailable; evidence only; keep release gate active",
+    "jobs_api": "row_version supplied; stale refresh and accepted retry tested; original identity/effect retained",
+    "historical_binding": "Explicit reconciliation-required HTTP 409; no inferred or rewritten historical bindings",
+    "historical_attribution": "Current report rows/metrics/export exclude unvalidated historical department assignments; unresolved count and coverage warning; frozen snapshots preserved; definition version 2",
+    "migration": "No new migration; existing correction upgrade tested on synthetic earlier-build records in disposable schemas; application DB not accessed",
+    "ci_bootstrap": "Job-scoped disposable DB URL shared by Alembic and tests; local upgrade + 3 backend unit tests passed",
+    "verification": {
+      "sqlite_suites": "3 isolated suite wrappers pass",
+      "postgres": "47 cases: 46 passed, optional load case skipped",
+      "hospital_ui": "10 tests passed; TypeScript passed",
+      "frontend_lint": "PASS",
+      "frontend_full_node22": "105 passed, 2 startup-screen failures, 10 skipped (run before new attribution UI case; targeted hospital rerun 10 passed)",
+      "frontend_build": "Compile and TypeScript pass; standalone packaging blocked by Windows EPERM; full build NOT PASS"
+    },
+    "release_blockers": [
+      "PR CI backend Flake8: 8 findings from main af0496b8 (merged into the CI merge ref); fix on main",
+      "BootScreen fail-open from main fc8ba599 (2 frontend tests); fix on main"
+    ],
+    "owners": {
+      "functional_corrections": "New developer",
+      "migration_coordination": "New developer; no new migration needed for runtime protection",
+      "dependency_disposition": "Authorized security/release owner; approval unavailable",
+      "startup_screen": "Existing shared frontend owner; individual name not confirmed"
+    },
+    "published_pr_head": "f58c08e7549065de72aac2a4bfb1992ab33ee06f",
+    "local_merge_head": "70503767215582d14431f7289d0bcebd503d17c9",
+    "followup_commit_created": true,
+    "followup_pushed": true,
+    "existing_database_accessed": false,
+    "hsp02_stashes_retained": [
+      "3d44cdc5447f27eef9e8a338e2e92aa5b98bb172",
+      "99e0c896e12925e1e7453e3a2c93716e567e048e"
+    ],
+    "followup_commit_sha": "f58c08e7549065de72aac2a4bfb1992ab33ee06f",
+    "ci_status_note": "f58c08e7 workflow was invalid (runner context in job-level env), so no CI job ran; fixed in 70b84838122bacf5eb54fda6cebcafb4c37e70a2; see qa_review_corrections.ci_evidence"
+  },
+  "qa_review_corrections": {
+    "owner": "New developer (user); QA review fixes prepared by QA reviewer and committed by the user",
+    "base_commit": "f58c08e7549065de72aac2a4bfb1992ab33ee06f",
+    "commits": [
+      {
+        "sha": "15f8bf7179259ba6038beae7fa4f8e7a806dc908",
+        "items": [
+          "Fresh install by Alembic only missed decision-context tables; every event failed at L4 (no such table: dce_context_evidence)",
+          "hospital_legacy_guard read actor.org_id directly; principals without org_id raised 500 (broke 2 existing D4/D5 tests)",
+          "test_at28 allowed-heads list did not include HSP01 migration heads"
+        ],
+        "files": [
+          "alembic/versions/hsp01_schema_completion.py",
+          "alembic/env.py",
+          "src/runtime/app/services/hospital_legacy_guard.py",
+          "tests/integration/test_round2_acceptance.py"
+        ]
+      },
+      {
+        "sha": "70b84838122bacf5eb54fda6cebcafb4c37e70a2",
+        "items": [
+          "quality_gate.yml used ${{ runner.temp }} in job-level env (not allowed); workflow was invalid and started no jobs"
+        ],
+        "files": [
+          ".github/workflows/quality_gate.yml"
+        ]
+      }
+    ],
+    "pending_combined_commit": {
+      "content": [
+        "Latest main af0496b8 NOT merged: it removes human-decision scope enforcement in decisions.py and adds 8 Flake8 errors; correct on main first (see hsp01_correction_matrix.md)",
+        "CI isolated step also runs tests/integration/test_hsp01_encounter_merge.py",
+        "This register, the correction matrix and the picomatch disposition draft"
+      ],
+      "status": "Prepared locally; to be committed and pushed by the user"
+    },
+    "migration": {
+      "sequence": "g8_financial_reporting -> hsp01_hospital_extension -> hsp01_auditor_corrections -> hsp01_schema_completion",
+      "fresh_install": "alembic upgrade head creates 70 tables; a real EHR event reaches Completed (previously Failed at L4)",
+      "upgrade_from_hsp01_auditor_corrections": "Passes; adds 6 dce_context_* tables and decision_records",
+      "upgrade_where_tables_already_exist": "Passes (checkfirst); legacy create_all databases keep their rows",
+      "not_added": "Model modules no runtime code imports (governance, collaboration, explainability, evidence evaluation, recommendation generation, integration)",
+      "downgrade": "Refused: governed decision context and decision history must be preserved"
+    },
+    "ci_evidence": {
+      "run": "https://github.com/sbnsentinelit-dotcom/SbnSentinel/actions/runs/44361895942",
+      "commit": "0ce8d282ecce678ed378f60ab0973252fb6ef257 (pull_request CI runs on refs/pull/1/merge = PR + current main af0496b8)",
+      "hsp01_postgresql_job": "PASS: fresh forward migrations; hospital concurrency, authority recovery and regressions",
+      "backend_quality_job": "FAIL at Flake8: 8 findings, all in main-owned files from af0496b8 (api/deps.py 106/108/110; api/v1/endpoints/decisions.py 11/62/63/65/125). PR head alone: 0 findings",
+      "frontend_quality_job": "Dependency gate PASS (GHSA-fc5q-39xc-vjpf withdrawn 2026-11-18 15:38 UTC). Run Tests FAIL: BootScreen T03/T05 and T06 because main fc8ba599 ignores readiness failure; 106 passed, 10 skipped; hospital tests 10/10",
+      "earlier_run": "44349431745 on 8d5fee00 (same code as 70b84838): PostgreSQL PASS, Flake8 FAIL (same 8 findings)"
+    },
+    "local_verification_combined_with_latest_main": {
+      "code": "HSP01 branch + af0496b899606261987f59fcaaa0882a6233723e (merge-tree, no conflict)",
+      "frontend": "tsc 0 errors; hospital eslint 0 errors; vitest 106 passed, 2 failed (existing BootScreen tests), 10 skipped",
+      "backend": "Combined with af0496b8: HSP01 suites 3/3, unit 3/3, full 140/143 (2 extra failures also fail on main af0496b8), Flake8 8 errors from af0496b8"
+    },
+    "remaining_dependencies": [
+      {
+        "item": "af0496b8 on main: decision and signal scope bypass (decisions.py, api/deps.py); source of the 8 Flake8 findings in PR CI",
+        "owner": "Existing developer"
+      },
+      {
+        "item": "Backend Flake8 failure in Linux CI (inherited from main)",
+        "owner": "New developer with existing developer for main files"
+      },
+      {
+        "item": "picomatch GHSA-fc5q-39xc-vjpf: closed (advisory withdrawn by GitHub; F-33 gate passes)",
+        "owner": "None; re-check at each release"
+      },
+      {
+        "item": "BootScreen fail-open on readiness failure (main fc8ba599); 2 frontend tests",
+        "owner": "Existing developer / shared frontend owner"
+      },
+      {
+        "item": "test_a026b_practice_fusion_readiness (fails on main too)",
+        "owner": "Existing developer"
+      },
+      {
+        "item": "Governed billing evidence/context/policy/rule/review/outcome; FR01-FR08 schedules; legacy reconciliation; T01-T12 acceptance",
+        "owner": "HSP02 workstream"
+      },
+      {
+        "item": "Private RSA key committed in quality_gate.yml (QA report BUG-054)",
+        "owner": "Security owner; move to CI secrets and rotate"
+      }
+    ],
+    "local_verification_pr_head": {
+      "backend": "HSP01 suites 3/3; full 142/143 (test_a026b also fails on main); flake8 0 issues locally",
+      "frontend": "vitest 106 passed, 2 BootScreen failures (also on main), 10 skipped; tsc 0 errors"
+    },
+    "evidence_map": "hsp01_correction_matrix.md; hsp01_picomatch_disposition_draft.md"
+  }
+}

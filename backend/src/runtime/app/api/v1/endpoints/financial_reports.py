@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query, Response
 from typing import Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db

@@ -281,8 +281,23 @@ def accept_invite(payload: ResetPasswordRequest, db: Session = Depends(get_db), 
 
 
 @router.get("/me", response_model=UserResponse)
-def read_user_me(current_user: User = Depends(get_current_user)):
+def read_user_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Returns the secure profile of the currently authenticated user.
     """
-    return current_user
+    from app.models.hospital_membership import HospitalMembership
+    from app.services.hospital_scope_service import resolve_hospital_scope, HospitalAccessDenied
+    result = UserResponse.model_validate(current_user).model_dump()
+    grants = db.query(HospitalMembership).filter(
+        HospitalMembership.actor_id == current_user.id,
+        HospitalMembership.is_active.is_(True)).limit(101).all()
+    if len(grants) > 100:
+        raise HTTPException(status_code=422, detail="Hospital grants require directory pagination")
+    scopes = []
+    for grant in grants:
+        try:
+            scopes.append(resolve_hospital_scope(db, current_user, {"clinic_id": grant.clinic_id}).model_dump(mode="json"))
+        except HospitalAccessDenied:
+            continue
+    result["hospital_scopes"] = scopes
+    return result

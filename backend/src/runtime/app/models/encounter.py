@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float
+from sqlalchemy import Column, String, Float, ForeignKey
 from app.db.database import Base
 
 
@@ -18,6 +18,10 @@ class EncounterModel(Base):
     priority = Column(String, default="Normal")  # High, Normal, Urgent
     wait_time = Column(String, nullable=True)
     department = Column(String, nullable=True)
+    department_id = Column(String, ForeignKey("hospital_departments.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("hospital_locations.id"), nullable=True)
+    encounter_class = Column(String, nullable=True)
+    attribution_basis = Column(String, nullable=True)
     avatar = Column(String, nullable=True)
     clinical_notes = Column(String, nullable=True)
     medications = Column(String, nullable=True)

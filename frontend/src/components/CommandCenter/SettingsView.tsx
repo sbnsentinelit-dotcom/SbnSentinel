@@ -1,8 +1,8 @@
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
 import React, { useState, useEffect } from 'react';
-import { 
-  User, Bell, Shield, Database, BrainCircuit, CreditCard, Users, 
-  Settings as SettingsIcon, Save, Building, Clock, Lock, Plus, X, 
+import {
+  User, Bell, Shield, Database, BrainCircuit, CreditCard, Users,
+  Settings as SettingsIcon, Save, Building, Clock, Lock, Plus, X,
   Check, HelpCircle, AlertCircle, Download, Activity, Globe, Sparkles,
   Phone, CheckCircle2, Key, Info, ShieldAlert, ShieldCheck, Building2
 } from 'lucide-react';
@@ -100,7 +100,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [uaeEndpoint, setUaeEndpoint] = useState('https://services.dhpo.eclaimlink.ae/api/v1');
   const [uaeApiKey, setUaeApiKey] = useState('dha_live_sec_99420x_dxb');
   const [uaePayerNetwork, setUaePayerNetwork] = useState('Daman (National Health Insurance)');
-  
+
   const [usPlatform, setUsPlatform] = useState('Practice Fusion EHR');
   const [usEndpoint, setUsEndpoint] = useState('https://api.patientfusion.com/fhir/r4');
   const [usClientId, setUsClientId] = useState('');
@@ -189,7 +189,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
         const data = await res.json();
         setIntegrationsList(data);
       }
-      
+
       // Fetch Clinics
       const clinicsRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/clinics`);
       if (clinicsRes.ok) {
@@ -320,7 +320,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
       });
       if (res.ok) {
         const updated = await res.json();
-        setIntegrationsList(prev => prev.map(integration => 
+        setIntegrationsList(prev => prev.map(integration =>
           integration.id === id ? { ...integration, connected: updated.connected, lastSync: updated.lastSync } : integration
         ));
         showToast(`Integration ${updated.connected ? 'connected successfully!' : 'disconnected.'}`);
@@ -406,7 +406,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
       showToast(`Already on ${plan.name} plan`);
       return;
     }
-    
+
     setIsProcessingPayment(true);
     showToast(`Activating ${plan.name} in clinic database...`);
     try {
@@ -470,7 +470,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
                 <h3 className="text-xl font-bold text-white mb-1">Clinics & Facilities</h3>
                 <p className="text-sm text-white/50">Manage your organization's physical clinic locations.</p>
               </div>
-              <button 
+              <button
                 onClick={() => setShowAddClinicModal(true)}
                 className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white px-5 py-2.5 rounded-[12px] text-sm font-bold transition-colors flex items-center gap-2"
               >
@@ -534,12 +534,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
 
   return (
     <div className="animate-in fade-in duration-500 max-w-[1600px] mx-auto space-y-8 relative">
-      
+
       {/* Toast Alert Banner */}
       {mounted && toast && typeof window !== 'undefined' && createPortal(
         <div className={`fixed top-6 right-6 z-[99999] flex items-center gap-2.5 px-5 py-3 rounded-[16px] border shadow-xl animate-in slide-in-from-top-6 ${
-          toast.type === 'success' 
-            ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+          toast.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
             : 'bg-rose-50 border-rose-200 text-rose-800'
         }`}>
           {toast.type === 'success' ? (
@@ -566,7 +566,7 @@ document.body
           </h2>
           <p className="text-sm text-white/70 font-medium">Manage your system configurations and preferences.</p>
         </div>
-        <button 
+        <button
           onClick={handleSaveChanges}
           className="flex items-center justify-center gap-2 bg-white/10 border border-white/20 hover:bg-white/15 text-white font-bold text-xs px-6 py-3 rounded-[14px] transition-all active:scale-95 cursor-pointer w-full md:w-auto"
         >
@@ -612,7 +612,7 @@ document.body
 
         {/* Main Content Area */}
         <div className="bg-white/5 border border-white/10 rounded-[24px] p-8 text-white min-h-[580px] w-full">
-           
+
            {/* Clinics & Facilities */}
            {(localActiveMenu === 'clinics' || localActiveMenu === 'settings-clinics') && renderContent()}
 
@@ -625,25 +625,25 @@ document.body
                   </h3>
                   <p className="text-sm text-white/70 font-medium">Configure primary clinic profile, working hours, and localization preferences.</p>
                </div>
-               
+
                <div className="h-px w-full bg-white/10"></div>
 
                <div className="space-y-6">
                  <div className="grid grid-cols-2 gap-6">
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Practice Name</label>
-                     <input 
-                       type="text" 
-                       value={practiceName} 
+                     <input
+                       type="text"
+                       value={practiceName}
                        onChange={(e) => setPracticeName(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-4 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all"
                      />
                    </div>
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Primary Phone Number</label>
-                     <input 
-                       type="text" 
-                       value={practicePhone} 
+                     <input
+                       type="text"
+                       value={practicePhone}
                        onChange={(e) => setPracticePhone(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-4 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all"
                      />
@@ -655,8 +655,8 @@ document.body
                  <div className="grid grid-cols-2 gap-6">
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Clinic Timezone</label>
-                     <select 
-                       value={timezone} 
+                     <select
+                       value={timezone}
                        onChange={(e) => setTimezone(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-3 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all cursor-pointer"
                      >
@@ -669,8 +669,8 @@ document.body
 
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Language Preferences</label>
-                     <select 
-                       value={language} 
+                     <select
+                       value={language}
                        onChange={(e) => setLanguage(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-3 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all cursor-pointer"
                      >
@@ -687,16 +687,16 @@ document.body
                       <p className="text-xs text-white/70 leading-relaxed">Establish check-in periods for patients waitlists.</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
-                      <input 
-                        type="time" 
-                        value={openTime} 
+                      <input
+                        type="time"
+                        value={openTime}
                         onChange={(e) => setOpenTime(e.target.value)}
                         className="bg-white/5 border border-white/10 rounded-[10px] py-2 px-3 text-sm font-bold text-white"
                       />
                       <span className="text-xs text-white/50 font-bold">to</span>
-                      <input 
-                        type="time" 
-                        value={closeTime} 
+                      <input
+                        type="time"
+                        value={closeTime}
                         onChange={(e) => setCloseTime(e.target.value)}
                         className="bg-white/5 border border-white/10 rounded-[10px] py-2 px-3 text-sm font-bold text-white"
                       />
@@ -712,12 +712,12 @@ document.body
                     </div>
                     <div className="flex gap-2">
                        {['light', 'dark', 'system'].map(mode => (
-                         <button 
-                           key={mode} 
+                         <button
+                           key={mode}
                            onClick={() => setThemeMode(mode)}
                            className={`px-4 py-2 border rounded-[10px] text-xs font-bold transition-all uppercase tracking-wider ${
-                             themeMode === mode 
-                               ? 'bg-[#111827] text-white border-[#111827]' 
+                             themeMode === mode
+                               ? 'bg-[#111827] text-white border-[#111827]'
                                : 'bg-[var(--color-surface)] text-white/70 border-white/10 hover:bg-white/10 transition-colors cursor-pointer'
                            }`}
                          >
@@ -742,7 +742,7 @@ document.body
                     </h3>
                     <p className="text-sm text-white/70 font-medium">Manage clinical staff members, physicians, and billing agents access permissions.</p>
                   </div>
-                  <button 
+                  <button
                     onClick={() => setShowInviteModal(true)}
                     className="flex items-center gap-1.5 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)] text-white font-bold text-xs px-4 py-2.5 rounded-[10px] transition-transform active:scale-95 cursor-pointer"
                   >
@@ -777,7 +777,7 @@ document.body
                           <td className="py-3.5 px-4 text-white/60">{member.email}</td>
                           <td className="py-3.5 px-4">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                              member.role.includes('Administrator') 
+                              member.role.includes('Administrator')
                                 ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
                                 : member.role.includes('Manager')
                                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
@@ -792,7 +792,7 @@ document.body
                             </span>
                           </td>
                           <td className="py-3.5 px-4 text-right">
-                            <button 
+                            <button
                               onClick={async () => {
                                 try {
                                   const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team/${member.id}`, { method: 'DELETE' });
@@ -828,7 +828,7 @@ document.body
                    </h3>
                    <p className="text-sm text-white/70 font-medium">Control routing and intervals for clinic telemetry triggers and alerts.</p>
                 </div>
-                
+
                 <div className="h-px w-full bg-white/10"></div>
 
                 <div className="space-y-6">
@@ -838,9 +838,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Send high-priority waitlist and schedule updates to administrators mobile.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifySms}
                            onChange={() => setNotifySms(!notifySms)}
                          />
@@ -856,9 +856,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Receive secure daily clinical logs summaries and revenue intelligence outcomes.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifyEmail}
                            onChange={() => setNotifyEmail(!notifyEmail)}
                          />
@@ -874,9 +874,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Enable system notification alerts for incoming patient messages and calls.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifyDesktop}
                            onChange={() => setNotifyDesktop(!notifyDesktop)}
                          />
@@ -892,9 +892,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Notify billing staff immediately when co-pays are verified and pending collection.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifyCopay}
                            onChange={() => setNotifyCopay(!notifyCopay)}
                          />
@@ -909,7 +909,7 @@ document.body
                          <h4 className="text-sm font-bold text-white mb-1">Patient Reminders Delay</h4>
                          <p className="text-xs text-white/70 leading-relaxed">Default timing for sending automated text messages before a booked slot.</p>
                       </div>
-                      <select 
+                      <select
                         value={reminderInterval}
                         onChange={(e) => setReminderInterval(e.target.value)}
                         className="bg-white/5 border border-white/10 text-white text-sm font-bold rounded-[10px] focus:ring-[var(--color-surface-raised)] focus:border-[var(--color-surface-raised)] block p-2.5 outline-none cursor-pointer"
@@ -958,13 +958,13 @@ document.body
                       </button>
                    </div>
                 </div>
-                
+
                 <div className="h-px w-full bg-white/10"></div>
 
                 {/* Active Integration Status Card */}
                 <div className="bg-gradient-to-br from-emerald-950/40 via-[#120524] to-[#2E1055]/50 border border-emerald-500/30 rounded-[24px] p-6 shadow-2xl relative overflow-hidden">
                    <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
-                   
+
                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                       <div className="flex items-center gap-4">
                          <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
@@ -1258,8 +1258,8 @@ document.body
                    <h4 className="text-base font-bold text-white mb-3">Auxiliary Communication & Intelligence APIs</h4>
                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {integrationsList.map(integration => (
-                        <div 
-                          key={integration.id} 
+                        <div
+                          key={integration.id}
                           className="border border-white/10 rounded-[18px] p-4 flex justify-between items-center bg-white/5 hover:bg-white/10 transition-all premium-shadow group"
                         >
                           <div className="flex items-center gap-3">
@@ -1291,7 +1291,7 @@ document.body
                    </h3>
                    <p className="text-sm text-white/70 font-medium">Select pricing packages, configure primary Stripe card, and read past transaction receipts.</p>
                 </div>
-                
+
                 <div className="h-px w-full bg-white/10"></div>
 
                 {/* Subscriptions Grid */}
@@ -1303,14 +1303,14 @@ document.body
                       { id: 'professional', name: 'Sentinel Pro', price: '$199/mo', desc: 'Complete revenue logs, outbound Twilio dialer.' },
                       { id: 'enterprise', name: 'Sentinel Enterprise', price: '$499/mo', desc: 'Unlimited attending staff, multi-tenant EHR sync.' }
                     ].map(plan => (
-                      <div 
+                      <div
                         key={plan.id}
                         onClick={() => {
                           handleSubscribe(plan);
                         }}
                         className={`p-5 rounded-[20px] border cursor-pointer transition-all flex flex-col justify-between premium-shadow ${
-                          activePlan === plan.id 
-                            ? 'border-emerald-500/80 bg-emerald-500/10 ring-2 ring-emerald-500/30' 
+                          activePlan === plan.id
+                            ? 'border-emerald-500/80 bg-emerald-500/10 ring-2 ring-emerald-500/30'
                             : 'border-white/10 bg-white/5 hover:bg-white/10'
                         }`}
                       >
@@ -1351,7 +1351,7 @@ document.body
                     </div>
                   </div>
 
-                  <button 
+                  <button
                     onClick={() => { setPendingPlan(null); setShowPaymentModal(true); }}
                     className="text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer"
                   >
@@ -1451,7 +1451,7 @@ document.body
                                 </span>
                               </td>
                               <td className="py-3.5 px-4 text-right">
-                                <button 
+                                <button
                                   onClick={() => handleDownloadInvoice(inv.id)}
                                   className="text-[11px] font-bold text-white/70 hover:text-white flex items-center gap-1.5 ml-auto cursor-pointer"
                                 >
@@ -1477,7 +1477,7 @@ document.body
                  </h3>
                  <p className="text-sm text-white/70 font-medium">Review immutable access logs and security policy audit logs.</p>
                </div>
-               
+
                <div className="h-px w-full bg-white/10"></div>
 
                {loadingAudits ? (
@@ -1619,11 +1619,11 @@ document.body
             </button>
             <h3 className="text-xl font-bold text-white mb-2">Add New Clinic</h3>
             <p className="text-sm text-white/50 mb-6">Create a new clinic location under your organization.</p>
-            
+
             <div className="space-y-4">
               <div>
                 <label className="block text-[11px] font-extrabold text-white/60 uppercase tracking-wider mb-2">Clinic Name</label>
-                <input 
+                <input
                   type="text"
                   placeholder="e.g. City Heart North"
                   value={newClinicName}
@@ -1633,7 +1633,7 @@ document.body
               </div>
               <div>
                 <label className="block text-[11px] font-extrabold text-white/60 uppercase tracking-wider mb-2">Address</label>
-                <input 
+                <input
                   type="text"
                   placeholder="e.g. 456 Medical Parkway, TX"
                   value={newClinicAddress}
@@ -1643,7 +1643,7 @@ document.body
               </div>
               <div>
                 <label className="block text-[11px] font-extrabold text-white/60 uppercase tracking-wider mb-2">Phone</label>
-                <input 
+                <input
                   type="text"
                   placeholder="e.g. (555) 123-4567"
                   value={newClinicPhone}

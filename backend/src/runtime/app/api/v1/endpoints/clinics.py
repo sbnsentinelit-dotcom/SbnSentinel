@@ -18,7 +18,8 @@ def get_clinics(
     """Get all clinics. Enforces scope if org_id is provided."""
     if org_id and current_user.org_id and org_id != current_user.org_id:
         raise HTTPException(status_code=403, detail="Cross-scope access denied")
-    clinics = db.query(ClinicModel).all()
+    from app.services.hospital_scope_service import hospital_facility_ids
+    clinics = db.query(ClinicModel).filter(ClinicModel.id.not_in(hospital_facility_ids())).all()
     # No mock data injection
     return [
         {

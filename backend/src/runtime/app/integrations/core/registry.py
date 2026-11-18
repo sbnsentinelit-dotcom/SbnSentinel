@@ -6,6 +6,7 @@ from app.integrations.core.contracts import (
 )
 from app.integrations.vendors.practice_fusion.adapter import PracticeFusionAdapter
 from app.integrations.vendors.practice_fusion.manifest import PracticeFusionManifest
+from app.integrations.hospital_read.adapter import HospitalReadFactory, HospitalReadAdapter
 
 
 class PracticeFusionFactory(ConnectorFactory):
@@ -69,6 +70,7 @@ class SyntheticRestFactory(ConnectorFactory):
 
 # Exact ID registered connectors — NO substring matching
 CONNECTORS: Dict[str, Any] = {
+    "hospital_read": HospitalReadFactory,
     "practice_fusion": PracticeFusionFactory,
     "synthetic_rest": SyntheticRestFactory
 }
@@ -99,6 +101,7 @@ class IntegrationRegistry:
 
     def __init__(self):
         self._vendors = {
+            "hospital_read": {"adapter": HospitalReadAdapter, "manifest": None, "factory": HospitalReadFactory},
             "practice_fusion": {
                 "adapter": PracticeFusionAdapter,
                 "manifest": PracticeFusionManifest,

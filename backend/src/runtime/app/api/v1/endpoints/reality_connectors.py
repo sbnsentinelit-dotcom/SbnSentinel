@@ -47,7 +47,9 @@ def check_connectors_health(db: Session = Depends(get_db)):
     """
     Get the health status of all connected Reality Sources.
     """
-    connectors = db.query(ConnectorModel).all()
+    from sqlalchemy import or_
+    connectors = db.query(ConnectorModel).filter(or_(ConnectorModel.vendor_id.is_(None),
+                                                     ConnectorModel.vendor_id != "hospital_read")).all()
 
     response = []
     for c in connectors:
@@ -157,6 +159,9 @@ async def trigger_connector_sync(request: ConnectorSyncRequest, db: Session = De
     Manually trigger data synchronization from a specific Reality Source.
     Uses the SES-005 canonical sync framework.
     """
+    connector = db.get(ConnectorModel, request.connector_id)
+    if connector and connector.vendor_id == "hospital_read":
+        raise HTTPException(status_code=403, detail="Use the scoped hospital source API")
     result = await connector_manager.sync_connector(request.connector_id)
     if result.get("status") == "Failed":
         raise HTTPException(status_code=400, detail=result.get("error"))
@@ -172,6 +177,8 @@ def disconnect_system(connector_id: str, db: Session = Depends(get_db)):
     connector = db.query(ConnectorModel).filter(ConnectorModel.id == connector_id).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
+    if connector.vendor_id == "hospital_read":
+        raise HTTPException(status_code=403, detail="Use the scoped hospital source API")
 
     connector_store.revoke(connector_id)
     db.delete(connector)

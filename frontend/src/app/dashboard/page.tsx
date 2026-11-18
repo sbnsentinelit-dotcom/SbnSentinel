@@ -12,6 +12,7 @@ import { PatientFlowView } from '@/components/CommandCenter/PatientFlowView';
 import { ScheduleOptimizerView } from '@/components/CommandCenter/ScheduleOptimizerView';
 import { ClinicalLogsView } from '@/components/CommandCenter/ClinicalLogsView';
 import { RevenueReportsView } from '@/components/CommandCenter/RevenueReportsView';
+import { HospitalWorkspace } from '@/components/hospital/HospitalWorkspace';
 import { TeamMessagingView } from '@/components/CommandCenter/TeamMessagingView';
 import { SettingsView } from '@/components/CommandCenter/SettingsView';
 import { HelpSupportView } from '@/components/CommandCenter/HelpSupportView';
@@ -367,6 +368,7 @@ export default function Dashboard() {
                   <SidebarItem icon={FileText} label="Clinical Logs" active={activeTab === 'clinical-logs'} onClick={() => { setActiveTab('clinical-logs'); setIsMobileMenuOpen(false); }} />
                 )}
                 <SidebarItem icon={MessageSquare} label="Team Messaging" active={activeTab === 'team-messaging'} onClick={() => { setActiveTab('team-messaging'); setIsMobileMenuOpen(false); }} />
+                <SidebarItem icon={Building2} label="Hospital workspace" active={activeTab === 'hospital'} onClick={() => { setActiveTab('hospital'); setIsMobileMenuOpen(false); }} />
               </div>
             </div>
 
@@ -959,6 +961,7 @@ export default function Dashboard() {
             {activeTab === 'signals-detail' && (['practice_manager', 'staff', 'ops_manager'].includes(userRole) ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <SignalsDetailView initialSignalId={activeSignalId} />)}
             {activeTab === 'connectors' && (['practice_manager', 'staff', 'ops_manager'].includes(userRole) ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <ConnectorsView />)}
             {activeTab === 'patient-flow' && <PatientFlowView />}
+            {activeTab === 'hospital' && <HospitalWorkspace />}
             {activeTab === 'schedule' && <ScheduleOptimizerView />}
             {activeTab === 'clinical-logs' && <ClinicalLogsView />}
             {activeTab === 'revenue-reports' && (['practice_manager', 'staff'].includes(userRole) ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <RevenueReportsView />)}
