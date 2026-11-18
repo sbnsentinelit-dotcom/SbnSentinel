@@ -43,21 +43,46 @@ class FinancialReportingService:
     # ─────────────────────────────────────────────────────────────────────────
     # FR01: Daily and Monthly Owner Summary
     # ─────────────────────────────────────────────────────────────────────────
-    def _hospital_predicate(self, scope, period_start, period_end, currency):
+    def _validated_department_attribution(self, db):
+        from sqlalchemy import select, and_, or_, func
+        from app.models.hospital_dimensions import HospitalDepartment, HospitalDepartmentVersion
+        line = FinancialClaimLineModel
+        # Projection attribution_time is UTC-naive; normalize timestamptz versions
+        # explicitly on PostgreSQL rather than depending on the session timezone.
+        start, end = HospitalDepartmentVersion.valid_from, HospitalDepartmentVersion.valid_to
+        if db.get_bind().dialect.name == "postgresql":
+            start, end = func.timezone("UTC", start), func.timezone("UTC", end)
+        # An old department ID alone is not a validated historical assignment.
+        valid = select(HospitalDepartmentVersion.id).join(HospitalDepartment,
+                                                          HospitalDepartment.id == HospitalDepartmentVersion.department_id).where(
+            HospitalDepartmentVersion.id == line.attribution_version_id,
+            HospitalDepartmentVersion.department_id == line.department_id,
+            HospitalDepartment.clinic_id == line.clinic_id,
+            start <= line.attribution_time,
+            or_(HospitalDepartmentVersion.valid_to.is_(None), end > line.attribution_time),
+            line.source_evidence_id.is_not(None), line.attribution_time.is_not(None),
+            func.length(func.trim(line.attribution_basis)) > 0).exists()
+        return and_(line.department_id.is_not(None), valid)
+
+    def _hospital_predicate(self, scope, period_start, period_end, currency, *, db, validate_attribution=True):
+        from sqlalchemy import or_
         from app.services.hospital_scope_service import scope_predicate
         line, claim = FinancialClaimLineModel, FinancialClaimModel
-        return (scope_predicate(scope, line.clinic_id, line.department_id)
-                & (claim.claim_id == line.claim_id) & (claim.clinic_id == scope.clinic_id)
-                & (claim.org_id == scope.org_id) & (claim.currency == currency) & (line.currency == currency)
-                & (claim.service_date >= period_start.astimezone(timezone.utc).replace(tzinfo=None))
-                & (claim.service_date < period_end.astimezone(timezone.utc).replace(tzinfo=None))
-                & line.tombstone.is_(False) & claim.tombstone.is_(False))
+        predicate = (scope_predicate(scope, line.clinic_id, line.department_id)
+                     & (claim.claim_id == line.claim_id) & (claim.clinic_id == scope.clinic_id)
+                     & (claim.org_id == scope.org_id) & (claim.currency == currency) & (line.currency == currency)
+                     & (claim.service_date >= period_start.astimezone(timezone.utc).replace(tzinfo=None))
+                     & (claim.service_date < period_end.astimezone(timezone.utc).replace(tzinfo=None))
+                     & line.tombstone.is_(False) & claim.tombstone.is_(False))
+        if validate_attribution:
+            predicate &= or_(line.department_id.is_(None), self._validated_department_attribution(db))
+        return predicate
 
     def _hospital_rows(self, db, scope, period_start, period_end, currency):
         from sqlalchemy import select
         line, claim = FinancialClaimLineModel, FinancialClaimModel
         query = select(line).join(claim, claim.claim_id == line.claim_id).where(
-            self._hospital_predicate(scope, period_start, period_end, currency)).order_by(line.line_id)
+            self._hospital_predicate(scope, period_start, period_end, currency, db=db)).order_by(line.line_id)
         for row in db.scalars(query).yield_per(100):
             yield {"line_id": row.line_id, "department_id": row.department_id,
                    "source_evidence_id": row.source_evidence_id,
@@ -80,7 +105,10 @@ class FinancialReportingService:
             raise ValueError("Explicit valid period, currency and bounds required")
         line = FinancialClaimLineModel
         claim = FinancialClaimModel
-        predicate = self._hospital_predicate(scope, period_start, period_end, currency)
+        predicate = self._hospital_predicate(scope, period_start, period_end, currency, db=db)
+        unresolved = db.scalar(select(func.count()).select_from(line).join(claim, claim.claim_id == line.claim_id).where(
+            self._hospital_predicate(scope, period_start, period_end, currency, db=db, validate_attribution=False),
+            line.department_id.is_not(None), ~self._validated_department_attribution(db)))
         aggregate = db.execute(select(func.count(line.line_id), func.count(func.distinct(line.claim_id)),
                                       func.sum(line.billed_amount), func.sum(line.paid_amount), func.count(line.paid_amount))
                                .select_from(line).join(claim, claim.claim_id == line.claim_id).where(predicate)).one()
@@ -104,10 +132,11 @@ class FinancialReportingService:
                 "scope": scope.model_dump(mode="json"), "currency": currency,
                 "business_timezone": "Asia/Dubai", "period_start": period_start.isoformat(),
                 "period_end": period_end.isoformat(), "restricted": not scope.full_record,
-                "completeness_status": "PARTIAL", "coverage_exceptions": ["Source feed completeness not established"] + (["Line currency conflict or unknown source currency"] if conflicts else []),
+                "completeness_status": "PARTIAL", "coverage_exceptions": ["Source feed completeness not established"] + (["Line currency conflict or unknown source currency"] if conflicts else []) + (["Historical department attribution unresolved; excluded from departmental totals pending approved validation or reprocessing"] if unresolved else []),
                 "metrics": {"line_count": total, "distinct_claim_count": distinct,
                             "known_billed_amount": amount(billed), "known_paid_amount": amount(paid),
-                            "unknown_payment_lines": total - known, "currency_conflict_lines": conflicts, "facility_total": None,
+                            "unknown_payment_lines": total - known, "currency_conflict_lines": conflicts,
+                            "unresolved_attribution_lines": unresolved, "facility_total": None,
                             "receivable": None, "confirmed_cash": None},
                 "rows": [{"line_id": row.line_id, "department_id": row.department_id,
                           "source_evidence_id": row.source_evidence_id,
@@ -130,7 +159,7 @@ class FinancialReportingService:
                 raise ValueError("Snapshot contains unproven source lineage")
             digest.update((json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n").encode())
         payload["input_manifest_hash"] = digest.hexdigest()
-        payload["definition_version"] = "1"
+        payload["definition_version"] = "2"
         payload["business_as_of"] = period_end.isoformat()
         stable = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         run_key = "hospital:" + hashlib.sha256(stable.encode()).hexdigest()
@@ -141,7 +170,7 @@ class FinancialReportingService:
         payload["input_manifest_ref"] = "hospital_snapshot_pages:" + run_key
         payload["knowledge_cutoff"] = datetime.now(timezone.utc).isoformat()
         db.add(ReportRunModel(run_key=run_key, clinic_id=scope.clinic_id,
-                              definition_id="HSP01_LINES_V1", definition_version="1",
+                              definition_id="HSP01_LINES_V1", definition_version="2",
                               period_start=period_start.astimezone(timezone.utc).replace(tzinfo=None),
                               period_end=period_end.astimezone(timezone.utc).replace(tzinfo=None),
                               cutoff_time=datetime.now(timezone.utc).replace(tzinfo=None), status="partial"))

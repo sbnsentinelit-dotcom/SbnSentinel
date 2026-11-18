@@ -173,6 +173,7 @@ def jobs(clinic_id: str, offset: int = Query(0, ge=0), actor=Depends(get_current
         OperationalEventModel.received_at.desc(), OperationalEventModel.id).offset(offset).limit(101)).all()
     return {"counts": {state: count for state, count in counts}, "has_more": len(rows) > 100,
             "rows": [{"id": row.id, "state": row.state, "retry_count": row.retry_count,
+                      "row_version": row.row_version,
                       "last_error": row.last_error, "received_at": row.received_at.isoformat(),
                       "next_attempt_at": row.next_attempt_at.isoformat() if row.next_attempt_at else None} for row in rows[:100]]}
 
@@ -193,11 +194,14 @@ class ResumeRequest(BaseModel):
 
 @router.post("/jobs/{event_id}/resume")
 def resume_delivery(event_id: str, body: ResumeRequest, actor=Depends(get_current_user), db=Depends(get_db)):
-    from app.services.hospital_worker import resume_blocked
+    from app.services.hospital_worker import resume_blocked, DeliveryReconciliationRequired
     try:
         event = resume_blocked(db, actor, event_id, expected_revision=body.expected_revision, reason=body.reason)
         db.commit()
         return {"event_id": event.id, "state": event.state, "row_version": event.row_version}
+    except DeliveryReconciliationRequired as error:
+        db.rollback()
+        raise HTTPException(409, {"code": str(error), "action": "Governed historical reconciliation required; original evidence was preserved"}) from None
     except PermissionError:
         db.rollback()
         raise HTTPException(403, "Delivery recovery unavailable") from None

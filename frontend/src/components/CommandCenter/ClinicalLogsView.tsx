@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import { FileText, Search, Filter, Download, CheckCircle2, FileSignature, Receipt, CreditCard, ChevronRight, AlertTriangle, ShieldCheck, ShieldAlert, Check, Sparkles, Info, Printer, Plus, X, FileSpreadsheet, Users } from 'lucide-react';
+import { FileText, Search, Filter, Download, CheckCircle2, FileSignature, Receipt, CreditCard, ChevronLeft, ChevronRight, AlertTriangle, ShieldCheck, ShieldAlert, Check, Sparkles, Info, Printer, Plus, X, FileSpreadsheet, Users } from 'lucide-react';
 
 export const ClinicalLogsView: React.FC = () => {
   const [activeBillId, setActiveBillId] = useState<string | null>(null);
@@ -28,6 +28,8 @@ export const ClinicalLogsView: React.FC = () => {
   // Dynamic state for encounters loaded from database
   const [encounters, setEncounters] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 15;
   const [clinicDoctors, setClinicDoctors] = useState<string[]>(() => {
     const defaults = ['City Heart - Dr Jenkins', 'Vijay Maurya'];
     if (typeof window !== 'undefined') {
@@ -60,16 +62,33 @@ export const ClinicalLogsView: React.FC = () => {
   }, []);
 
   const [isSeeding, setIsSeeding] = useState(false);
+  const [totalEncounters, setTotalEncounters] = useState(789);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 
-  const fetchEncounters = async () => {
+  const fetchEncounters = async (targetPage = currentPage, search = searchTerm) => {
     try {
-      const response = await fetchWithAuth('/api/v1/encounters');
-      if (response.ok) {
+      setIsLoadingLogs(true);
+      const params = new URLSearchParams({
+        page: String(targetPage),
+        page_size: String(pageSize),
+      });
+      if (search.trim()) params.append('search', search.trim());
+
+      let response = await fetchWithAuth(`/api/v1/encounters?${params.toString()}`);
+      if (response && response.ok) {
+        const totalHeader = response.headers.get('X-Total-Count');
+        if (totalHeader) setTotalEncounters(parseInt(totalHeader, 10));
+
         const data = await response.json();
-        setEncounters(Array.isArray(data) ? [...data].reverse() : []);
+        if (Array.isArray(data)) {
+          setEncounters(data);
+          return;
+        }
       }
     } catch (err) {
-      console.error(err);
+      console.error("fetchEncounters failed, attempting fallback:", err);
+    } finally {
+      setIsLoadingLogs(false);
     }
   };
 
@@ -78,7 +97,7 @@ export const ClinicalLogsView: React.FC = () => {
       setIsSeeding(true);
       const res = await fetchWithAuth('/api/v1/encounters/seed-dubai', { method: 'POST' });
       if (res.ok) {
-        await fetchEncounters();
+        await fetchEncounters(1, '');
       }
     } catch (e) {
       console.error(e);
@@ -88,20 +107,17 @@ export const ClinicalLogsView: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchEncounters();
-  }, []);
+    fetchEncounters(currentPage, searchTerm);
+  }, [currentPage]);
 
-  const filteredEncounters = encounters.filter(e => {
-    const q = searchTerm.toLowerCase().trim();
-    if (!q) return true;
-    return (
-      (e.patient_name || '').toLowerCase().includes(q) ||
-      (e.id || '').toLowerCase().includes(q) ||
-      (e.diagnosis || '').toLowerCase().includes(q) ||
-      (e.provider_name || '').toLowerCase().includes(q) ||
-      (e.billing_status || '').toLowerCase().includes(q)
-    );
-  });
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchEncounters(1, searchTerm);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  const totalPages = Math.ceil(totalEncounters / pageSize) || 1;
 
   const activeEncounter = encounters.find(e => e.id === activeBillId);
 
@@ -614,7 +630,7 @@ export const ClinicalLogsView: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
           <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-[16px] px-3 py-2 premium-shadow">
             <Search className="w-4 h-4 text-white/70" />
-            <input type="text" placeholder="Search encounters..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-transparent border-none outline-none text-xs text-white w-full sm:w-48 placeholder:text-[#9CA3AF]" />
+            <input type="text" placeholder="Search encounters..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="bg-transparent border-none outline-none text-xs text-white w-full sm:w-48 placeholder:text-[#9CA3AF]" />
           </div>
           <button className="flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-white font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow whitespace-nowrap shrink-0 hover:bg-white/5 transition-colors">
             <Filter className="w-4 h-4 text-white/70" /> Filter
@@ -653,7 +669,7 @@ export const ClinicalLogsView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="text-sm font-semibold text-white">
-                {filteredEncounters.length === 0 ? (
+                {encounters.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-12 text-center">
                       <p className="text-sm text-white/50 font-bold mb-3">No clinical records found.</p>
@@ -668,7 +684,7 @@ export const ClinicalLogsView: React.FC = () => {
                     </td>
                   </tr>
                 ) : null}
-                {filteredEncounters.map((log) => (
+                {encounters.map((log) => (
                   <tr
                     key={log.id}
                     className={`border-b border-white/10 hover:bg-transparent/5 transition-colors last:border-0 cursor-pointer ${activeBillId === log.id ? 'bg-blue-500/20/50 border-l-4 border-l-[var(--color-surface-raised)]' : ''}`}
@@ -711,6 +727,34 @@ export const ClinicalLogsView: React.FC = () => {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {totalEncounters > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-white/10 text-xs">
+              <span className="text-white/60 font-medium">
+                Showing <strong className="text-white font-bold">{((currentPage - 1) * pageSize) + 1}</strong> to <strong className="text-white font-bold">{Math.min(currentPage * pageSize, totalEncounters)}</strong> of <strong className="text-white font-bold">{totalEncounters}</strong> Encounters
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" /> Prev
+                </button>
+                <span className="px-3 py-1.5 rounded-[10px] bg-[var(--color-surface-raised)] font-bold text-white text-xs">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors"
+                >
+                  Next <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* AI Billing Assistant Widget */}

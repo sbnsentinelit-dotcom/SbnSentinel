@@ -344,6 +344,185 @@ def worker():
             self.assertIsNotNone(row.attribution_version_id)
             self.assertEqual(row.attribution_time, date(11).replace(tzinfo=None))
 
+        def recovery_api_fixture(self):
+            from app.services.hospital_source_service import verify_source
+            self.reviewed_source()
+            self.submit("Claim", self.raw_claim())
+
+            def deny(*args):
+                raise PermissionError("Expired authority")
+            worker = HospitalWorker(self.sessions, deny, worker_id="api-recovery")
+            self.assertEqual(worker.run_once(), "BLOCKED")
+
+            async def verify():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"records": [], "next": None}))) as client:
+                    await verify_source(self.db, self.actor, "conn", client)
+                    self.db.commit()
+            asyncio.run(verify())
+            from fastapi import FastAPI
+            from fastapi.testclient import TestClient
+            dependencies = types.ModuleType("app.api.deps")
+            dependencies.get_current_user = lambda: self.actor
+            sys.modules["app.api.deps"] = dependencies
+
+            def db_dependency():
+                with self.sessions() as db:
+                    yield db
+            database.get_db = db_dependency
+            import importlib
+            api = importlib.import_module("app.api.v1.endpoints.hospital")
+            app = FastAPI()
+            app.include_router(api.router, prefix="/hospital")
+            app.dependency_overrides[api.get_current_user] = lambda: self.actor
+            app.dependency_overrides[api.get_db] = db_dependency
+            return TestClient(app), worker
+
+        def test_followup_jobs_api_revision_stale_refresh_and_repeat(self):
+            client, worker = self.recovery_api_fixture()
+            with client:
+                response = client.get("/hospital/jobs", params={"clinic_id": "a"})
+                self.assertEqual(response.status_code, 200, response.text)
+                job = response.json()["rows"][0]
+                url = "/hospital/jobs/" + job["id"] + "/resume"
+                stale = client.post(url, json={"expected_revision": job["row_version"] + 1, "reason": "stale"})
+                self.assertEqual(stale.status_code, 409, stale.text)
+                refreshed = client.get("/hospital/jobs", params={"clinic_id": "a"}).json()["rows"][0]
+                self.assertEqual(refreshed["state"], "Blocked")
+                body = {"expected_revision": refreshed["row_version"], "reason": "Actual read restored"}
+                self.assertEqual(client.post(url, json=body).status_code, 200)
+                worker.authorize = lambda *args: None
+                self.assertEqual(worker.run_once(), "APPLIED")
+                self.assertEqual(client.post(url, json=body).status_code, 200)
+                self.assertEqual(worker.run_once(), "IDLE")
+                self.db.expire_all()
+                self.assertEqual(len(self.db.scalars(select(financial_reporting.FinancialClaimModel)).all()), 1)
+
+        def test_followup_old_delivery_missing_binding_requires_reconciliation(self):
+            client, worker = self.recovery_api_fixture()
+            self.db.commit()
+            row = self.db.scalars(select(evidence.EvidenceModel)).one()
+            original = json.loads(row.metadata_json)
+            original.pop("extraction_binding")
+            # Model an earlier build's persisted record, not a runtime evidence edit.
+            self.db.execute(evidence.EvidenceModel.__table__.update().where(
+                evidence.EvidenceModel.evidence_id == row.evidence_id).values(metadata_json=json.dumps(original)))
+            self.db.commit()
+            with client:
+                job = client.get("/hospital/jobs", params={"clinic_id": "a"}).json()["rows"][0]
+                response = client.post("/hospital/jobs/" + job["id"] + "/resume",
+                                       json={"expected_revision": job["row_version"], "reason": "Review old delivery"})
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["detail"]["code"], "HISTORICAL_BINDING_RECONCILIATION_REQUIRED")
+            self.db.expire_all()
+            self.assertEqual(json.loads(self.db.get(evidence.EvidenceModel, row.evidence_id).metadata_json), original)
+            self.assertEqual(self.db.scalars(select(event_model.OperationalEventModel)).one().state, "Blocked")
+
+        def test_followup_resume_rejects_revoked_and_material_profile_change(self):
+            client, worker = self.recovery_api_fixture()
+            with client:
+                job = client.get("/hospital/jobs", params={"clinic_id": "a"}).json()["rows"][0]
+                row = self.db.get(connector.ConnectorModel, "conn")
+                row.state = "REVOKED"
+                self.db.commit()
+                response = client.post("/hospital/jobs/" + job["id"] + "/resume",
+                                       json={"expected_revision": job["row_version"], "reason": "Denied"})
+                self.assertEqual(response.status_code, 403)
+
+                # Even a newly verified incompatible profile cannot relabel old evidence.
+                from dataclasses import replace
+                from app.services.hospital_source_service import verify_source
+                self.profile = replace(self.profile, revision="reviewed-new-profile", mapping_version="2",
+                                       attribution_time_basis="line_service_date")
+                self.reviewed_source()
+
+                async def verify_new():
+                    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"records": [], "next": None}))) as transport:
+                        await verify_source(self.db, self.actor, "conn", transport)
+                        self.db.commit()
+                asyncio.run(verify_new())
+                response = client.post("/hospital/jobs/" + job["id"] + "/resume",
+                                       json={"expected_revision": job["row_version"], "reason": "Changed profile"})
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["detail"]["code"], "MATERIAL_BINDING_RECONCILIATION_REQUIRED")
+
+        def test_followup_earlier_invalid_department_upgrade_is_not_a_total(self):
+            future = HospitalDirectoryService(self.db).create_department("org", "a", "FUT", "Future", date(10), "fixture:future").id
+            self.grant.department_ids = [future]
+            self.db.commit()
+            self.submit("Claim", self.raw_claim())
+            self.assertEqual(HospitalWorker(self.sessions, lambda *args: None, worker_id="old-upgrade").run_once(), "APPLIED")
+            claim = self.db.scalars(select(financial_reporting.FinancialClaimModel)).one()
+            source = self.db.scalars(select(evidence.EvidenceModel)).one()
+            self.db.add(financial_reporting.FinancialClaimLineModel(line_id="earlier-line", claim_id=claim.claim_id,
+                        clinic_id="a", department_id=future, currency="AED", billed_amount=Decimal("100"),
+                        procedure_code="TEST", attribution_basis="old-import", source_evidence_id=source.evidence_id))
+            self.db.commit()
+            # Execute the published correction upgrade against only this disposable schema.
+            import importlib.util
+            from alembic.migration import MigrationContext
+            from alembic.operations import Operations
+            path = Path(__file__).resolve().parents[2] / "alembic/versions/hsp01_auditor_corrections.py"
+            spec = importlib.util.spec_from_file_location("upgrade_regression", path)
+            migration = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(migration)
+            with self.engine.begin() as connection:
+                migration.op = Operations(MigrationContext.configure(connection))
+                migration.upgrade()
+            self.db.expire_all()
+            scope = resolve_hospital_scope(self.db, self.actor, {"clinic_id": "a"})
+            report = FinancialReportingService().generate_hospital_summary(self.db, scope, date(1), date(20), "AED")
+            self.assertEqual(report["metrics"]["line_count"], 0)
+
+            self.assertEqual(report["metrics"]["unresolved_attribution_lines"], 1)
+            self.assertTrue(any("attribution unresolved" in value for value in report["coverage_exceptions"]))
+            original = self.db.get(financial_reporting.FinancialClaimLineModel, "earlier-line")
+            self.assertEqual(original.billed_amount, Decimal("100"))
+            self.assertIsNone(original.attribution_version_id)
+            # Merely populating a version cannot validate an out-of-period assignment.
+            original.attribution_version_id = self.db.scalars(select(hospital_dimensions.HospitalDepartmentVersion.id).where(
+                hospital_dimensions.HospitalDepartmentVersion.department_id == future)).one()
+            original.attribution_time = date(2).replace(tzinfo=None)
+            self.db.commit()
+            report = FinancialReportingService().generate_hospital_summary(self.db, scope, date(1), date(20), "AED")
+            self.assertEqual(report["metrics"]["line_count"], 0)
+
+        def test_followup_unproven_current_attribution_preserves_frozen_snapshot(self):
+            self.submit("Claim", self.raw_claim())
+            worker = HospitalWorker(self.sessions, lambda *args: None, worker_id="frozen-history")
+            self.assertEqual(worker.run_once(), "APPLIED")
+            self.submit("ClaimLine", self.line_raw())
+            self.assertEqual(worker.run_once(), "APPLIED")
+            scope = resolve_hospital_scope(self.db, self.actor, {"clinic_id": "a"})
+            service = FinancialReportingService()
+            old = service.freeze_hospital_summary(self.db, scope, date(1), date(20), "AED")
+            self.db.commit()
+            old_id, old_payload = old.snapshot_id, old.payload_json
+            line = self.db.scalars(select(financial_reporting.FinancialClaimLineModel)).one()
+            line.attribution_version_id = None
+            self.db.commit()
+            current = service.freeze_hospital_summary(self.db, scope, date(1), date(20), "AED")
+            self.db.commit()
+            self.assertNotEqual(current.snapshot_id, old_id)
+            self.assertEqual(json.loads(current.payload_json)["metrics"]["unresolved_attribution_lines"], 1)
+            self.assertEqual(self.db.get(financial_reporting.ReportSnapshotModel, old_id).payload_json, old_payload)
+
+        def test_followup_attribution_boundary_is_utc_in_non_utc_database_session(self):
+            department = HospitalDirectoryService(self.db).create_department("org", "a", "BOUNDARY", "Boundary", date(2), "fixture:boundary").id
+            self.grant.department_ids = [department]
+            self.db.commit()
+            self.submit("Claim", self.raw_claim())
+            worker = HospitalWorker(self.sessions, lambda *args: None, worker_id="boundary")
+            self.assertEqual(worker.run_once(), "APPLIED")
+            self.submit("ClaimLine", self.line_raw(department_id=department))
+            self.assertEqual(worker.run_once(), "APPLIED")
+            if self.pg_schema:
+                from sqlalchemy import text
+                self.db.execute(text("SET TIME ZONE 'Asia/Dubai'"))
+            scope = resolve_hospital_scope(self.db, self.actor, {"clinic_id": "a"})
+            report = FinancialReportingService().generate_hospital_summary(self.db, scope, date(1), date(20), "AED")
+            self.assertEqual(report["metrics"]["line_count"], 1)
+            self.assertEqual(report["metrics"]["unresolved_attribution_lines"], 0)
+
         def test_auditor_quarantine_page_rows_are_recoverable_and_atomic(self):
             from app.integrations.hospital_read.rest_source import SourcePage
             import hashlib

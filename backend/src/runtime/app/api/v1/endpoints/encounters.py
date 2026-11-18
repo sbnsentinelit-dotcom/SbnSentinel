@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends, status
-from sqlalchemy.orm import Session
-from typing import List
+import math
 import random
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Response
+from sqlalchemy.orm import Session
+from sqlalchemy import or_, func
 from app.db.database import get_db
 from app.models.encounter import EncounterModel
 from app.schemas.encounter import EncounterCreate, EncounterUpdate, EncounterResponse
@@ -121,27 +123,98 @@ def seed_default_encounters(db: Session):
     db.commit()
 
 
-@router.get("/", response_model=List[EncounterResponse])
-def get_all_encounters(db: Session = Depends(get_db)):
-    """
-    Get all clinical patient encounters. Auto-seeds UAE clinic data if empty.
-    """
-    from sqlalchemy import or_
+def legacy_encounter_query(db):
+    """Keep hospital exclusion on every legacy list, aggregate and fallback."""
     from app.services.hospital_scope_service import hospital_facility_ids
-    legacy_only = or_(EncounterModel.clinic_id.is_(None),
-                      EncounterModel.clinic_id.not_in(hospital_facility_ids()))
-    encounters = db.query(EncounterModel).filter(legacy_only).all()
-    if not encounters:
+    return db.query(EncounterModel).filter(or_(
+        EncounterModel.clinic_id.is_(None),
+        EncounterModel.clinic_id.not_in(hospital_facility_ids())))
+
+
+@router.get("/summary-stats")
+def get_encounter_summary_stats(
+    clinic_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Main's summary shape, calculated only from the selected legacy cohort."""
+    base = legacy_encounter_query(db)
+    query = base.filter(EncounterModel.clinic_id == (clinic_id or "DXB-CLINIC-01"))
+    # Preserve main's default-clinic fallback, without widening an explicit filter.
+    if clinic_id is None and query.count() == 0:
+        query = base
+    total_count = query.count()
+    total_charges = query.with_entities(func.coalesce(func.sum(EncounterModel.billing_amount), 0.0)).scalar()
+    paid_query = query.filter(EncounterModel.billing_status == "Paid")
+    paid_charges = paid_query.with_entities(func.coalesce(func.sum(EncounterModel.billing_amount), 0.0)).scalar()
+    return {
+        "total_encounters": total_count,
+        "total_charges": float(total_charges),
+        "total_paid": float(paid_charges),
+        "paid_count": paid_query.count(),
+        "pending_count": query.filter(EncounterModel.billing_status.in_(["Pending", "Billed", "Submitted"])).count(),
+        "denied_count": query.filter(EncounterModel.billing_status.in_(["Claim Denied", "Denied"])).count()
+    }
+
+
+@router.get("", response_model=List[EncounterResponse])
+@router.get("/", response_model=List[EncounterResponse])
+def get_all_encounters(
+    response: Response,
+    page: Optional[int] = Query(None, ge=1),
+    page_size: Optional[int] = Query(None, ge=1, le=500),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    billing_status: Optional[str] = Query(None),
+    clinic_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Main's filtering/pagination with HSP01 hospital exclusion before counts."""
+    def selected_query():
+        query = legacy_encounter_query(db)
+        if clinic_id:
+            query = query.filter(EncounterModel.clinic_id == clinic_id)
+        if search:
+            pattern = f"%{search}%"
+            query = query.filter(or_(EncounterModel.id.ilike(pattern), EncounterModel.patient_id.ilike(pattern),
+                                     EncounterModel.diagnosis.ilike(pattern), EncounterModel.provider_id.ilike(pattern),
+                                     EncounterModel.billing_status.ilike(pattern)))
+        if billing_status:
+            query = query.filter(EncounterModel.billing_status == billing_status)
+        if status:
+            query = query.filter(EncounterModel.status == status)
+        return query
+
+    def fetch_page():
+        query = selected_query()
+        total = query.count()
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["Access-Control-Expose-Headers"] = "X-Total-Count, X-Total-Pages"
+        query = query.order_by(EncounterModel.id)
+        if page is not None:
+            size = page_size or 15
+            response.headers["X-Total-Pages"] = str(max(1, math.ceil(total / size)))
+            query = query.offset((page - 1) * size).limit(size)
+        elif limit is not None:
+            query = query.offset(skip or 0).limit(limit)
+        return query.all(), total
+
+    encounters, total_count = fetch_page()
+    if not encounters and total_count == 0:
         try:
             from app.services.dubai_seed_service import auto_seed_dubai_if_empty
             auto_seed_dubai_if_empty(db)
-            encounters = db.query(EncounterModel).filter(legacy_only).all()
-        except Exception as e:
-            print(f"[ERROR] Auto-seed dubai encounters failed: {e}")
+            # Reapply the exact same exclusion, selectors, pagination and counts.
+            encounters, _ = fetch_page()
+        except Exception:
+            # Source data and connection details must not enter public diagnostics.
+            pass
     return encounters
 
 
 @router.post("/seed-dubai", status_code=status.HTTP_200_OK)
+@router.post("/seed-dubai/", status_code=status.HTTP_200_OK)
 def trigger_seed_dubai(db: Session = Depends(get_db)):
     """
     Explicit endpoint to seed or refresh the UAE Dubai clinic demo dataset.

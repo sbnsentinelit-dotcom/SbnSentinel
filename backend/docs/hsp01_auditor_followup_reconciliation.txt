@@ -1,0 +1,66 @@
+HSP01 auditor follow-up recovery and historical attribution
+
+Combined local state: published HSP01 a9ee9895021186163f95006a42a51418265f9d87
+plus main 70503767215582d14431f7289d0bcebd503d17c9. Merge remains uncommitted.
+No new migration; no existing application database has been inspected or modified.
+
+Fresh installations
+Use the existing Alembic forward sequence. Backend quality CI now migrates a
+runner-owned disposable SQLite DB before application import/test collection;
+migration and every backend quality step inherit identical DATABASE_URL and
+SQLALCHEMY_DATABASE_URL. Production autocreate remains disabled. Actual local
+reproduction of this sequence passed all 3 backend unit tests.
+
+Existing installations and historical department assignments
+The existing attribution columns are sufficient for a non-destructive runtime
+repair: current totals/details/exports require a recorded version, attribution
+time and nonblank basis, source lineage, same-facility department and half-open
+effective-version validity. PostgreSQL comparisons normalize version timestamps
+to UTC, independent of connection timezone. Unvalidated attributed lines remain
+stored unchanged but are excluded from departmental metrics and shown through
+unresolved_attribution_lines plus coverage explanation. Restricted users only
+receive counts within their permitted provisional department scope.
+The Jan 2 line / Jan 10 department regression runs the existing correction upgrade
+in an isolated schema. It remains excluded even if an invalid version/time is
+populated. Frozen snapshot payloads are never changed. New snapshots retain
+report code compatibility and use definition version 2 with their own identity.
+
+Blocked-job API
+GET /hospital/jobs supplies row_version. Submit it as expected_revision to
+POST /hospital/jobs/{event_id}/resume. Existing authorization, actual source read
+proof, original binding and version/locking checks remain. Accepted retries reuse
+an event and cannot generate another projection effect. Unaccepted stale revisions
+return 409; list again and retry only if the event is still eligible.
+
+Earlier evidence without an original extraction binding
+Recovery returns 409 HISTORICAL_BINDING_RECONCILIATION_REQUIRED, including for
+missing or malformed recorded metadata. An incompatible recorded profile/hash
+returns MATERIAL_BINDING_RECONCILIATION_REQUIRED. Evidence, event, ledger and
+effect identities are not rewritten. Current profiles never fill missing history.
+
+Governed reconciliation/reprocessing handoff
+1. The authorized data/migration owner must inventory affected IDs on the target
+   environment separately; this work did not access that database.
+2. Collect trustworthy archived extraction configuration, source versions and
+   protected evidence records. A matching display name, current profile or just
+   a revision label is insufficient proof of historical compatibility.
+3. Record a separate reviewed reconciliation decision with actor, reason,
+   historical configuration references/digests and affected original IDs using
+   the existing append-only audit mechanism. Preserve originals and snapshots.
+4. If compatibility cannot be established, leave recovery blocked. Obtain an
+   explicitly approved, versioned reprocessing plan for the source cohort,
+   attribution basis and downstream effects before executing any repair.
+5. Reprocessing must retain links to original evidence/ledger/event/effect IDs,
+   avoid duplicate financial effects and publish a new report revision. It must
+   not overwrite evidence or treat an old approval as approval for a new basis.
+No automatic historical compatibility approval or new reprocessing endpoint is
+claimed by this patch. Target-data reconciliation remains conditional on actual
+older data and operator approval; it is not certified by fresh-install tests.
+
+Release blockers and separate ownership
+picomatch GHSA-fc5q-39xc-vjpf has no patched version in the reviewed GitHub advisory.
+The unchanged release policy gate remains active and blocks this advisory.
+Security/release owner approval is unavailable; no exception was invented.
+Existing startup-screen tests remain assigned to the shared frontend owner.
+Full Linux CI and remote evidence require the corrected combined commit to be
+created and pushed by the user. No new remote SHA or passing CI is claimed.

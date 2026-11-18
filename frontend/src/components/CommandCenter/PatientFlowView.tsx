@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import { Users, UserCheck, Clock, AlertCircle, Search, Filter, Download, Calendar, Activity, ChevronRight, LayoutGrid, Stethoscope, Check, CreditCard, ShieldCheck, ShieldAlert, Camera, RefreshCw, Scan, Sparkles, Phone, X, FileText } from 'lucide-react';
+import { Users, UserCheck, Clock, AlertCircle, Search, Filter, Download, Calendar, Activity, ChevronLeft, ChevronRight, LayoutGrid, Stethoscope, Check, CreditCard, ShieldCheck, ShieldAlert, Camera, RefreshCw, Scan, Sparkles, Phone, X, FileText } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store';
 
@@ -56,13 +56,20 @@ export const PatientFlowView: React.FC = () => {
 
   const fetchEncounters = async () => {
     try {
-      const response = await fetchWithAuth('/api/v1/encounters');
-      if (response.ok) {
+      let response = await fetchWithAuth('/api/v1/encounters');
+      if (response && response.ok) {
         const data = await response.json();
         setEncounters(Array.isArray(data) ? data : []);
       }
     } catch (error) {
       console.error("Failed to fetch encounters:", error);
+      try {
+        const fb = await fetchWithAuth('/api/v1/encounters/');
+        if (fb && fb.ok) {
+          const fbData = await fb.json();
+          setEncounters(Array.isArray(fbData) ? fbData : []);
+        }
+      } catch (e2) {}
     } finally {
       setIsLoadingEncounters(false);
     }
@@ -70,21 +77,35 @@ export const PatientFlowView: React.FC = () => {
 
   useEffect(() => {
     fetchEncounters();
+    fetchPatientsDirectory();
   }, []);
 
-  // Mode switcher: 'queue' vs 'directory' (500 UAE Patients Master Dataset from Excel)
-  const [viewMode, setViewMode] = useState<'queue' | 'directory'>('queue');
+  // Mode switcher: 'directory' (500 UAE Patients Master Dataset from Excel) vs 'queue'
+  const [viewMode, setViewMode] = useState<'queue' | 'directory'>('directory');
   const [patientsList, setPatientsList] = useState<any[]>([]);
+  const [totalPatients, setTotalPatients] = useState(500);
   const [isLoadingPatients, setIsLoadingPatients] = useState(false);
   const [patientSearch, setPatientSearch] = useState('');
   const [emirateFilter, setEmirateFilter] = useState('All');
   const [payerFilter, setPayerFilter] = useState('All');
+  const [patientPage, setPatientPage] = useState(1);
+  const [patientPageSize, setPatientPageSize] = useState(20);
 
-  const fetchPatientsDirectory = async () => {
+  const fetchPatientsDirectory = async (page = patientPage, size = patientPageSize, search = patientSearch, em = emirateFilter, pay = payerFilter) => {
     try {
       setIsLoadingPatients(true);
-      const res = await fetchWithAuth('/api/v1/patients');
-      if (res.ok) {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(size),
+      });
+      if (search.trim()) params.append('search', search.trim());
+      if (em !== 'All') params.append('emirate', em);
+      if (pay !== 'All') params.append('payer', pay);
+
+      let res = await fetchWithAuth(`/api/v1/patients?${params.toString()}`);
+      if (res && res.ok) {
+        const totalHeader = res.headers.get('X-Total-Count');
+        if (totalHeader) setTotalPatients(parseInt(totalHeader, 10));
         const data = await res.json();
         setPatientsList(Array.isArray(data) ? data : []);
       }
@@ -96,10 +117,15 @@ export const PatientFlowView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (viewMode === 'directory' && patientsList.length === 0) {
-      fetchPatientsDirectory();
-    }
-  }, [viewMode]);
+    fetchPatientsDirectory(patientPage, patientPageSize, patientSearch, emirateFilter, payerFilter);
+  }, [patientPage, patientPageSize, emirateFilter, payerFilter]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchPatientsDirectory(1, patientPageSize, patientSearch, emirateFilter, payerFilter);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [patientSearch]);
 
   // Health Card states
   const [isHealthCardModalOpen, setIsHealthCardModalOpen] = useState(false);
@@ -844,7 +870,7 @@ export const PatientFlowView: React.FC = () => {
                 <input
                   type="text"
                   value={patientSearch}
-                  onChange={(e) => setPatientSearch(e.target.value)}
+                  onChange={(e) => { setPatientSearch(e.target.value); setPatientPage(1); }}
                   placeholder="Search by Patient ID (PAT...), MRN, Name, Mobile, or Member ID..."
                   className="bg-transparent border-none outline-none text-xs text-white w-full placeholder:text-white/50"
                 />
@@ -853,7 +879,7 @@ export const PatientFlowView: React.FC = () => {
               <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={emirateFilter}
-                  onChange={(e) => setEmirateFilter(e.target.value)}
+                  onChange={(e) => { setEmirateFilter(e.target.value); setPatientPage(1); }}
                   className="bg-[#120524] border border-white/15 rounded-[12px] px-3 py-2 text-xs font-bold text-white outline-none"
                 >
                   <option value="All">All Emirates</option>
@@ -864,7 +890,7 @@ export const PatientFlowView: React.FC = () => {
 
                 <select
                   value={payerFilter}
-                  onChange={(e) => setPayerFilter(e.target.value)}
+                  onChange={(e) => { setPayerFilter(e.target.value); setPatientPage(1); }}
                   className="bg-[#120524] border border-white/15 rounded-[12px] px-3 py-2 text-xs font-bold text-white outline-none"
                 >
                   <option value="All">All Payers</option>
@@ -920,68 +946,103 @@ export const PatientFlowView: React.FC = () => {
                         Loading 500 UAE Patient Records...
                       </td>
                     </tr>
+                  ) : patientsList.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="py-8 text-center text-white/50 font-bold">
+                        No matching patients found.
+                      </td>
+                    </tr>
                   ) : (
-                    patientsList
-                      .filter(p => {
-                        if (emirateFilter !== 'All' && p.emirate !== emirateFilter) return false;
-                        if (payerFilter !== 'All' && p.payer !== payerFilter) return false;
-                        if (!patientSearch.trim()) return true;
-                        const q = patientSearch.toLowerCase().trim();
-                        return (
-                          (p.name || '').toLowerCase().includes(q) ||
-                          (p.patient_id || '').toLowerCase().includes(q) ||
-                          (p.mrn || '').toLowerCase().includes(q) ||
-                          (p.mobile || '').includes(q) ||
-                          (p.member_id || '').toLowerCase().includes(q) ||
-                          (p.emirate || '').toLowerCase().includes(q) ||
-                          (p.nationality || '').toLowerCase().includes(q)
-                        );
-                      })
-                      .map((p, idx) => (
-                        <tr key={p.patient_id || idx} className="hover:bg-white/5 transition-colors">
-                          <td className="py-3 px-3 font-mono text-emerald-400 font-bold">{p.patient_id}</td>
-                          <td className="py-3 px-3 font-mono text-purple-300 font-bold">{p.mrn}</td>
-                          <td className="py-3 px-3">
-                            <span className="font-bold text-white">{p.name}</span>
-                            <span className="block text-[10px] text-white/50">{p.email}</span>
-                          </td>
-                          <td className="py-3 px-3 text-white/70 font-mono">
-                            {p.dob} <span className="text-[10px] font-bold text-white/50">({p.gender})</span>
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className="px-2 py-0.5 rounded bg-white/10 text-white/80 text-[10px] font-bold">
-                              {p.nationality}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 font-bold text-white">
-                            📍 {p.emirate}
-                          </td>
-                          <td className="py-3 px-3 font-mono text-blue-300">{p.mobile}</td>
-                          <td className="py-3 px-3">
-                            <span className="font-bold text-white">{p.payer}</span>
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
-                              p.plan === 'Gold' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                              p.plan === 'Platinum' || p.plan === 'Premium' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
-                              p.plan === 'Silver' ? 'bg-slate-300/20 text-slate-200 border border-slate-300/30' :
-                              'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            }`}>
-                              {p.plan}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 font-mono text-white/70">{p.member_id}</td>
-                          <td className="py-3 px-3 text-right">
-                            <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-extrabold uppercase text-[10px] border border-emerald-500/30">
-                              {p.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
+                    patientsList.map((p, idx) => (
+                      <tr key={p.patient_id || idx} className="hover:bg-white/5 transition-colors border-b border-white/5 last:border-0">
+                        <td className="py-3 px-3 font-mono text-emerald-400 font-bold">{p.patient_id}</td>
+                        <td className="py-3 px-3 font-mono text-purple-300 font-bold">{p.mrn}</td>
+                        <td className="py-3 px-3">
+                          <span className="font-bold text-white">{p.name}</span>
+                          <span className="block text-[10px] text-white/50">{p.email}</span>
+                        </td>
+                        <td className="py-3 px-3 text-white/70 font-mono">
+                          {p.dob} <span className="text-[10px] font-bold text-white/50">({p.gender})</span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className="px-2 py-0.5 rounded bg-white/10 text-white/80 text-[10px] font-bold">
+                            {p.nationality}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 font-bold text-white">
+                          📍 {p.emirate}
+                        </td>
+                        <td className="py-3 px-3 font-mono text-blue-300">{p.mobile}</td>
+                        <td className="py-3 px-3">
+                          <span className="font-bold text-white">{p.payer}</span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
+                            p.plan === 'Gold' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
+                            p.plan === 'Platinum' || p.plan === 'Premium' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
+                            p.plan === 'Silver' ? 'bg-slate-300/20 text-slate-200 border border-slate-300/30' :
+                            'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          }`}>
+                            {p.plan}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 font-mono text-white/70">{p.member_id}</td>
+                        <td className="py-3 px-3 text-right">
+                          <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-extrabold uppercase text-[10px] border border-emerald-500/30">
+                            {p.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls for Patients Directory */}
+            {totalPatients > 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-white/10 text-xs">
+                <div className="flex items-center gap-3 text-white/60 font-medium">
+                  <span>
+                    Showing <strong className="text-white font-bold">{((patientPage - 1) * patientPageSize) + 1}</strong> to <strong className="text-white font-bold">{Math.min(patientPage * patientPageSize, totalPatients)}</strong> of <strong className="text-white font-bold">{totalPatients}</strong> Patients
+                  </span>
+                  <span className="text-white/30">|</span>
+                  <div className="flex items-center gap-1.5">
+                    <span>Rows:</span>
+                    <select
+                      value={patientPageSize}
+                      onChange={(e) => { setPatientPageSize(Number(e.target.value)); setPatientPage(1); }}
+                      className="bg-[#120524] border border-white/15 rounded-[8px] px-2 py-1 text-xs font-bold text-white outline-none cursor-pointer"
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setPatientPage(prev => Math.max(prev - 1, 1))}
+                    disabled={patientPage === 1}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" /> Prev
+                  </button>
+                  <span className="px-3 py-1.5 rounded-[10px] bg-emerald-600/30 border border-emerald-500/40 font-bold text-emerald-300 text-xs">
+                    Page {patientPage} of {Math.ceil(totalPatients / patientPageSize) || 1}
+                  </span>
+                  <button
+                    onClick={() => setPatientPage(prev => Math.min(prev + 1, Math.ceil(totalPatients / patientPageSize) || 1))}
+                    disabled={patientPage >= Math.ceil(totalPatients / patientPageSize)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    Next <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

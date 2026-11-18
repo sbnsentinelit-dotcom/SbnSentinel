@@ -10,6 +10,10 @@ def utc(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
+class DeliveryReconciliationRequired(ValueError):
+    """Original extraction authority cannot be established from recorded history."""
+
+
 def resume_blocked(db, actor, event_id, *, expected_revision, reason):
     """Authorized, versioned recovery; preserves ledger, event and effect identity."""
     import json
@@ -36,14 +40,19 @@ def resume_blocked(db, actor, event_id, *, expected_revision, reason):
         raise ValueError("Original delivery binding unavailable")
     profile = HospitalReadProfile(**connector.config["hospital_profile"])
     assert_profile_ready(db, profile, evidence.resource_kind)
-    basis = json.loads(evidence.metadata_json)
+    try:
+        basis = json.loads(evidence.metadata_json or "{}")
+    except (ValueError, TypeError):
+        basis = {}
+    if not isinstance(basis, dict) or not basis.get("extraction_binding"):
+        raise DeliveryReconciliationRequired("HISTORICAL_BINDING_RECONCILIATION_REQUIRED")
     if (event.org_id != scope.org_id or ledger.clinic_id != scope.clinic_id
             or ledger.connector_instance_id != event.source
             or basis.get("profile_revision") != profile.revision
             or basis.get("mapping_id") != profile.mapping_id
             or basis.get("mapping_version") != profile.mapping_version
             or basis.get("extraction_binding") != profile.cursor_binding(evidence.resource_kind)):
-        raise ValueError("Material binding change requires governed reprocessing")
+        raise DeliveryReconciliationRequired("MATERIAL_BINDING_RECONCILIATION_REQUIRED")
     if event.resume_from_revision == expected_revision:
         return event
     if event.state != "Blocked" or event.row_version != expected_revision:

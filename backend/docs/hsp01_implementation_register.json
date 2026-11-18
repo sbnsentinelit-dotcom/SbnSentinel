@@ -203,11 +203,108 @@
     "local_integration_commit": "56084f8d471feefa631ccefe370a8c8513f8e425",
     "migration_coordinator": "New developer, delegated by user",
     "migration_parent": "hsp01_hospital_extension",
-    "correction_status": "Eight auditor sequences implemented and locally verified; remote CI/re-review pending",
+    "correction_status": "Published a9ee9895 reviewed: six original findings corrected for reviewed scenarios, two partially corrected; current follow-up tracked separately",
     "evidence_map": "hsp01_auditor_corrections.txt",
     "existing_database_accessed": false,
     "hsp02_stash_sha": "99e0c896e12925e1e7453e3a2c93716e567e048e",
-    "correction_commit_created": false,
-    "push_performed": false
+    "correction_commit_created": true,
+    "push_performed": true,
+    "correction_commit_sha": "a9ee9895021186163f95006a42a51418265f9d87"
+  },
+  "main_integration": {
+    "owner": "New developer",
+    "base_commit": "a9ee9895021186163f95006a42a51418265f9d87",
+    "target_main_commit": "70503767215582d14431f7289d0bcebd503d17c9",
+    "state": "CONFLICT_RESOLVED_MERGE_PENDING_NO_COMMIT",
+    "affected_files": [
+      "src/runtime/app/api/v1/endpoints/encounters.py",
+      "tests/integration/test_hsp01_encounter_merge.py"
+    ],
+    "dependency": "Main pagination/filtering plus HSP01 hospital classification and legacy guard",
+    "acceptance": "Rows, summary, count headers and fallback retain hospital exclusion and selected filters; no fabricated monetary fallback",
+    "authorization": "User approved no-commit integration, conflict resolution and isolated tests; no existing DB, push or stash deletion",
+    "approved_cleanup_files": [
+      "src/runtime/app/api/v1/endpoints/billing.py",
+      "src/runtime/app/api/v1/endpoints/financial_reports.py",
+      "src/runtime/app/api/v1/endpoints/patients.py",
+      "frontend/src/components/CommandCenter/SettingsView.tsx"
+    ],
+    "cleanup_scope": "User explicitly approved unused import/spacing/trailing whitespace only; no behavior or UI design change",
+    "verification": {
+      "new_encounter_cases": 9,
+      "isolated_suites": "3 passed in 15.28 seconds: Encounter merge, hospital directory and hospital source contract",
+      "backend_flake8": "PASS after explicitly approved narrow cleanups",
+      "diff_check": "PASS for index and working tree",
+      "frontend_full_ci": "NOT RUN; dependency advisory gate unresolved",
+      "postgres_for_this_merge": "NOT RUN; no new schema or concurrency change in this merge resolution"
+    },
+    "head_unchanged": "a9ee9895021186163f95006a42a51418265f9d87",
+    "merge_head": "70503767215582d14431f7289d0bcebd503d17c9",
+    "commit_created": false,
+    "push_performed": false,
+    "existing_application_database_accessed": false,
+    "hsp02_stashes_retained": [
+      "3d44cdc5447f27eef9e8a338e2e92aa5b98bb172",
+      "99e0c896e12925e1e7453e3a2c93716e567e048e"
+    ],
+    "remaining_auditor_items": [
+      "picomatch GHSA-fc5q-39xc-vjpf: no patched version listed; actual unchanged policy gate fails; security/release approval unavailable",
+      "Shared startup-screen tests fail; shared frontend owner/name confirmation required",
+      "Windows standalone packaging EPERM; Linux CI verification pending",
+      "No new combined commit or remote CI run; user has not authorized commit/push"
+    ]
+  },
+  "auditor_followup": {
+    "owner": "New developer",
+    "base_commit": "a9ee9895021186163f95006a42a51418265f9d87",
+    "integrated_main": "70503767215582d14431f7289d0bcebd503d17c9",
+    "files": [
+      "api/v1/endpoints/hospital.py",
+      "services/hospital_worker.py",
+      "services/financial_reporting_service.py",
+      ".github/workflows/quality_gate.yml",
+      "tests/integration/test_hospital_source_contract.py",
+      "frontend/src/components/hospital/DepartmentSummary.tsx",
+      "frontend/src/components/hospital/HospitalWorkspace.test.tsx",
+      "docs/hsp01_auditor_followup_reconciliation.txt"
+    ],
+    "authorization": "User requested urgent remaining auditor fixes; no new migration/security exception/commit/push/application DB access",
+    "dependencies": "Existing attribution columns, effective department versions, protected recovery and append-only source evidence",
+    "status": "FUNCTIONAL_FIXES_LOCALLY_VERIFIED_RELEASE_BLOCKED",
+    "frontend_dependency": "Owner approval unavailable; evidence only; keep release gate active",
+    "jobs_api": "row_version supplied; stale refresh and accepted retry tested; original identity/effect retained",
+    "historical_binding": "Explicit reconciliation-required HTTP 409; no inferred or rewritten historical bindings",
+    "historical_attribution": "Current report rows/metrics/export exclude unvalidated historical department assignments; unresolved count and coverage warning; frozen snapshots preserved; definition version 2",
+    "migration": "No new migration; existing correction upgrade tested on synthetic earlier-build records in disposable schemas; application DB not accessed",
+    "ci_bootstrap": "Job-scoped disposable DB URL shared by Alembic and tests; local upgrade + 3 backend unit tests passed",
+    "verification": {
+      "sqlite_suites": "3 isolated suite wrappers pass",
+      "postgres": "47 cases: 46 passed, optional load case skipped",
+      "hospital_ui": "10 tests passed; TypeScript passed",
+      "frontend_lint": "PASS",
+      "frontend_full_node22": "105 passed, 2 startup-screen failures, 10 skipped (run before new attribution UI case; targeted hospital rerun 10 passed)",
+      "frontend_build": "Compile and TypeScript pass; standalone packaging blocked by Windows EPERM; full build NOT PASS"
+    },
+    "release_blockers": [
+      "picomatch GHSA-fc5q-39xc-vjpf: no patched version listed; actual unchanged policy gate fails; security/release approval unavailable",
+      "Shared startup-screen tests fail; shared frontend owner/name confirmation required",
+      "Windows standalone packaging EPERM; Linux CI verification pending",
+      "No new combined commit or remote CI run; user has not authorized commit/push"
+    ],
+    "owners": {
+      "functional_corrections": "New developer",
+      "migration_coordination": "New developer; no new migration needed for runtime protection",
+      "dependency_disposition": "Authorized security/release owner; approval unavailable",
+      "startup_screen": "Existing shared frontend owner; individual name not confirmed"
+    },
+    "published_pr_head": "a9ee9895021186163f95006a42a51418265f9d87",
+    "local_merge_head": "70503767215582d14431f7289d0bcebd503d17c9",
+    "followup_commit_created": false,
+    "followup_pushed": false,
+    "existing_database_accessed": false,
+    "hsp02_stashes_retained": [
+      "3d44cdc5447f27eef9e8a338e2e92aa5b98bb172",
+      "99e0c896e12925e1e7453e3a2c93716e567e048e"
+    ]
   }
 }

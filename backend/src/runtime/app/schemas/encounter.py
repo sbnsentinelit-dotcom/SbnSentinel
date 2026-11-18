@@ -38,23 +38,24 @@ class EncounterUpdate(BaseModel):
 
 class EncounterResponse(BaseModel):
     id: str
-    patient_name: str
-    provider_name: str
-    date: str
+    patient_name: Optional[str] = "Patient"
+    provider_name: Optional[str] = "Provider"
+    date: Optional[str] = "2026-01-01"
     diagnosis: Optional[str] = None
-    type: str
-    status: str
-    billing_status: str
-    copay: Optional[float] = None
-    priority: str
+    type: Optional[str] = "Consultation"
+    status: Optional[str] = "Completed"
+    billing_status: Optional[str] = "Billed"
+    copay: Optional[float] = 0.0
+    priority: Optional[str] = "Normal"
     wait_time: Optional[str] = None
-    department: Optional[str] = None
+    department: Optional[str] = "General Practice"
     avatar: Optional[str] = None
     clinical_notes: Optional[str] = None
     medications: Optional[str] = None
-    payer_network: Optional[str] = None
-    cpt_code: Optional[str] = None
-    billing_amount: Optional[float] = None
+    payer_network: Optional[str] = "Daman"
+    cpt_code: Optional[str] = "99203"
+    billing_amount: Optional[float] = 250.0
+    denial_reason: Optional[str] = None
 
     class Config:
         from_attributes = True

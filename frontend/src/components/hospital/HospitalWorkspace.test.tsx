@@ -22,6 +22,15 @@ function response(data: unknown) { return { json: async () => data } as Response
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe('HSP01 hospital workspace', () => {
+  it('shows unresolved historical attribution as a count and coverage explanation', () => {
+    const data = snapshot('0.00');
+    render(<DepartmentSummary snapshot={{ ...data,
+      metrics: { ...data.metrics, unresolved_attribution_lines: 2 },
+      coverage_exceptions: ['Historical department attribution unresolved; excluded from departmental totals'] }} />);
+    expect(screen.getByText('Lines with unresolved department attribution')).toBeTruthy();
+    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.getByText(/excluded from departmental totals/)).toBeTruthy();
+  });
   it('only offers server-authorized directories and narrows selection', () => {
     const change = vi.fn();
     render(<HospitalScopeSelector facilities={[facility]} selection={{ clinicId: 'a', departmentId: '', revision: 1 }} onChange={change} />);

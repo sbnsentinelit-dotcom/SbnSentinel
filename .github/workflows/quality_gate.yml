@@ -10,6 +10,11 @@ jobs:
   backend-quality:
     name: Backend Quality Assurance
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite:///${{ runner.temp }}/hsp01_backend_quality.db
+      SQLALCHEMY_DATABASE_URL: sqlite:///${{ runner.temp }}/hsp01_backend_quality.db
+      SENTINEL_DISABLE_SCHEMA_AUTOCREATE: "1"
+      SECRET_KEY: "test-secret-key-for-ci"
     
     defaults:
       run:
@@ -29,6 +34,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
+
+    - name: Migrate disposable quality database before application imports
+      run: python -B -m alembic upgrade head
 
     - name: SES-011 Linting (Flake8)
       run: |

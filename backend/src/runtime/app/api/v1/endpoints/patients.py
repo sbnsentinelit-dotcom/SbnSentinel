@@ -1,8 +1,9 @@
-from fastapi import APIRouter
-from typing import List, Dict, Any
-from datetime import datetime, timedelta
+import math
 import os
 import json
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Query, Response
 
 router = APIRouter()
 
@@ -17,11 +18,7 @@ FIRST_NAMES = ["Mariam", "Reem", "Aisha", "Mona", "Huda", "Khalid", "Tariq", "Mo
 LAST_NAMES = ["Ali", "Malik", "Verma", "Sharma", "George", "Nair", "Al-Mansoori", "Rahman", "Al-Hassan", "Ahmed", "Al-Nuaimi", "Patel", "Siddiqui", "Khan", "Hussain", "Thomas"]
 
 
-@router.get("/", response_model=List[Dict[str, Any]])
-def get_all_uae_patients():
-    """
-    Returns the complete 500 UAE Patient Master Directory matching the Dubai Clinic dataset.
-    """
+def _get_all_raw_patients() -> List[Dict[str, Any]]:
     global _cached_patients
     if _cached_patients:
         return _cached_patients
@@ -72,10 +69,10 @@ def get_all_uae_patients():
         f = FIRST_NAMES[(i * 7) % len(FIRST_NAMES)]
         last_n = LAST_NAMES[(i * 11) % len(LAST_NAMES)]
         name = f"{f} {last_n}"
-        em = EMIRATES[i % len(EMIRATES)]
-        nat = NATIONALITIES[(i * 3) % len(NATIONALITIES)]
+        em = EMIRATES[(i * 3) % len(EMIRATES)]
         payer = PAYERS[(i * 5) % len(PAYERS)]
         plan = PLANS[(i * 2) % len(PLANS)] if payer != "Self Pay" else "Self Pay"
+        nat = NATIONALITIES[(i * 13) % len(NATIONALITIES)]
         pat_id = f"PAT2026{i:04d}"
         mrn = f"MRN-{i:06d}"
         mem_id = f"TEST{10000000 + i * 173 % 89999999}"
@@ -105,5 +102,54 @@ def get_all_uae_patients():
             "policy_end": p_end,
             "status": "Active"
         })
+
+    _cached_patients = patients
+    return patients
+
+
+@router.get("", response_model=List[Dict[str, Any]])
+@router.get("/", response_model=List[Dict[str, Any]])
+def get_all_uae_patients(
+    response: Response,
+    page: Optional[int] = Query(None, ge=1),
+    page_size: Optional[int] = Query(None, ge=1, le=500),
+    search: Optional[str] = Query(None),
+    emirate: Optional[str] = Query(None),
+    payer: Optional[str] = Query(None),
+):
+    """
+    Returns UAE Patient Master Directory matching the Dubai Clinic dataset with backend pagination.
+    """
+    patients = _get_all_raw_patients()
+
+    if search:
+        s = search.lower().strip()
+        patients = [
+            p for p in patients
+            if s in (p.get("name") or "").lower()
+            or s in (p.get("patient_id") or "").lower()
+            or s in (p.get("mrn") or "").lower()
+            or s in (p.get("mobile") or "")
+            or s in (p.get("member_id") or "").lower()
+            or s in (p.get("emirate") or "").lower()
+            or s in (p.get("nationality") or "").lower()
+        ]
+
+    if emirate and emirate != "All":
+        patients = [p for p in patients if p.get("emirate") == emirate]
+
+    if payer and payer != "All":
+        patients = [p for p in patients if p.get("payer") == payer]
+
+    total_count = len(patients)
+    response.headers["X-Total-Count"] = str(total_count)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count, X-Total-Pages"
+
+    if page is not None:
+        p_size = page_size or 20
+        total_pages = max(1, math.ceil(total_count / p_size))
+        response.headers["X-Total-Pages"] = str(total_pages)
+        start = (page - 1) * p_size
+        return patients[start:start + p_size]
 
     return patients

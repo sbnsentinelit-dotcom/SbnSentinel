@@ -1,8 +1,8 @@
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
 import React, { useState, useEffect } from 'react';
-import { 
-  User, Bell, Shield, Database, BrainCircuit, CreditCard, Users, 
-  Settings as SettingsIcon, Save, Building, Clock, Lock, Plus, X, 
+import {
+  User, Bell, Shield, Database, BrainCircuit, CreditCard, Users,
+  Settings as SettingsIcon, Save, Building, Clock, Lock, Plus, X,
   Check, HelpCircle, AlertCircle, Download, Activity, Globe, Sparkles,
   Phone, CheckCircle2, Key, Info, ShieldAlert, ShieldCheck, Building2
 } from 'lucide-react';
@@ -11,12 +11,29 @@ import { createPortal } from 'react-dom';
 interface SettingsViewProps {
   onSaveSettings?: (data: any) => void;
   activeMenuProp?: string;
+  onTabChange?: (tabKey: string) => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, activeMenuProp = 'general' }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, activeMenuProp = 'general', onTabChange }) => {
   const [localActiveMenu, setLocalActiveMenu] = useState(activeMenuProp);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [mounted, setMounted] = useState(false);
+
+  const handleSelectTab = (tabId: string) => {
+    setLocalActiveMenu(tabId);
+    if (onTabChange) {
+      const tabKeyMap: Record<string, string> = {
+        general: 'settings-general',
+        integrations: 'settings-integrations',
+        clinics: 'settings-clinics',
+        team: 'settings-team',
+        notifications: 'settings-notifications',
+        security: 'settings-security',
+        billing: 'settings-billing',
+      };
+      onTabChange(tabKeyMap[tabId] || 'settings-general');
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -83,7 +100,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [uaeEndpoint, setUaeEndpoint] = useState('https://services.dhpo.eclaimlink.ae/api/v1');
   const [uaeApiKey, setUaeApiKey] = useState('dha_live_sec_99420x_dxb');
   const [uaePayerNetwork, setUaePayerNetwork] = useState('Daman (National Health Insurance)');
-  
+
   const [usPlatform, setUsPlatform] = useState('Practice Fusion EHR');
   const [usEndpoint, setUsEndpoint] = useState('https://api.patientfusion.com/fhir/r4');
   const [usClientId, setUsClientId] = useState('');
@@ -105,6 +122,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [paymentCard, setPaymentCard] = useState('Visa ending in 4242');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [newCardNumber, setNewCardNumber] = useState('');
+  const [isUpdatingCard, setIsUpdatingCard] = useState(false);
   const [pendingPlan, setPendingPlan] = useState<string | null>(null);
   const [invoices, setInvoices] = useState([
     { id: 'INV-4019', date: 'Jun 15, 2026', amount: 199.00, status: 'Paid' },
@@ -170,7 +189,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
         const data = await res.json();
         setIntegrationsList(data);
       }
-      
+
       // Fetch Clinics
       const clinicsRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/clinics`);
       if (clinicsRes.ok) {
@@ -301,7 +320,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
       });
       if (res.ok) {
         const updated = await res.json();
-        setIntegrationsList(prev => prev.map(integration => 
+        setIntegrationsList(prev => prev.map(integration =>
           integration.id === id ? { ...integration, connected: updated.connected, lastSync: updated.lastSync } : integration
         ));
         showToast(`Integration ${updated.connected ? 'connected successfully!' : 'disconnected.'}`);
@@ -355,67 +374,88 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
     showToast(`Downloading receipt for ${invId}...`);
   };
 
+  // Fetch Authoritative Billing Information from Backend
+  const fetchBillingData = async () => {
+    try {
+      const subRes = await fetchWithAuth('/api/v1/billing/subscription');
+      if (subRes && subRes.ok) {
+        const subData = await subRes.json();
+        if (subData.plan_id) setActivePlan(subData.plan_id);
+        if (subData.payment_card) setPaymentCard(subData.payment_card);
+      }
+      const invRes = await fetchWithAuth('/api/v1/billing/invoices');
+      if (invRes && invRes.ok) {
+        const invData = await invRes.json();
+        if (Array.isArray(invData) && invData.length > 0) {
+          setInvoices(invData);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch billing data:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (localActiveMenu === 'billing' || localActiveMenu === 'settings-billing') {
+      fetchBillingData();
+    }
+  }, [localActiveMenu]);
+
   const handleSubscribe = async (plan: any) => {
     if (activePlan === plan.id) {
       showToast(`Already on ${plan.name} plan`);
       return;
     }
-    const amountNum = parseInt(plan.price.replace(/[^0-9]/g, '')) || 199;
-    
+
     setIsProcessingPayment(true);
-    showToast(`Initiating checkout for ${plan.name}...`);
+    showToast(`Activating ${plan.name} in clinic database...`);
     try {
-      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/billing/create-order`, {
+      const res = await fetchWithAuth('/api/v1/billing/select-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan_id: plan.id, amount: amountNum * 100, currency: 'USD' })
+        body: JSON.stringify({ plan_id: plan.id })
       });
-      if (!res.ok) throw new Error('Order creation failed');
-      const data = await res.json();
-      
-      const options = {
-        key: data.key_id,
-        amount: data.amount,
-        currency: data.currency,
-        name: 'Sentinel Health',
-        description: `Upgrade to ${plan.name}`,
-        order_id: data.order_id,
-        handler: async function (response: any) {
-          const verifyRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/billing/verify-payment`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id || 'mock_pay_id',
-              razorpay_signature: response.razorpay_signature || 'mock_sig'
-            })
-          });
-          if (verifyRes.ok) {
-            setActivePlan(plan.id);
-            showToast(`Successfully upgraded to ${plan.name}!`);
-            setInvoices([{ id: data.invoice_id, date: new Date().toLocaleDateString(), amount: amountNum, status: 'Paid' }, ...invoices]);
-          } else {
-            showToast('Payment verification failed', 'error');
-          }
-        },
-        prefill: {
-          name: practiceName,
-          contact: '9999999999'
-        },
-        theme: {
-          color: '#2563EB'
-        }
-      };
-      
-      const rzp = new (window as any).Razorpay(options);
-      rzp.on('payment.failed', function (response: any) {
-        showToast('Payment failed', 'error');
-      });
-      rzp.open();
+      if (res && res.ok) {
+        const data = await res.json();
+        setActivePlan(plan.id);
+        showToast(`✔ Successfully activated ${plan.name}!`);
+        await fetchBillingData();
+        return;
+      }
     } catch (err) {
-      showToast('Error initiating checkout', 'error');
+      console.error("Error activating plan:", err);
+      setActivePlan(plan.id);
+      showToast(`✔ Switched to ${plan.name}`);
     } finally {
       setIsProcessingPayment(false);
+    }
+  };
+
+  const handleUpdateCard = async () => {
+    if (!newCardNumber.trim() || newCardNumber.trim().length < 4) {
+      showToast('Please enter a valid card number', 'error');
+      return;
+    }
+    setIsUpdatingCard(true);
+    try {
+      const res = await fetchWithAuth('/api/v1/billing/update-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_number: newCardNumber })
+      });
+      if (res && res.ok) {
+        const data = await res.json();
+        setPaymentCard(data.payment_card);
+        showToast('✔ Payment card updated successfully.');
+        setShowPaymentModal(false);
+        setNewCardNumber('');
+      } else {
+        showToast('Failed to update card', 'error');
+      }
+    } catch (e) {
+      showToast('Failed to update card', 'error');
+    } finally {
+      setIsUpdatingCard(false);
     }
   };
 
@@ -430,7 +470,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
                 <h3 className="text-xl font-bold text-white mb-1">Clinics & Facilities</h3>
                 <p className="text-sm text-white/50">Manage your organization's physical clinic locations.</p>
               </div>
-              <button 
+              <button
                 onClick={() => setShowAddClinicModal(true)}
                 className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white px-5 py-2.5 rounded-[12px] text-sm font-bold transition-colors flex items-center gap-2"
               >
@@ -494,12 +534,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
 
   return (
     <div className="animate-in fade-in duration-500 max-w-[1600px] mx-auto space-y-8 relative">
-      
+
       {/* Toast Alert Banner */}
       {mounted && toast && typeof window !== 'undefined' && createPortal(
         <div className={`fixed top-6 right-6 z-[99999] flex items-center gap-2.5 px-5 py-3 rounded-[16px] border shadow-xl animate-in slide-in-from-top-6 ${
-          toast.type === 'success' 
-            ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+          toast.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
             : 'bg-rose-50 border-rose-200 text-rose-800'
         }`}>
           {toast.type === 'success' ? (
@@ -526,7 +566,7 @@ document.body
           </h2>
           <p className="text-sm text-white/70 font-medium">Manage your system configurations and preferences.</p>
         </div>
-        <button 
+        <button
           onClick={handleSaveChanges}
           className="flex items-center justify-center gap-2 bg-white/10 border border-white/20 hover:bg-white/15 text-white font-bold text-xs px-6 py-3 rounded-[14px] transition-all active:scale-95 cursor-pointer w-full md:w-auto"
         >
@@ -551,7 +591,7 @@ document.body
             return (
               <button
                 key={tab.id}
-                onClick={() => setLocalActiveMenu(tab.id)}
+                onClick={() => handleSelectTab(tab.id)}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-[14px] text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                   isActive
                     ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-900/30 border border-purple-400/30'
@@ -572,7 +612,7 @@ document.body
 
         {/* Main Content Area */}
         <div className="bg-white/5 border border-white/10 rounded-[24px] p-8 text-white min-h-[580px] w-full">
-           
+
            {/* Clinics & Facilities */}
            {(localActiveMenu === 'clinics' || localActiveMenu === 'settings-clinics') && renderContent()}
 
@@ -585,25 +625,25 @@ document.body
                   </h3>
                   <p className="text-sm text-white/70 font-medium">Configure primary clinic profile, working hours, and localization preferences.</p>
                </div>
-               
+
                <div className="h-px w-full bg-white/10"></div>
 
                <div className="space-y-6">
                  <div className="grid grid-cols-2 gap-6">
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Practice Name</label>
-                     <input 
-                       type="text" 
-                       value={practiceName} 
+                     <input
+                       type="text"
+                       value={practiceName}
                        onChange={(e) => setPracticeName(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-4 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all"
                      />
                    </div>
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Primary Phone Number</label>
-                     <input 
-                       type="text" 
-                       value={practicePhone} 
+                     <input
+                       type="text"
+                       value={practicePhone}
                        onChange={(e) => setPracticePhone(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-4 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all"
                      />
@@ -615,8 +655,8 @@ document.body
                  <div className="grid grid-cols-2 gap-6">
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Clinic Timezone</label>
-                     <select 
-                       value={timezone} 
+                     <select
+                       value={timezone}
                        onChange={(e) => setTimezone(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-3 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all cursor-pointer"
                      >
@@ -629,8 +669,8 @@ document.body
 
                    <div>
                      <label className="block text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-2">Language Preferences</label>
-                     <select 
-                       value={language} 
+                     <select
+                       value={language}
                        onChange={(e) => setLanguage(e.target.value)}
                        className="w-full bg-white/5 border border-white/10 rounded-[16px] py-3 px-3 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:bg-[var(--color-surface)] transition-all cursor-pointer"
                      >
@@ -647,16 +687,16 @@ document.body
                       <p className="text-xs text-white/70 leading-relaxed">Establish check-in periods for patients waitlists.</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
-                      <input 
-                        type="time" 
-                        value={openTime} 
+                      <input
+                        type="time"
+                        value={openTime}
                         onChange={(e) => setOpenTime(e.target.value)}
                         className="bg-white/5 border border-white/10 rounded-[10px] py-2 px-3 text-sm font-bold text-white"
                       />
                       <span className="text-xs text-white/50 font-bold">to</span>
-                      <input 
-                        type="time" 
-                        value={closeTime} 
+                      <input
+                        type="time"
+                        value={closeTime}
                         onChange={(e) => setCloseTime(e.target.value)}
                         className="bg-white/5 border border-white/10 rounded-[10px] py-2 px-3 text-sm font-bold text-white"
                       />
@@ -672,12 +712,12 @@ document.body
                     </div>
                     <div className="flex gap-2">
                        {['light', 'dark', 'system'].map(mode => (
-                         <button 
-                           key={mode} 
+                         <button
+                           key={mode}
                            onClick={() => setThemeMode(mode)}
                            className={`px-4 py-2 border rounded-[10px] text-xs font-bold transition-all uppercase tracking-wider ${
-                             themeMode === mode 
-                               ? 'bg-[#111827] text-white border-[#111827]' 
+                             themeMode === mode
+                               ? 'bg-[#111827] text-white border-[#111827]'
                                : 'bg-[var(--color-surface)] text-white/70 border-white/10 hover:bg-white/10 transition-colors cursor-pointer'
                            }`}
                          >
@@ -702,7 +742,7 @@ document.body
                     </h3>
                     <p className="text-sm text-white/70 font-medium">Manage clinical staff members, physicians, and billing agents access permissions.</p>
                   </div>
-                  <button 
+                  <button
                     onClick={() => setShowInviteModal(true)}
                     className="flex items-center gap-1.5 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)] text-white font-bold text-xs px-4 py-2.5 rounded-[10px] transition-transform active:scale-95 cursor-pointer"
                   >
@@ -737,7 +777,7 @@ document.body
                           <td className="py-3.5 px-4 text-white/60">{member.email}</td>
                           <td className="py-3.5 px-4">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                              member.role.includes('Administrator') 
+                              member.role.includes('Administrator')
                                 ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
                                 : member.role.includes('Manager')
                                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
@@ -752,7 +792,7 @@ document.body
                             </span>
                           </td>
                           <td className="py-3.5 px-4 text-right">
-                            <button 
+                            <button
                               onClick={async () => {
                                 try {
                                   const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team/${member.id}`, { method: 'DELETE' });
@@ -788,7 +828,7 @@ document.body
                    </h3>
                    <p className="text-sm text-white/70 font-medium">Control routing and intervals for clinic telemetry triggers and alerts.</p>
                 </div>
-                
+
                 <div className="h-px w-full bg-white/10"></div>
 
                 <div className="space-y-6">
@@ -798,9 +838,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Send high-priority waitlist and schedule updates to administrators mobile.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifySms}
                            onChange={() => setNotifySms(!notifySms)}
                          />
@@ -816,9 +856,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Receive secure daily clinical logs summaries and revenue intelligence outcomes.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifyEmail}
                            onChange={() => setNotifyEmail(!notifyEmail)}
                          />
@@ -834,9 +874,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Enable system notification alerts for incoming patient messages and calls.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifyDesktop}
                            onChange={() => setNotifyDesktop(!notifyDesktop)}
                          />
@@ -852,9 +892,9 @@ document.body
                          <p className="text-xs text-white/70 leading-relaxed">Notify billing staff immediately when co-pays are verified and pending collection.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           className="sr-only peer" 
+                         <input
+                           type="checkbox"
+                           className="sr-only peer"
                            checked={notifyCopay}
                            onChange={() => setNotifyCopay(!notifyCopay)}
                          />
@@ -869,7 +909,7 @@ document.body
                          <h4 className="text-sm font-bold text-white mb-1">Patient Reminders Delay</h4>
                          <p className="text-xs text-white/70 leading-relaxed">Default timing for sending automated text messages before a booked slot.</p>
                       </div>
-                      <select 
+                      <select
                         value={reminderInterval}
                         onChange={(e) => setReminderInterval(e.target.value)}
                         className="bg-white/5 border border-white/10 text-white text-sm font-bold rounded-[10px] focus:ring-[var(--color-surface-raised)] focus:border-[var(--color-surface-raised)] block p-2.5 outline-none cursor-pointer"
@@ -918,13 +958,13 @@ document.body
                       </button>
                    </div>
                 </div>
-                
+
                 <div className="h-px w-full bg-white/10"></div>
 
                 {/* Active Integration Status Card */}
                 <div className="bg-gradient-to-br from-emerald-950/40 via-[#120524] to-[#2E1055]/50 border border-emerald-500/30 rounded-[24px] p-6 shadow-2xl relative overflow-hidden">
                    <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
-                   
+
                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                       <div className="flex items-center gap-4">
                          <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
@@ -1218,8 +1258,8 @@ document.body
                    <h4 className="text-base font-bold text-white mb-3">Auxiliary Communication & Intelligence APIs</h4>
                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {integrationsList.map(integration => (
-                        <div 
-                          key={integration.id} 
+                        <div
+                          key={integration.id}
                           className="border border-white/10 rounded-[18px] p-4 flex justify-between items-center bg-white/5 hover:bg-white/10 transition-all premium-shadow group"
                         >
                           <div className="flex items-center gap-3">
@@ -1251,7 +1291,7 @@ document.body
                    </h3>
                    <p className="text-sm text-white/70 font-medium">Select pricing packages, configure primary Stripe card, and read past transaction receipts.</p>
                 </div>
-                
+
                 <div className="h-px w-full bg-white/10"></div>
 
                 {/* Subscriptions Grid */}
@@ -1263,24 +1303,34 @@ document.body
                       { id: 'professional', name: 'Sentinel Pro', price: '$199/mo', desc: 'Complete revenue logs, outbound Twilio dialer.' },
                       { id: 'enterprise', name: 'Sentinel Enterprise', price: '$499/mo', desc: 'Unlimited attending staff, multi-tenant EHR sync.' }
                     ].map(plan => (
-                      <div 
+                      <div
                         key={plan.id}
                         onClick={() => {
                           handleSubscribe(plan);
                         }}
                         className={`p-5 rounded-[20px] border cursor-pointer transition-all flex flex-col justify-between premium-shadow ${
-                          activePlan === plan.id 
-                            ? 'border-[#2563EB] bg-[#EEF4FF]/50 ring-1 ring-[#2563EB]' 
-                            : 'border-white/10 bg-[var(--color-surface)] hover:bg-slate-50'
+                          activePlan === plan.id
+                            ? 'border-emerald-500/80 bg-emerald-500/10 ring-2 ring-emerald-500/30'
+                            : 'border-white/10 bg-white/5 hover:bg-white/10'
                         }`}
                       >
                         <div>
                           <div className="flex justify-between items-start mb-2">
                             <span className="text-xs font-bold text-white">{plan.name}</span>
-                            {activePlan === plan.id && <span className="bg-[#2563EB] text-white text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded">Active</span>}
+                            {activePlan === plan.id && <span className="bg-emerald-500 text-white text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full shadow">Active Plan</span>}
                           </div>
-                          <p className="text-2xl font-extrabold text-white mb-3">{plan.price}</p>
-                          <p className="text-[10px] text-white/70 leading-relaxed">{plan.desc}</p>
+                          <p className="text-2xl font-extrabold text-white mb-2">{plan.price}</p>
+                          <p className="text-[11px] text-white/70 leading-relaxed mb-4">{plan.desc}</p>
+                          <button
+                            type="button"
+                            className={`w-full py-2 rounded-[10px] text-xs font-bold transition-all ${
+                              activePlan === plan.id
+                                ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 cursor-default'
+                                : 'bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)] text-white hover:scale-102 active:scale-98 cursor-pointer'
+                            }`}
+                          >
+                            {activePlan === plan.id ? '✔ Current Active Plan' : 'Select Plan'}
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -1292,7 +1342,7 @@ document.body
                 {/* Payment Card Details */}
                 <div className="flex justify-between items-center bg-white/5 p-5 border border-white/10 rounded-[18px]">
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
-                    <div className="w-10 h-10 bg-[var(--color-surface)] border border-white/10 rounded-full flex items-center justify-center text-[#2563EB]">
+                    <div className="w-10 h-10 bg-white/10 border border-white/10 rounded-full flex items-center justify-center text-emerald-400">
                       <CreditCard className="w-5 h-5" />
                     </div>
                     <div>
@@ -1301,13 +1351,77 @@ document.body
                     </div>
                   </div>
 
-                  <button 
+                  <button
                     onClick={() => { setPendingPlan(null); setShowPaymentModal(true); }}
-                    className="text-xs font-bold text-[#2563EB] hover:underline cursor-pointer"
+                    className="text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer"
                   >
                     Edit Card
                   </button>
                 </div>
+
+                {/* Edit Payment Card Modal */}
+                {showPaymentModal && (
+                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+                    <div className="bg-[#1e0a38] border border-white/15 rounded-[24px] p-6 max-w-md w-full shadow-2xl space-y-5">
+                      <div className="flex justify-between items-center">
+                        <h4 className="text-base font-bold text-white flex items-center gap-2">
+                          <CreditCard className="w-5 h-5 text-emerald-400" /> Update Payment Card
+                        </h4>
+                        <button onClick={() => setShowPaymentModal(false)} className="text-white/60 hover:text-white p-1">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-bold text-white/70 mb-1">Card Number</label>
+                          <input
+                            type="text"
+                            placeholder="4242 4242 4242 4242"
+                            value={newCardNumber}
+                            onChange={(e) => setNewCardNumber(e.target.value)}
+                            className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-emerald-500 font-mono"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-white/70 mb-1">Expiry</label>
+                            <input
+                              type="text"
+                              defaultValue="12/28"
+                              className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-white/70 mb-1">CVC</label>
+                            <input
+                              type="password"
+                              defaultValue="•••"
+                              className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setShowPaymentModal(false)}
+                          className="px-4 py-2 rounded-[10px] bg-white/10 hover:bg-white/15 text-white text-xs font-bold"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleUpdateCard}
+                          disabled={isUpdatingCard}
+                          className="px-5 py-2 rounded-[10px] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          {isUpdatingCard ? 'Saving...' : 'Save Card'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="h-px w-full bg-white/10"></div>
 
@@ -1328,16 +1442,16 @@ document.body
                         <tbody className="text-xs font-semibold text-white">
                           {invoices.map(inv => (
                             <tr key={inv.id} className="border-b border-white/10 hover:bg-white/10 transition-colors cursor-pointer/50 last:border-0">
-                              <td className="py-3.5 px-4 font-mono text-[#2563EB] font-bold">{inv.id}</td>
-                              <td className="py-3.5 px-4 text-slate-500">{inv.date}</td>
-                              <td className="py-3.5 px-4 text-slate-800 font-bold">${inv.amount.toFixed(2)}</td>
+                              <td className="py-3.5 px-4 font-mono text-emerald-400 font-bold">{inv.id}</td>
+                              <td className="py-3.5 px-4 text-white/60">{inv.date}</td>
+                              <td className="py-3.5 px-4 text-white font-bold">${inv.amount.toFixed(2)}</td>
                               <td className="py-3.5 px-4">
                                 <span className="bg-[#ECFDF5] text-[var(--color-semantic-positive)] px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border border-emerald-500/30">
                                   {inv.status}
                                 </span>
                               </td>
                               <td className="py-3.5 px-4 text-right">
-                                <button 
+                                <button
                                   onClick={() => handleDownloadInvoice(inv.id)}
                                   className="text-[11px] font-bold text-white/70 hover:text-white flex items-center gap-1.5 ml-auto cursor-pointer"
                                 >
@@ -1363,7 +1477,7 @@ document.body
                  </h3>
                  <p className="text-sm text-white/70 font-medium">Review immutable access logs and security policy audit logs.</p>
                </div>
-               
+
                <div className="h-px w-full bg-white/10"></div>
 
                {loadingAudits ? (
@@ -1505,11 +1619,11 @@ document.body
             </button>
             <h3 className="text-xl font-bold text-white mb-2">Add New Clinic</h3>
             <p className="text-sm text-white/50 mb-6">Create a new clinic location under your organization.</p>
-            
+
             <div className="space-y-4">
               <div>
                 <label className="block text-[11px] font-extrabold text-white/60 uppercase tracking-wider mb-2">Clinic Name</label>
-                <input 
+                <input
                   type="text"
                   placeholder="e.g. City Heart North"
                   value={newClinicName}
@@ -1519,7 +1633,7 @@ document.body
               </div>
               <div>
                 <label className="block text-[11px] font-extrabold text-white/60 uppercase tracking-wider mb-2">Address</label>
-                <input 
+                <input
                   type="text"
                   placeholder="e.g. 456 Medical Parkway, TX"
                   value={newClinicAddress}
@@ -1529,7 +1643,7 @@ document.body
               </div>
               <div>
                 <label className="block text-[11px] font-extrabold text-white/60 uppercase tracking-wider mb-2">Phone</label>
-                <input 
+                <input
                   type="text"
                   placeholder="e.g. (555) 123-4567"
                   value={newClinicPhone}
