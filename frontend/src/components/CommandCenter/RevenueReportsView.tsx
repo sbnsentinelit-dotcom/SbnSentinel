@@ -1,6 +1,6 @@
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
 import React, { useState, useEffect } from 'react';
-import { Download, Filter, TrendingUp, DollarSign, Activity, FileText, AlertCircle, BrainCircuit, ArrowRight, ShieldCheck, PieChart, Check, X, CheckCircle2 } from 'lucide-react';
+import { Download, Filter, TrendingUp, DollarSign, Activity, FileText, AlertCircle, BrainCircuit, ArrowRight, ShieldCheck, PieChart, Check, X, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store';
@@ -20,6 +20,8 @@ export const RevenueReportsView: React.FC = () => {
   const [backendSummary, setBackendSummary] = useState<any | null>(null);
 
   const [selectedClaimDetail, setSelectedClaimDetail] = useState<any | null>(null);
+  const [revenuePage, setRevenuePage] = useState(1);
+  const revenuePageSize = 15;
 
   const fetchEncounters = async () => {
     try {
@@ -325,14 +327,14 @@ export const RevenueReportsView: React.FC = () => {
                     </td>
                   </tr>
                 ) : null}
-                {encounters.map((enc, i) => {
+                {encounters.slice((revenuePage - 1) * revenuePageSize, revenuePage * revenuePageSize).map((enc, i) => {
                 const { payer, cpt, amount } = getBillingDetails(enc);
                 const row = {
                   id: enc.id,
                   patient_name: enc.patient_name,
                   code: cpt,
                   payer: payer,
-                  amt: `$${amount.toFixed(2)}`,
+                  amt: `AED ${amount.toFixed(2)}`,
                   status: enc.billing_status || 'Pending',
                   date: enc.date || 'Today',
                   diagnosis: enc.diagnosis || 'No Diagnosis Recorded',
@@ -363,7 +365,7 @@ export const RevenueReportsView: React.FC = () => {
                     <td className="py-4 px-4 font-bold">{enc.patient_name}</td>
                     <td className="py-4 px-4 font-bold text-xs">{row.code}</td>
                     <td className="py-4 px-4 text-white/70">{row.payer}</td>
-                    <td className="py-4 px-4 font-mono">{row.amt}</td>
+                    <td className="py-4 px-4 font-mono text-emerald-400 font-bold">{row.amt}</td>
                     <td className="py-4 px-4">
                       <span className={`px-3 py-1 ${sBg} ${sText} font-bold rounded-[8px] text-[11px]`}>
                         {row.status}
@@ -374,6 +376,34 @@ export const RevenueReportsView: React.FC = () => {
               })}
             </tbody>
           </table>
+
+          {/* Revenue Activity Pagination Controls */}
+          {encounters.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-white/10 text-xs">
+              <span className="text-white/60 font-medium">
+                Showing <strong className="text-white font-bold">{((revenuePage - 1) * revenuePageSize) + 1}</strong> to <strong className="text-white font-bold">{Math.min(revenuePage * revenuePageSize, encounters.length)}</strong> of <strong className="text-white font-bold">{encounters.length}</strong> Billing Records
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setRevenuePage(prev => Math.max(prev - 1, 1))}
+                  disabled={revenuePage === 1}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" /> Prev
+                </button>
+                <span className="px-3 py-1.5 rounded-[10px] bg-white/10 border border-white/15 font-bold text-white text-xs">
+                  Page {revenuePage} of {Math.ceil(encounters.length / revenuePageSize) || 1}
+                </span>
+                <button
+                  onClick={() => setRevenuePage(prev => Math.min(prev + 1, Math.ceil(encounters.length / revenuePageSize) || 1))}
+                  disabled={revenuePage === (Math.ceil(encounters.length / revenuePageSize) || 1)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  Next <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
  

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import { FileText, Search, Filter, Download, CheckCircle2, FileSignature, Receipt, CreditCard, ChevronRight, AlertTriangle, ShieldCheck, ShieldAlert, Check, Sparkles, Info, Printer, Plus, X, FileSpreadsheet, Users } from 'lucide-react';
+import { FileText, Search, Filter, Download, CheckCircle2, FileSignature, Receipt, CreditCard, ChevronLeft, ChevronRight, AlertTriangle, ShieldCheck, ShieldAlert, Check, Sparkles, Info, Printer, Plus, X, FileSpreadsheet, Users } from 'lucide-react';
 
 export const ClinicalLogsView: React.FC = () => {
   const [activeBillId, setActiveBillId] = useState<string | null>(null);
@@ -28,6 +28,8 @@ export const ClinicalLogsView: React.FC = () => {
   // Dynamic state for encounters loaded from database
   const [encounters, setEncounters] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 15;
   const [clinicDoctors, setClinicDoctors] = useState<string[]>(() => {
     const defaults = ['City Heart - Dr Jenkins', 'Vijay Maurya'];
     if (typeof window !== 'undefined') {
@@ -116,6 +118,9 @@ export const ClinicalLogsView: React.FC = () => {
       (e.billing_status || '').toLowerCase().includes(q)
     );
   });
+
+  const totalPages = Math.ceil(filteredEncounters.length / pageSize) || 1;
+  const paginatedEncounters = filteredEncounters.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const activeEncounter = encounters.find(e => e.id === activeBillId);
 
@@ -628,7 +633,7 @@ export const ClinicalLogsView: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
           <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-[16px] px-3 py-2 premium-shadow">
             <Search className="w-4 h-4 text-white/70" />
-            <input type="text" placeholder="Search encounters..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-transparent border-none outline-none text-xs text-white w-full sm:w-48 placeholder:text-[#9CA3AF]" />
+            <input type="text" placeholder="Search encounters..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="bg-transparent border-none outline-none text-xs text-white w-full sm:w-48 placeholder:text-[#9CA3AF]" />
           </div>
           <button className="flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-white font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow whitespace-nowrap shrink-0 hover:bg-white/5 transition-colors">
             <Filter className="w-4 h-4 text-white/70" /> Filter
@@ -682,7 +687,7 @@ export const ClinicalLogsView: React.FC = () => {
                     </td>
                   </tr>
                 ) : null}
-                {filteredEncounters.map((log) => (
+                {paginatedEncounters.map((log) => (
                   <tr
                     key={log.id}
                     className={`border-b border-white/10 hover:bg-transparent/5 transition-colors last:border-0 cursor-pointer ${activeBillId === log.id ? 'bg-blue-500/20/50 border-l-4 border-l-[var(--color-surface-raised)]' : ''}`}
@@ -725,6 +730,34 @@ export const ClinicalLogsView: React.FC = () => {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {filteredEncounters.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-white/10 text-xs">
+              <span className="text-white/60 font-medium">
+                Showing <strong className="text-white font-bold">{((currentPage - 1) * pageSize) + 1}</strong> to <strong className="text-white font-bold">{Math.min(currentPage * pageSize, filteredEncounters.length)}</strong> of <strong className="text-white font-bold">{filteredEncounters.length}</strong> Encounters
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" /> Prev
+                </button>
+                <span className="px-3 py-1.5 rounded-[10px] bg-[var(--color-surface-raised)] font-bold text-white text-xs">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors"
+                >
+                  Next <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* AI Billing Assistant Widget */}
