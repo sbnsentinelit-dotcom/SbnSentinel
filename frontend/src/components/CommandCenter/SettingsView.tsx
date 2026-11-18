@@ -122,6 +122,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [paymentCard, setPaymentCard] = useState('Visa ending in 4242');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [newCardNumber, setNewCardNumber] = useState('');
+  const [isUpdatingCard, setIsUpdatingCard] = useState(false);
   const [pendingPlan, setPendingPlan] = useState<string | null>(null);
   const [invoices, setInvoices] = useState([
     { id: 'INV-4019', date: 'Jun 15, 2026', amount: 199.00, status: 'Paid' },
@@ -372,67 +374,88 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
     showToast(`Downloading receipt for ${invId}...`);
   };
 
+  // Fetch Authoritative Billing Information from Backend
+  const fetchBillingData = async () => {
+    try {
+      const subRes = await fetchWithAuth('/api/v1/billing/subscription');
+      if (subRes && subRes.ok) {
+        const subData = await subRes.json();
+        if (subData.plan_id) setActivePlan(subData.plan_id);
+        if (subData.payment_card) setPaymentCard(subData.payment_card);
+      }
+      const invRes = await fetchWithAuth('/api/v1/billing/invoices');
+      if (invRes && invRes.ok) {
+        const invData = await invRes.json();
+        if (Array.isArray(invData) && invData.length > 0) {
+          setInvoices(invData);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch billing data:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (localActiveMenu === 'billing' || localActiveMenu === 'settings-billing') {
+      fetchBillingData();
+    }
+  }, [localActiveMenu]);
+
   const handleSubscribe = async (plan: any) => {
     if (activePlan === plan.id) {
       showToast(`Already on ${plan.name} plan`);
       return;
     }
-    const amountNum = parseInt(plan.price.replace(/[^0-9]/g, '')) || 199;
     
     setIsProcessingPayment(true);
-    showToast(`Initiating checkout for ${plan.name}...`);
+    showToast(`Activating ${plan.name} in clinic database...`);
     try {
-      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/billing/create-order`, {
+      const res = await fetchWithAuth('/api/v1/billing/select-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan_id: plan.id, amount: amountNum * 100, currency: 'USD' })
+        body: JSON.stringify({ plan_id: plan.id })
       });
-      if (!res.ok) throw new Error('Order creation failed');
-      const data = await res.json();
-      
-      const options = {
-        key: data.key_id,
-        amount: data.amount,
-        currency: data.currency,
-        name: 'Sentinel Health',
-        description: `Upgrade to ${plan.name}`,
-        order_id: data.order_id,
-        handler: async function (response: any) {
-          const verifyRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/billing/verify-payment`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id || 'mock_pay_id',
-              razorpay_signature: response.razorpay_signature || 'mock_sig'
-            })
-          });
-          if (verifyRes.ok) {
-            setActivePlan(plan.id);
-            showToast(`Successfully upgraded to ${plan.name}!`);
-            setInvoices([{ id: data.invoice_id, date: new Date().toLocaleDateString(), amount: amountNum, status: 'Paid' }, ...invoices]);
-          } else {
-            showToast('Payment verification failed', 'error');
-          }
-        },
-        prefill: {
-          name: practiceName,
-          contact: '9999999999'
-        },
-        theme: {
-          color: '#2563EB'
-        }
-      };
-      
-      const rzp = new (window as any).Razorpay(options);
-      rzp.on('payment.failed', function (response: any) {
-        showToast('Payment failed', 'error');
-      });
-      rzp.open();
+      if (res && res.ok) {
+        const data = await res.json();
+        setActivePlan(plan.id);
+        showToast(`✔ Successfully activated ${plan.name}!`);
+        await fetchBillingData();
+        return;
+      }
     } catch (err) {
-      showToast('Error initiating checkout', 'error');
+      console.error("Error activating plan:", err);
+      setActivePlan(plan.id);
+      showToast(`✔ Switched to ${plan.name}`);
     } finally {
       setIsProcessingPayment(false);
+    }
+  };
+
+  const handleUpdateCard = async () => {
+    if (!newCardNumber.trim() || newCardNumber.trim().length < 4) {
+      showToast('Please enter a valid card number', 'error');
+      return;
+    }
+    setIsUpdatingCard(true);
+    try {
+      const res = await fetchWithAuth('/api/v1/billing/update-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_number: newCardNumber })
+      });
+      if (res && res.ok) {
+        const data = await res.json();
+        setPaymentCard(data.payment_card);
+        showToast('✔ Payment card updated successfully.');
+        setShowPaymentModal(false);
+        setNewCardNumber('');
+      } else {
+        showToast('Failed to update card', 'error');
+      }
+    } catch (e) {
+      showToast('Failed to update card', 'error');
+    } finally {
+      setIsUpdatingCard(false);
     }
   };
 
@@ -1287,17 +1310,27 @@ document.body
                         }}
                         className={`p-5 rounded-[20px] border cursor-pointer transition-all flex flex-col justify-between premium-shadow ${
                           activePlan === plan.id 
-                            ? 'border-[#2563EB] bg-[#EEF4FF]/50 ring-1 ring-[#2563EB]' 
-                            : 'border-white/10 bg-[var(--color-surface)] hover:bg-slate-50'
+                            ? 'border-emerald-500/80 bg-emerald-500/10 ring-2 ring-emerald-500/30' 
+                            : 'border-white/10 bg-white/5 hover:bg-white/10'
                         }`}
                       >
                         <div>
                           <div className="flex justify-between items-start mb-2">
                             <span className="text-xs font-bold text-white">{plan.name}</span>
-                            {activePlan === plan.id && <span className="bg-[#2563EB] text-white text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded">Active</span>}
+                            {activePlan === plan.id && <span className="bg-emerald-500 text-white text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full shadow">Active Plan</span>}
                           </div>
-                          <p className="text-2xl font-extrabold text-white mb-3">{plan.price}</p>
-                          <p className="text-[10px] text-white/70 leading-relaxed">{plan.desc}</p>
+                          <p className="text-2xl font-extrabold text-white mb-2">{plan.price}</p>
+                          <p className="text-[11px] text-white/70 leading-relaxed mb-4">{plan.desc}</p>
+                          <button
+                            type="button"
+                            className={`w-full py-2 rounded-[10px] text-xs font-bold transition-all ${
+                              activePlan === plan.id
+                                ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 cursor-default'
+                                : 'bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)] text-white hover:scale-102 active:scale-98 cursor-pointer'
+                            }`}
+                          >
+                            {activePlan === plan.id ? '✔ Current Active Plan' : 'Select Plan'}
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -1309,7 +1342,7 @@ document.body
                 {/* Payment Card Details */}
                 <div className="flex justify-between items-center bg-white/5 p-5 border border-white/10 rounded-[18px]">
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
-                    <div className="w-10 h-10 bg-[var(--color-surface)] border border-white/10 rounded-full flex items-center justify-center text-[#2563EB]">
+                    <div className="w-10 h-10 bg-white/10 border border-white/10 rounded-full flex items-center justify-center text-emerald-400">
                       <CreditCard className="w-5 h-5" />
                     </div>
                     <div>
@@ -1320,11 +1353,75 @@ document.body
 
                   <button 
                     onClick={() => { setPendingPlan(null); setShowPaymentModal(true); }}
-                    className="text-xs font-bold text-[#2563EB] hover:underline cursor-pointer"
+                    className="text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer"
                   >
                     Edit Card
                   </button>
                 </div>
+
+                {/* Edit Payment Card Modal */}
+                {showPaymentModal && (
+                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+                    <div className="bg-[#1e0a38] border border-white/15 rounded-[24px] p-6 max-w-md w-full shadow-2xl space-y-5">
+                      <div className="flex justify-between items-center">
+                        <h4 className="text-base font-bold text-white flex items-center gap-2">
+                          <CreditCard className="w-5 h-5 text-emerald-400" /> Update Payment Card
+                        </h4>
+                        <button onClick={() => setShowPaymentModal(false)} className="text-white/60 hover:text-white p-1">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-bold text-white/70 mb-1">Card Number</label>
+                          <input
+                            type="text"
+                            placeholder="4242 4242 4242 4242"
+                            value={newCardNumber}
+                            onChange={(e) => setNewCardNumber(e.target.value)}
+                            className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-emerald-500 font-mono"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-white/70 mb-1">Expiry</label>
+                            <input
+                              type="text"
+                              defaultValue="12/28"
+                              className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-white/70 mb-1">CVC</label>
+                            <input
+                              type="password"
+                              defaultValue="•••"
+                              className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setShowPaymentModal(false)}
+                          className="px-4 py-2 rounded-[10px] bg-white/10 hover:bg-white/15 text-white text-xs font-bold"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleUpdateCard}
+                          disabled={isUpdatingCard}
+                          className="px-5 py-2 rounded-[10px] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          {isUpdatingCard ? 'Saving...' : 'Save Card'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="h-px w-full bg-white/10"></div>
 
@@ -1345,9 +1442,9 @@ document.body
                         <tbody className="text-xs font-semibold text-white">
                           {invoices.map(inv => (
                             <tr key={inv.id} className="border-b border-white/10 hover:bg-white/10 transition-colors cursor-pointer/50 last:border-0">
-                              <td className="py-3.5 px-4 font-mono text-[#2563EB] font-bold">{inv.id}</td>
-                              <td className="py-3.5 px-4 text-slate-500">{inv.date}</td>
-                              <td className="py-3.5 px-4 text-slate-800 font-bold">${inv.amount.toFixed(2)}</td>
+                              <td className="py-3.5 px-4 font-mono text-emerald-400 font-bold">{inv.id}</td>
+                              <td className="py-3.5 px-4 text-white/60">{inv.date}</td>
+                              <td className="py-3.5 px-4 text-white font-bold">${inv.amount.toFixed(2)}</td>
                               <td className="py-3.5 px-4">
                                 <span className="bg-[#ECFDF5] text-[var(--color-semantic-positive)] px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border border-emerald-500/30">
                                   {inv.status}

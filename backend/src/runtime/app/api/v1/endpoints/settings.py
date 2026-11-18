@@ -19,14 +19,13 @@ def get_settings(db: Session = Depends(get_db)):
     settings = db.query(SettingsModel).first()
     if not settings:
         settings = SettingsModel(
-            clinic_name="Sentinel UAE Medical Center - Dubai",
-            address="Building 64, Dubai Healthcare City, Dubai, UAE",
-            phone="+971 4 362 4700",
-            email="contact@sbnsentinel.com",
-            operating_hours="Mon-Sat: 08:00 AM - 08:00 PM",
-            emergency_contact="+971 4 362 4799",
-            auto_refresh=True,
-            audit_frequency="Daily"
+            practice_name="Sentinel UAE Medical Center - Dubai",
+            practice_phone="+971 4 362 4700",
+            timezone="Asia/Dubai",
+            open_time="08:00",
+            close_time="20:00",
+            active_plan="professional",
+            payment_card="Visa ending in 4242"
         )
         db.add(settings)
         try:
