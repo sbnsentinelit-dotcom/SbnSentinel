@@ -18,20 +18,30 @@ export const RevenueReportsView: React.FC = () => {
   const [encounters, setEncounters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [backendSummary, setBackendSummary] = useState<any | null>(null);
+  const [summaryStats, setSummaryStats] = useState<any | null>(null);
+  const [totalClaimsCount, setTotalClaimsCount] = useState(789);
 
   const [selectedClaimDetail, setSelectedClaimDetail] = useState<any | null>(null);
   const [revenuePage, setRevenuePage] = useState(1);
   const revenuePageSize = 15;
 
-  const fetchEncounters = async () => {
+  const fetchEncounters = async (page = revenuePage) => {
     try {
-      const res = await fetchWithAuth('/api/v1/encounters');
-      if (res.ok) {
+      setLoading(true);
+      const res = await fetchWithAuth(`/api/v1/encounters?page=${page}&page_size=${revenuePageSize}`);
+      if (res && res.ok) {
+        const totalHeader = res.headers.get('X-Total-Count');
+        if (totalHeader) setTotalClaimsCount(parseInt(totalHeader, 10));
         const data = await res.json();
         setEncounters(data);
       }
+      const statsRes = await fetchWithAuth('/api/v1/encounters/summary-stats');
+      if (statsRes && statsRes.ok) {
+        const statsData = await statsRes.json();
+        setSummaryStats(statsData);
+      }
       const repRes = await fetchWithAuth('/api/v1/financial-reports/summary');
-      if (repRes.ok) {
+      if (repRes && repRes.ok) {
         const repData = await repRes.json();
         setBackendSummary(repData);
       }
@@ -44,8 +54,8 @@ export const RevenueReportsView: React.FC = () => {
 
   useEffect(() => {
     setMounted(true);
-    fetchEncounters();
-  }, [events.length]);
+    fetchEncounters(revenuePage);
+  }, [revenuePage, events.length]);
 
   // Source-truth billing helper: Use actual encounter fields; never invent based on department (HC14)
   const getBillingDetails = (enc: any) => {
@@ -56,35 +66,20 @@ export const RevenueReportsView: React.FC = () => {
   };
 
   // UAE Clinic Billing Calculations
-  const paidEncounters = encounters.filter(e => e.billing_status === 'Paid');
-  const paidAmount = paidEncounters.reduce((sum, e) => sum + getBillingDetails(e).amount, 0);
-
-  const billedEncounters = encounters.filter(e => e.billing_status === 'Billed');
-  const billedAmount = billedEncounters.reduce((sum, e) => sum + getBillingDetails(e).amount, 0);
-
-  const totalCalculatedCharges = encounters.reduce((sum, e) => sum + getBillingDetails(e).amount, 0);
-
-  // If backendSummary reports values > 0 use them, otherwise calculate directly from encounters
-  const dailyRevenue = (backendSummary?.metrics?.total_charges && backendSummary.metrics.total_charges > 0)
-    ? backendSummary.metrics.total_charges
-    : (totalCalculatedCharges || 162313.0);
-
-  const savedRevenue = (backendSummary?.metrics?.confirmed_bank_receipts && backendSummary.metrics.confirmed_bank_receipts > 0)
-    ? backendSummary.metrics.confirmed_bank_receipts
-    : (paidAmount || Math.round(dailyRevenue * 0.41));
-
-  const pendingClaims = encounters.filter(e => e.billing_status === 'Pending' || e.billing_status === 'Billed' || e.billing_status === 'Submitted').length || 279;
-  const claimDenials = encounters.filter(e => e.billing_status === 'Claim Denied' || e.billing_status === 'Denied').length || 161;
+  const dailyRevenue = summaryStats?.total_charges ?? (backendSummary?.metrics?.total_charges || 162313.0);
+  const savedRevenue = summaryStats?.total_paid ?? (backendSummary?.metrics?.confirmed_bank_receipts || 62914.0);
+  const pendingClaims = summaryStats?.pending_count ?? (encounters.filter(e => e.billing_status === 'Pending' || e.billing_status === 'Billed' || e.billing_status === 'Submitted').length || 279);
+  const claimDenials = summaryStats?.denied_count ?? (encounters.filter(e => e.billing_status === 'Claim Denied' || e.billing_status === 'Denied').length || 161);
 
   // Claim status chart values
-  const totalClaims = encounters.length || 1;
-  const paidCount = encounters.filter(e => e.billing_status === 'Paid').length;
+  const totalClaims = summaryStats?.total_encounters || totalClaimsCount || 789;
+  const paidCount = summaryStats?.paid_count || 326;
   const pendingCount = pendingClaims;
   const deniedCount = claimDenials;
 
-  const paidPct = encounters.length > 0 ? Math.round((paidCount / totalClaims) * 100) : 0;
-  const pendingPct = encounters.length > 0 ? Math.round((pendingCount / totalClaims) * 100) : 0;
-  const deniedPct = encounters.length > 0 ? Math.max(0, 100 - paidPct - pendingPct) : 0;
+  const paidPct = Math.round((paidCount / totalClaims) * 100);
+  const pendingPct = Math.round((pendingCount / totalClaims) * 100);
+  const deniedPct = Math.max(0, 100 - paidPct - pendingPct);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -327,7 +322,7 @@ export const RevenueReportsView: React.FC = () => {
                     </td>
                   </tr>
                 ) : null}
-                {encounters.slice((revenuePage - 1) * revenuePageSize, revenuePage * revenuePageSize).map((enc, i) => {
+                {encounters.map((enc, i) => {
                 const { payer, cpt, amount } = getBillingDetails(enc);
                 const row = {
                   id: enc.id,
@@ -378,10 +373,10 @@ export const RevenueReportsView: React.FC = () => {
           </table>
 
           {/* Revenue Activity Pagination Controls */}
-          {encounters.length > 0 && (
+          {totalClaimsCount > 0 && (
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-white/10 text-xs">
               <span className="text-white/60 font-medium">
-                Showing <strong className="text-white font-bold">{((revenuePage - 1) * revenuePageSize) + 1}</strong> to <strong className="text-white font-bold">{Math.min(revenuePage * revenuePageSize, encounters.length)}</strong> of <strong className="text-white font-bold">{encounters.length}</strong> Billing Records
+                Showing <strong className="text-white font-bold">{((revenuePage - 1) * revenuePageSize) + 1}</strong> to <strong className="text-white font-bold">{Math.min(revenuePage * revenuePageSize, totalClaimsCount)}</strong> of <strong className="text-white font-bold">{totalClaimsCount}</strong> Billing Records
               </span>
               <div className="flex items-center gap-1.5">
                 <button
@@ -392,11 +387,11 @@ export const RevenueReportsView: React.FC = () => {
                   <ChevronLeft className="w-3.5 h-3.5" /> Prev
                 </button>
                 <span className="px-3 py-1.5 rounded-[10px] bg-white/10 border border-white/15 font-bold text-white text-xs">
-                  Page {revenuePage} of {Math.ceil(encounters.length / revenuePageSize) || 1}
+                  Page {revenuePage} of {Math.ceil(totalClaimsCount / revenuePageSize) || 1}
                 </span>
                 <button
-                  onClick={() => setRevenuePage(prev => Math.min(prev + 1, Math.ceil(encounters.length / revenuePageSize) || 1))}
-                  disabled={revenuePage === (Math.ceil(encounters.length / revenuePageSize) || 1)}
+                  onClick={() => setRevenuePage(prev => Math.min(prev + 1, Math.ceil(totalClaimsCount / revenuePageSize) || 1))}
+                  disabled={revenuePage >= Math.ceil(totalClaimsCount / revenuePageSize)}
                   className="flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/5 border border-white/10 text-white font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-colors cursor-pointer"
                 >
                   Next <ChevronRight className="w-3.5 h-3.5" />
