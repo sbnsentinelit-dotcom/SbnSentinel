@@ -15,6 +15,11 @@ from app.models.financial_reporting import (
 )
 from app.models.signal import SignalModel
 from app.models.connector import ConnectorModel
+from app.models.governance_storage import (
+    GovernedPolicyVersionModel,
+    RuleEvaluationModel,
+    RecommendationModel,
+)
 
 
 # Deterministic UAE Clinic Dataset Specs
@@ -322,7 +327,24 @@ def seed_dubai_data(db: Session):
         db.add(rec)
     db.commit()
 
-    # 5. Seed Sentinel Governance Signals
+    # 5. Seed Sentinel Governance Signals & Governance Models
+    policy_id = "POL-UAE-DHPO-2026"
+    existing_pol = db.query(GovernedPolicyVersionModel).filter(GovernedPolicyVersionModel.policy_id == policy_id).first()
+    if not existing_pol:
+        pol = GovernedPolicyVersionModel(
+            policy_id=policy_id,
+            version="2026.04",
+            lifecycle_state="ACTIVE",
+            content="Dubai Health Authority (DHPO) Unified Insurance Adjudication Policy & Automated Claims Scrubber Rules.",
+            effective_from="2026-01-01T00:00:00Z",
+            approval_state="APPROVED",
+            approved_by="DHA Health Funding Department",
+            approval_timestamp="2026-01-01T00:00:00Z",
+            scope="Dubai / UAE Healthcare Jurisdiction"
+        )
+        db.add(pol)
+        db.commit()
+
     existing_signals = {s.id for s in db.query(SignalModel.id).all()}
     uae_governance_rules = [
         ("CO15", "PRIOR_AUTH_OMISSION", "High", 350.0,
@@ -359,7 +381,63 @@ def seed_dubai_data(db: Session):
 
     for idx, (code, sig_type, risk, exposure, title, prob, impact, action, score) in enumerate(uae_governance_rules):
         sig_id = f"SIG-DXB-2026-{idx + 1:02d}"
+        eval_id = f"EVAL-{sig_id}"
+        rec_id = f"REC-{sig_id}"
+        ctx_id = f"CTX-{sig_id}"
+
+        # Ensure RuleEvaluationModel exists
+        if not db.query(RuleEvaluationModel).filter(RuleEvaluationModel.evaluation_id == eval_id).first():
+            eval_row = RuleEvaluationModel(
+                evaluation_id=eval_id,
+                decision_context_id=ctx_id,
+                policy_id=policy_id,
+                policy_version="2026.04",
+                rule_id=f"RULE-UAE-{code}",
+                rule_version="2026.1",
+                result="VIOLATION_TRIGGERED",
+                evaluation_timestamp=(datetime.now(timezone.utc) - timedelta(hours=idx * 6)).isoformat(),
+                input_values_json=f'{{"denial_code": "{code}", "exposure": {exposure}}}',
+                journey_id=sig_id
+            )
+            db.add(eval_row)
+
+        # Ensure RecommendationModel exists
+        if not db.query(RecommendationModel).filter(RecommendationModel.recommendation_id == rec_id).first():
+            rec_row = RecommendationModel(
+                recommendation_id=rec_id,
+                decision_context_id=ctx_id,
+                rule_evaluation_id=eval_id,
+                journey_id=sig_id,
+                mapping_id=f"MAP-UAE-{code}",
+                mapping_version="2026.1",
+                content=action,
+                status="ACTIVE",
+                priority="HIGH" if risk in ["Critical", "High"] else "NORMAL",
+                generated_at=(datetime.now(timezone.utc) - timedelta(hours=idx * 6)).isoformat(),
+                intended_target_reference=sig_id,
+                authority_requirement="ORGANIZATION_ADMINISTRATOR",
+                problem=prob,
+                business_impact=impact,
+                expected_outcome="100% claim preservation and zero revenue leakage."
+            )
+            db.add(rec_row)
+
+        meta_payload = {
+            "correlation_id": sig_id,
+            "pipeline_event_id": sig_id,
+            "patient_name": f"{FIRST_NAMES[idx % len(FIRST_NAMES)]} {LAST_NAMES[idx % len(LAST_NAMES)]}",
+            "payer": PAYERS[idx % len(PAYERS)],
+            "cpt_code": CPT_CATALOG[idx % len(CPT_CATALOG)][0],
+            "claim_id": f"CLM2026-DXB-{idx + 1:04d}",
+            "decision_context_id": ctx_id,
+            "exposure_aed": exposure
+        }
+
         if sig_id in existing_signals:
+            # Update metadata_data if missing
+            existing_s = db.query(SignalModel).filter(SignalModel.id == sig_id).first()
+            if existing_s and not existing_s.metadata_data:
+                existing_s.metadata_data = meta_payload
             continue
 
         sig = SignalModel(
@@ -380,9 +458,12 @@ def seed_dubai_data(db: Session):
             secondary_context="UAE Insurance Adjudication",
             estimated_financial_exposure=f"AED {exposure:.2f}",
             priority_score=score,
+            metadata_data=meta_payload,
         )
         db.add(sig)
         existing_signals.add(sig_id)
+
+    db.commit()
 
     # 6. Ensure UAE Clinic Connector exists
     existing_conn = db.query(ConnectorModel).filter(ConnectorModel.id == "conn_dxb_dhpo").first()
