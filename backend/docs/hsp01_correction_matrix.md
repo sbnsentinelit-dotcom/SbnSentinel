@@ -12,7 +12,7 @@ Backend paths omit `backend/src/runtime/app/`; test paths omit `backend/tests/in
 | 1 | Jobs API returns `row_version`; resume uses it as `expected_revision`; older events without original binding | `api/v1/endpoints/hospital.py`, `services/hospital_worker.py`, `docs/hsp01_auditor_followup_reconciliation.txt` | `test_followup_jobs_api_revision_stale_refresh_and_repeat`, `test_followup_resume_rejects_revoked_and_material_profile_change`, `test_auditor_blocked_delivery_resume_is_versioned_and_projects_once` | Implemented in f58c08e7. Local pass. Older events without `extraction_binding` → HTTP 409 `HISTORICAL_BINDING_RECONCILIATION_REQUIRED`; incompatible profile → `MATERIAL_BINDING_RECONCILIATION_REQUIRED`; no binding is back-filled |
 | 2 | Unvalidated historical department attribution excluded from departmental totals | `services/financial_reporting_service.py`, `frontend/src/components/hospital/DepartmentSummary.tsx` | `test_followup_unproven_current_attribution_preserves_frozen_snapshot`, `test_followup_attribution_boundary_is_utc_in_non_utc_database_session`, `test_auditor_effective_department_date_is_required`, frontend "shows unresolved historical attribution as a count and coverage explanation" | Implemented in f58c08e7. Local pass. Report shows `unresolved_attribution_lines` and a coverage exception; frozen snapshots unchanged |
 | 3 | Backend CI migrates a disposable DB before import | `.github/workflows/quality_gate.yml` (f58c08e7; workflow made valid in 70b84838) | CI step "Migrate disposable quality database before application imports" | **CI PASS** in run 44349431745 (run on 8d5fee00 — identical code to 70b84838; only the commit message was later changed). Unit-test step not reached in CI because Flake8 stops the job (see open items); locally 3/3 unit tests pass |
-| 4 | Frontend dependency gate (picomatch GHSA-fc5q-39xc-vjpf) | `docs/hsp01_picomatch_disposition_draft.md` (evidence only) | F-33 gate | **Open.** No patched version (rechecked 18 Nov). Dev/test-only exposure documented; disposition needs the accountable approver. Gate kept active |
+| 4 | Frontend dependency gate (picomatch GHSA-fc5q-39xc-vjpf) | `docs/hsp01_picomatch_disposition_draft.md` (record only) | F-33 gate | **Resolved without an exception.** GitHub withdrew GHSA-fc5q-39xc-vjpf on 18 Nov 2026 15:38 UTC; `npm audit` now reports 0 high/critical; **F-33 gate PASS** in run 44361895942 with the gate and `dependency-disposition.json` unchanged. The disposition draft is kept only as a record of the dev/test-only exposure analysis |
 | 5 | Main conflict with 70503767 in `encounters.py` | `api/v1/endpoints/encounters.py`, `test_hsp01_encounter_merge.py` | `test_hsp01_encounter_merge.py` (10 tests), now also selected in CI | Resolved and pushed in f58c08e7. Latest main af0496b8: see "Latest main" below |
 | 6 | Accurate claims and handoff | `docs/hsp01_implementation_register.json` | — | Register updated: actual SHAs, push and CI status, owners of remaining work |
 
@@ -48,13 +48,19 @@ Backend paths omit `backend/src/runtime/app/`; test paths omit `backend/tests/in
 - **Earlier hospital records:** blocked events without an original binding and unvalidated department attributions are not rewritten; they surface as reconciliation-required / unresolved (Review 2 items 1–2). Target-environment reconciliation needs the data owner and is not certified by fresh-install tests.
 - **Downgrade:** refused by design (history preservation).
 
-## CI evidence (run 44349431745, run on 8d5fee00 — identical code to 70b84838; only the commit message was later changed)
+## CI evidence (run 44361895942, PR head 0ce8d282)
 
-| Job | Result | Notes |
+GitHub runs `pull_request` CI on the PR **merged with the current main** (`refs/pull/1/merge`), so the
+results below include main commit af0496b8, which this PR does not contain.
+
+| Job | Result | Cause |
 | --- | --- | --- |
-| HSP01 disposable PostgreSQL migration and recovery | **PASS** | Fresh forward migrations; hospital concurrency, authority recovery and regressions |
-| Backend Quality Assurance | FAIL at Flake8 | Migration step passed; later steps skipped. The same Flake8 step fails on main (04c1e0f4, eb42cc07, 70503767, af0496b8). Local flake8 6.1.0 on the PR head: 0 issues; exact CI lines pending |
-| Frontend Quality Assurance | FAIL at F-33 dependency audit | picomatch (Review 2 item 4); tests, lint and build skipped; same on main |
+| HSP01 disposable PostgreSQL migration and recovery | **PASS** | Fresh forward migrations (incl. `hsp01_schema_completion`); hospital concurrency, authority recovery and regressions |
+| Backend Quality Assurance | FAIL at Flake8 | All 8 findings are in main-owned files changed by **af0496b8**: `api/deps.py` lines 106, 108, 110 (E711) and `api/v1/endpoints/decisions.py` lines 11 (F401), 62 and 65 (F841), 63 (E711), 125 (W291). Flake8 on the PR head alone reports 0 issues. Migration step passed; later steps were skipped |
+| Frontend Quality Assurance | FAIL at Run Tests (dependency gate PASS) | 106 passed, 10 skipped, 2 failed: `BootScreen.test.tsx` T03/T05 and T06 expect "STARTUP FAILED". Main commit **fc8ba599** made `BootScreen.tsx` set the health state to ready even when the readiness request fails, so the app proceeds while the backend is offline. The PR does not change BootScreen. All 10 hospital component tests pass |
+
+Earlier evidence: run 44349431745 (on 8d5fee00, the same code as 70b84838 before a message-only rewrite)
+gave the same PostgreSQL PASS and Flake8 result.
 
 Local verification on the PR head: HSP01 suites 3/3 (directory 21, source contract 48, encounter merge 10 tests);
 full backend 142/143 (`test_a026b_practice_fusion_readiness` fails, also on main); frontend vitest 106 passed,
@@ -69,17 +75,20 @@ and the journey scope check is replaced by `has_access = True`.
 This removes human-decision scope enforcement and adds 8 Flake8 errors (in `decisions.py` and `api/deps.py`).
 On the combined code, two more tests fail (`test_d4_pipeline_real_evidence_conflict_exact_refs`,
 `test_d5_no_signal_recommendation_fallback`), which also fail on main itself.
+It also changes `api/deps.py`: users without an organization are given `ORG-UAE-01`, and when the scoped
+signal query finds nothing, a fallback returns the signal by ID regardless of scope.
 This is tracked as a main regression for the existing developer; it should be corrected on main before
-main is merged into PR #1, so the PR does not absorb it.
+main is merged into PR #1, so the PR does not absorb it. Because PR CI runs on the PR merged with main,
+the PR's backend lint stays red until main is corrected.
 
 ## Remaining dependencies and owners
 
 | Item | Owner |
 | --- | --- |
 | Backend Flake8 in Linux CI | New developer, with the existing developer for main-owned files |
-| picomatch disposition | Accountable approver named in `dependency-disposition.json` |
-| BootScreen startup-screen tests | Existing shared frontend owner |
+| picomatch GHSA-fc5q-39xc-vjpf | Closed: advisory withdrawn by GitHub; gate passes; re-check at each release |
+| BootScreen fail-open on readiness failure (main fc8ba599; 2 frontend tests) | Existing developer / shared frontend owner |
 | `test_a026b_practice_fusion_readiness` | Existing developer (fails on main) |
-| af0496b8 decision-scope regression on main | Existing developer |
+| af0496b8 on main: decision and signal scope bypass in `decisions.py` and `api/deps.py` (also the 8 Flake8 findings) | Existing developer |
 | Governed billing evidence/context/policy/rule/review/outcome; FR01–FR08 and schedules; legacy reconciliation; T01–T12 acceptance | HSP02 workstream |
 | Private RSA key in `quality_gate.yml` | Security owner (move to CI secrets, rotate, purge history) |

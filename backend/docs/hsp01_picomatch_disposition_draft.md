@@ -1,8 +1,11 @@
 # Draft disposition: picomatch GHSA-fc5q-39xc-vjpf (F-33 release gate)
 
-Status: **DRAFT — NOT APPROVED.** This file is evidence for the accountable approver.
-It does not change `frontend/dependency-disposition.json`, and the F-33 gate stays active
-until an approver adds an entry there.
+> **Update 18 Nov 2026:** GitHub withdrew GHSA-fc5q-39xc-vjpf at 15:38 UTC. `npm audit` no longer
+> reports it and the unchanged F-33 gate passes (CI run 44361895942). No disposition entry is needed;
+> this file is kept only as a record of the exposure analysis.
+
+Status: **DRAFT — NOT APPROVED, NOT NEEDED.** It was prepared as evidence for the accountable approver.
+It does not change `frontend/dependency-disposition.json`, and the F-33 gate stays active.
 
 ## Advisory
 

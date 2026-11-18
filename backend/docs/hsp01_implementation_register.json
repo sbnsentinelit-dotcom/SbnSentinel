@@ -248,8 +248,8 @@
       "99e0c896e12925e1e7453e3a2c93716e567e048e"
     ],
     "remaining_auditor_items": [
-      "picomatch GHSA-fc5q-39xc-vjpf: still no patched version (advisory rechecked 18 Nov 2026); policy gate active; disposition approval pending (see qa_review_corrections.remaining_dependencies)",
-      "Shared startup-screen tests (BootScreen T03/T05, T06) fail on main and branch; existing shared frontend owner"
+      "picomatch GHSA-fc5q-39xc-vjpf: closed - advisory withdrawn by GitHub on 2026-11-18; F-33 gate passes",
+      "BootScreen tests fail because main fc8ba599 ignores readiness failure; existing developer / shared frontend owner"
     ],
     "merge_commit_sha": "f58c08e7549065de72aac2a4bfb1992ab33ee06f"
   },
@@ -285,9 +285,8 @@
       "frontend_build": "Compile and TypeScript pass; standalone packaging blocked by Windows EPERM; full build NOT PASS"
     },
     "release_blockers": [
-      "picomatch GHSA-fc5q-39xc-vjpf: no patched version; policy gate active; disposition approval pending",
-      "Shared startup-screen tests fail on main and branch; existing shared frontend owner",
-      "Backend Flake8 step fails in Linux CI on main and on this branch since the main merge; exact lines require the CI log"
+      "PR CI backend Flake8: 8 findings from main af0496b8 (merged into the CI merge ref); fix on main",
+      "BootScreen fail-open from main fc8ba599 (2 frontend tests); fix on main"
     ],
     "owners": {
       "functional_corrections": "New developer",
@@ -352,11 +351,12 @@
       "downgrade": "Refused: governed decision context and decision history must be preserved"
     },
     "ci_evidence": {
-      "run": "https://github.com/sbnsentinelit-dotcom/SbnSentinel/actions/runs/44349431745",
-      "commit": "8d5fee00adc1f9f2da78771b6dada4e4e4bc9823 (CI run commit; same tree as 70b84838122bacf5eb54fda6cebcafb4c37e70a2 after a message-only rewrite)",
+      "run": "https://github.com/sbnsentinelit-dotcom/SbnSentinel/actions/runs/44361895942",
+      "commit": "0ce8d282ecce678ed378f60ab0973252fb6ef257 (pull_request CI runs on refs/pull/1/merge = PR + current main af0496b8)",
       "hsp01_postgresql_job": "PASS: fresh forward migrations; hospital concurrency, authority recovery and regressions",
-      "backend_quality_job": "FAIL at SES-011 Flake8 (migration step passed); later steps skipped. Same step fails on main commits 04c1e0f4, eb42cc07, 70503767, af0496b8. Local flake8 6.1.0 reports 0 issues; CI log needed for exact lines",
-      "frontend_quality_job": "FAIL at F-33 Dependency Audit (picomatch); tests, lint and build skipped. Same failure on main"
+      "backend_quality_job": "FAIL at Flake8: 8 findings, all in main-owned files from af0496b8 (api/deps.py 106/108/110; api/v1/endpoints/decisions.py 11/62/63/65/125). PR head alone: 0 findings",
+      "frontend_quality_job": "Dependency gate PASS (GHSA-fc5q-39xc-vjpf withdrawn 2026-11-18 15:38 UTC). Run Tests FAIL: BootScreen T03/T05 and T06 because main fc8ba599 ignores readiness failure; 106 passed, 10 skipped; hospital tests 10/10",
+      "earlier_run": "44349431745 on 8d5fee00 (same code as 70b84838): PostgreSQL PASS, Flake8 FAIL (same 8 findings)"
     },
     "local_verification_combined_with_latest_main": {
       "code": "HSP01 branch + af0496b899606261987f59fcaaa0882a6233723e (merge-tree, no conflict)",
@@ -365,7 +365,7 @@
     },
     "remaining_dependencies": [
       {
-        "item": "af0496b8 decision-scope regression on main (decisions.py)",
+        "item": "af0496b8 on main: decision and signal scope bypass (decisions.py, api/deps.py); source of the 8 Flake8 findings in PR CI",
         "owner": "Existing developer"
       },
       {
@@ -373,12 +373,12 @@
         "owner": "New developer with existing developer for main files"
       },
       {
-        "item": "picomatch GHSA-fc5q-39xc-vjpf disposition",
-        "owner": "Accountable approver named in dependency-disposition.json (Platform Owner & Lead Security Officer)"
+        "item": "picomatch GHSA-fc5q-39xc-vjpf: closed (advisory withdrawn by GitHub; F-33 gate passes)",
+        "owner": "None; re-check at each release"
       },
       {
-        "item": "BootScreen startup-screen tests",
-        "owner": "Existing shared frontend owner"
+        "item": "BootScreen fail-open on readiness failure (main fc8ba599); 2 frontend tests",
+        "owner": "Existing developer / shared frontend owner"
       },
       {
         "item": "test_a026b_practice_fusion_readiness (fails on main too)",
