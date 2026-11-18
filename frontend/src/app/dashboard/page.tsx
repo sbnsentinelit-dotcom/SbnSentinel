@@ -23,8 +23,9 @@ import { AuthScreen } from '@/components/Auth/AuthScreen';
 import { BootScreen } from '@/components/CommandCenter/BootScreen';
 import { SuperAdminPanel } from '@/components/CommandCenter/SuperAdminPanel';
 import { useSignalStream } from '@/hooks/useSignalStream';
-import { useSelector } from 'react-redux';
-import { RootState } from '@/store';
+import { useSelector, useDispatch } from 'react-redux';
+import { RootState, AppDispatch } from '@/store';
+import { fetchHistoricalSignals } from '@/store/slices/signalSlice';
 
 interface ClinicalReminder {
   id: string;
@@ -102,8 +103,13 @@ export default function Dashboard() {
     return () => window.removeEventListener('show-sentinel-toast', handleToast);
   }, []);
 
+  const dispatch = useDispatch<AppDispatch>();
   const stats = useSelector((state: RootState) => state.signals.stats);
   const signals = useSelector((state: RootState) => state.signals.events);
+
+  useEffect(() => {
+    dispatch(fetchHistoricalSignals());
+  }, [dispatch]);
 
   useSignalStream();
 

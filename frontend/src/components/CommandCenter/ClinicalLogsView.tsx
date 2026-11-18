@@ -63,13 +63,27 @@ export const ClinicalLogsView: React.FC = () => {
 
   const fetchEncounters = async () => {
     try {
-      const response = await fetchWithAuth('/api/v1/encounters');
-      if (response.ok) {
+      let response = await fetchWithAuth('/api/v1/encounters');
+      if (response && response.ok) {
         const data = await response.json();
-        setEncounters(Array.isArray(data) ? [...data].reverse() : []);
+        if (Array.isArray(data) && data.length > 0) {
+          setEncounters([...data].reverse());
+          return;
+        }
       }
     } catch (err) {
-      console.error(err);
+      console.error("fetchEncounters primary failed, attempting fallback:", err);
+    }
+    try {
+      const fb = await fetchWithAuth('/api/v1/encounters/');
+      if (fb && fb.ok) {
+        const data = await fb.json();
+        if (Array.isArray(data)) {
+          setEncounters([...data].reverse());
+        }
+      }
+    } catch (e2) {
+      console.error("fetchEncounters fallback failed:", e2);
     }
   };
 

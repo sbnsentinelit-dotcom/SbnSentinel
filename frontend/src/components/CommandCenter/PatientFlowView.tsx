@@ -56,13 +56,20 @@ export const PatientFlowView: React.FC = () => {
 
   const fetchEncounters = async () => {
     try {
-      const response = await fetchWithAuth('/api/v1/encounters');
-      if (response.ok) {
+      let response = await fetchWithAuth('/api/v1/encounters');
+      if (response && response.ok) {
         const data = await response.json();
         setEncounters(Array.isArray(data) ? data : []);
       }
     } catch (error) {
       console.error("Failed to fetch encounters:", error);
+      try {
+        const fb = await fetchWithAuth('/api/v1/encounters/');
+        if (fb && fb.ok) {
+          const fbData = await fb.json();
+          setEncounters(Array.isArray(fbData) ? fbData : []);
+        }
+      } catch (e2) {}
     } finally {
       setIsLoadingEncounters(false);
     }
@@ -70,10 +77,11 @@ export const PatientFlowView: React.FC = () => {
 
   useEffect(() => {
     fetchEncounters();
+    fetchPatientsDirectory();
   }, []);
 
-  // Mode switcher: 'queue' vs 'directory' (500 UAE Patients Master Dataset from Excel)
-  const [viewMode, setViewMode] = useState<'queue' | 'directory'>('queue');
+  // Mode switcher: 'directory' (500 UAE Patients Master Dataset from Excel) vs 'queue'
+  const [viewMode, setViewMode] = useState<'queue' | 'directory'>('directory');
   const [patientsList, setPatientsList] = useState<any[]>([]);
   const [isLoadingPatients, setIsLoadingPatients] = useState(false);
   const [patientSearch, setPatientSearch] = useState('');
@@ -83,20 +91,28 @@ export const PatientFlowView: React.FC = () => {
   const fetchPatientsDirectory = async () => {
     try {
       setIsLoadingPatients(true);
-      const res = await fetchWithAuth('/api/v1/patients');
-      if (res.ok) {
+      let res = await fetchWithAuth('/api/v1/patients');
+      if (res && res.ok) {
         const data = await res.json();
         setPatientsList(Array.isArray(data) ? data : []);
+        return;
       }
     } catch (e) {
-      console.error("Failed to fetch patients directory:", e);
+      console.error("Failed to fetch patients directory, attempting fallback:", e);
+      try {
+        const fbRes = await fetchWithAuth('/api/v1/patients/');
+        if (fbRes && fbRes.ok) {
+          const data = await fbRes.json();
+          setPatientsList(Array.isArray(data) ? data : []);
+        }
+      } catch (e2) {}
     } finally {
       setIsLoadingPatients(false);
     }
   };
 
   useEffect(() => {
-    if (viewMode === 'directory' && patientsList.length === 0) {
+    if (patientsList.length === 0) {
       fetchPatientsDirectory();
     }
   }, [viewMode]);

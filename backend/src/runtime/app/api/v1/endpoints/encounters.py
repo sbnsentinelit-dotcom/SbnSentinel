@@ -121,6 +121,7 @@ def seed_default_encounters(db: Session):
     db.commit()
 
 
+@router.get("", response_model=List[EncounterResponse])
 @router.get("/", response_model=List[EncounterResponse])
 def get_all_encounters(db: Session = Depends(get_db)):
     """
@@ -138,6 +139,7 @@ def get_all_encounters(db: Session = Depends(get_db)):
 
 
 @router.post("/seed-dubai", status_code=status.HTTP_200_OK)
+@router.post("/seed-dubai/", status_code=status.HTTP_200_OK)
 def trigger_seed_dubai(db: Session = Depends(get_db)):
     """
     Explicit endpoint to seed or refresh the UAE Dubai clinic demo dataset.
