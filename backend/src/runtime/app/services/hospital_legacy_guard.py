@@ -22,8 +22,9 @@ def hospital_legacy_guard(request: Request, actor=Depends(get_current_user), db=
     if target and db.scalar(select(OrganizationClinicModel.id).where(
             OrganizationClinicModel.id == target, OrganizationClinicModel.id.in_(facilities)).limit(1)):
         raise HTTPException(403, "Use the hospital scoped API for this facility")
-    if not target and actor.org_id and db.scalar(select(OrganizationClinicModel.id).where(
-            OrganizationClinicModel.organization_id == actor.org_id,
+    actor_org = getattr(actor, "org_id", None)
+    if not target and actor_org and db.scalar(select(OrganizationClinicModel.id).where(
+            OrganizationClinicModel.organization_id == actor_org,
             OrganizationClinicModel.id.in_(facilities)).limit(1)):
         raise HTTPException(403, "An explicit scoped hospital surface is required")
     # Direct IDs must not bypass the list/query guard.

@@ -23,6 +23,8 @@ from app.models import (  # noqa: F401
 )
 from app.services.cursor_store import CursorModel  # noqa: F401
 from app.models import financial_reporting, hospital_dimensions, hospital_membership, hospital_processing, work_assignment  # noqa: F401
+# Runtime-used governed pipeline tables (L4 decision context + decision records).
+from app.models import decision_context_models, decision_record  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
