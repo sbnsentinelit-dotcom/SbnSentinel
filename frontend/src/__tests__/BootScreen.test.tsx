@@ -26,17 +26,22 @@ describe('BootScreen SDS-D2 Tests', () => {
     vi.useRealTimers();
   });
 
-  test('T01: Rendered startup uses new PNG-mask implementation', async () => {
+  test('T01: Rendered startup uses approved SVG vector groups, no raster png masks', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ready: true }) });
     const { container } = render(<BootScreen onComplete={() => { }} />);
     
-    // Assert presence of the required masked images
-    expect(container.querySelector('img#iak-body')).toBeTruthy();
-    expect(container.querySelector('img#iak-connector')).toBeTruthy();
-    expect(container.querySelector('img#iak-a')).toBeTruthy();
-    expect(container.querySelector('img#iak-k1')).toBeTruthy();
-    expect(container.querySelector('img#iak-k2')).toBeTruthy();
-    expect(container.querySelector('img#iak-crown')).toBeTruthy();
+    // Check for inline SVG
+    const svgs = container.querySelectorAll('svg');
+    expect(svgs.length).toBeGreaterThan(0);
+    // Assert strictly NO <image> tags inside the path groups (Auditor compliance)
+    expect(container.querySelector('image')).toBeNull();
+    // Assert presence of the required vector groups
+    expect(container.querySelector('#iak-body')).toBeTruthy();
+    expect(container.querySelector('#iak-connector')).toBeTruthy();
+    expect(container.querySelector('#iak-a')).toBeTruthy();
+    expect(container.querySelector('#iak-k1')).toBeTruthy();
+    expect(container.querySelector('#iak-k2')).toBeTruthy();
+    expect(container.querySelector('#iak-crown')).toBeTruthy();
   });
 
   test('T02 & T04: Visual stage order strictly follows 1→9 and per-group animations', async () => {
@@ -108,7 +113,8 @@ describe('BootScreen SDS-D2 Tests', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    // Check for PNG masks
-    expect(container.querySelector('img#iak-body')).toBeTruthy();
+    // Check for approved SVG vector groups
+    expect(container.querySelector('#iak-body')).toBeTruthy();
+    expect(container.querySelector('image')).toBeNull();
   });
 });
