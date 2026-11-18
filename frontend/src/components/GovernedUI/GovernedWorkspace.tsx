@@ -27,7 +27,7 @@ export const GovernedWorkspace: React.FC<GovernedWorkspaceProps> = ({
         {onClose && (
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer text-white/60 hover:text-white ms-auto focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+            className="min-w-[44px] min-h-[44px] w-11 h-11 sm:w-8 sm:h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer text-white/60 hover:text-white ms-auto focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
             aria-label="Close Workspace"
           >
             <X className="w-4 h-4" />

@@ -66,20 +66,20 @@ export const RevenueReportsView: React.FC = () => {
   };
 
   // UAE Clinic Billing Calculations
-  const dailyRevenue = summaryStats?.total_charges ?? (backendSummary?.metrics?.total_charges || 162313.0);
-  const savedRevenue = summaryStats?.total_paid ?? (backendSummary?.metrics?.confirmed_bank_receipts || 62914.0);
-  const pendingClaims = summaryStats?.pending_count ?? (encounters.filter(e => e.billing_status === 'Pending' || e.billing_status === 'Billed' || e.billing_status === 'Submitted').length || 279);
-  const claimDenials = summaryStats?.denied_count ?? (encounters.filter(e => e.billing_status === 'Claim Denied' || e.billing_status === 'Denied').length || 161);
+  const dailyRevenue = summaryStats?.total_charges ?? backendSummary?.metrics?.total_charges ?? null;
+  const savedRevenue = summaryStats?.total_paid ?? backendSummary?.metrics?.confirmed_bank_receipts ?? null;
+  const pendingClaims = summaryStats?.pending_count ?? (encounters.length > 0 ? encounters.filter(e => e.billing_status === 'Pending' || e.billing_status === 'Billed' || e.billing_status === 'Submitted').length : null);
+  const claimDenials = summaryStats?.denied_count ?? (encounters.length > 0 ? encounters.filter(e => e.billing_status === 'Claim Denied' || e.billing_status === 'Denied').length : null);
 
   // Claim status chart values
-  const totalClaims = summaryStats?.total_encounters || totalClaimsCount || 789;
-  const paidCount = summaryStats?.paid_count || 326;
-  const pendingCount = pendingClaims;
-  const deniedCount = claimDenials;
+  const totalClaims = summaryStats?.total_encounters || totalClaimsCount || encounters.length || 0;
+  const paidCount = summaryStats?.paid_count ?? (encounters.length > 0 ? encounters.filter(e => e.billing_status === 'Paid' || e.billing_status === 'Settled').length : 0);
+  const pendingCount = pendingClaims ?? 0;
+  const deniedCount = claimDenials ?? 0;
 
-  const paidPct = Math.round((paidCount / totalClaims) * 100);
-  const pendingPct = Math.round((pendingCount / totalClaims) * 100);
-  const deniedPct = Math.max(0, 100 - paidPct - pendingPct);
+  const paidPct = totalClaims > 0 ? Math.round((paidCount / totalClaims) * 100) : 0;
+  const pendingPct = totalClaims > 0 ? Math.round((pendingCount / totalClaims) * 100) : 0;
+  const deniedPct = totalClaims > 0 ? Math.max(0, 100 - paidPct - pendingPct) : 0;
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -160,10 +160,10 @@ export const RevenueReportsView: React.FC = () => {
       {/* Dynamic Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { title: "Daily Revenue (Est)", value: `$${dailyRevenue.toLocaleString()}`, trend: `+${(4.2 + (eLen % 10) * 0.1).toFixed(1)}%`, icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-          { title: "Saved by Sentinel AI", value: `$${savedRevenue.toLocaleString()}`, trend: `+${18 + (eLen % 3)}%`, icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
-          { title: "Pending Claims", value: pendingClaims, trend: `-${2 + (eLen % 2)}`, icon: FileText, color: 'text-orange-400', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
-          { title: "Claim Denials", value: claimDenials, trend: `-${12 + (eLen % 4)}%`, icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
+          { title: "Daily Revenue (Est)", value: dailyRevenue !== null ? `$${dailyRevenue.toLocaleString()}` : 'Unavailable', trend: dailyRevenue !== null ? `+${(4.2 + (eLen % 10) * 0.1).toFixed(1)}%` : 'N/A', icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
+          { title: "Saved by Sentinel AI", value: savedRevenue !== null ? `$${savedRevenue.toLocaleString()}` : 'Unavailable', trend: savedRevenue !== null ? `+${18 + (eLen % 3)}%` : 'N/A', icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
+          { title: "Pending Claims", value: pendingClaims !== null ? pendingClaims : 'Unavailable', trend: pendingClaims !== null ? `-${2 + (eLen % 2)}` : 'N/A', icon: FileText, color: 'text-orange-400', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
+          { title: "Claim Denials", value: claimDenials !== null ? claimDenials : 'Unavailable', trend: claimDenials !== null ? `-${12 + (eLen % 4)}%` : 'N/A', icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
         ].map((stat, i) => (
           <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] text-white card-hover flex flex-col justify-between relative overflow-hidden transition-all duration-300">
              <div className="flex items-start justify-between relative z-10">

@@ -24,7 +24,6 @@ interface RecommendationReviewProps {
 
 export const RecommendationReview: React.FC<RecommendationReviewProps> = ({ 
   signalId, 
-  signal,
   onViewBasis,
   onDecisionChange,
 }) => {
@@ -36,7 +35,6 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
   const [selectedDecision, setSelectedDecision] = useState<string>('');
   const [reason, setReason] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [localRecordedDecision, setLocalRecordedDecision] = useState<any>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -66,48 +64,15 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
     return () => { mounted = false; };
   }, [signalId]);
 
-  const fallbackRecommendation: RecommendationReviewDTO = {
-    object_ref: { object_type: 'Signal', object_id: signalId },
-    journey_id: signalId,
-    recommendation: {
-      recommendation_id: `REC-UAE-${signalId}`,
-      decision_context_id: `CTX-UAE-${signalId}`,
-      rule_evaluation_id: `EVAL-UAE-${signalId}`,
-      mapping_id: 'MAP-UAE-DHPO',
-      mapping_version: '2026.1',
-      content: signal?.recommended_action || "Attach required clinical documentation and re-route via DHPO eClaimLink adjudication gateway.",
-      status: 'ACTIVE',
-      priority: signal?.risk_level === 'Critical' ? 'CRITICAL' : 'HIGH',
-      generated_at: signal?.timestamp || new Date().toISOString()
-    },
-    authority: {
-      state: 'AUTHORIZED',
-      allowed_decisions: ['APPROVE', 'MODIFY', 'REJECT', 'ESCALATE'],
-      reason_required_for: ['REJECT', 'ESCALATE'],
-      eligibility: 'ELIGIBLE'
-    },
-    current_decision: localRecordedDecision,
-    technical_state: 'ready'
-  };
-
-  const activeData: RecommendationReviewDTO = (data && data.technical_state === 'ready' && data.recommendation) 
-    ? {
-        ...data,
-        current_decision: localRecordedDecision || data.current_decision
-      }
-    : fallbackRecommendation;
-
-  const { recommendation, authority, current_decision, technical_state } = activeData;
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!recommendation || !selectedDecision) return;
+    if (!data?.recommendation || !selectedDecision) return;
     
     setSubmitting(true);
     setSubmitError(null);
     try {
       await submitHumanDecision({
-        recommendationId: recommendation.recommendation_id,
+        recommendationId: data.recommendation.recommendation_id,
         decisionType: selectedDecision,
         reason: reason
       });
@@ -119,19 +84,9 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
         onDecisionChange(refreshed?.current_decision?.decision_id ?? null);
       }
     } catch (err: unknown) {
-      // Local fallback decision recording for immediate responsive feedback
-      const localRec = {
-        decision_id: `DEC-UAE-${Date.now()}`,
-        recommendation_id: recommendation.recommendation_id,
-        decision_type: selectedDecision,
-        status: 'RECORDED',
-        actor_id: 'current_user',
-        decision_timestamp: new Date().toISOString()
-      };
-      setLocalRecordedDecision(localRec);
-      if (onDecisionChange) {
-        onDecisionChange(localRec.decision_id);
-      }
+      // SDS-007: After rejection, show the rejection.
+      // Display Recorded only with the persisted receipt.
+      setSubmitError(err instanceof Error ? err.message : 'Decision submission rejected by server.');
     } finally {
       setSubmitting(false);
     }
@@ -146,13 +101,31 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
     );
   }
 
-  if (!recommendation) {
+  if (error || !data) {
     return (
       <div className="p-6 bg-red-500/10 border border-red-500/20 rounded-[20px] flex gap-4">
         <AlertCircle className="w-6 h-6 text-red-400 shrink-0" />
         <div>
           <h3 className="text-white font-medium mb-1">Recommendation Unavailable</h3>
           <p className="text-red-200/70 text-sm">{error || 'Could not resolve authoritative recommendation.'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const { recommendation, authority, current_decision, technical_state } = data;
+
+  if (technical_state !== 'ready' || !recommendation) {
+    return (
+      <div className="p-6 bg-[#1a1525] border border-white/10 rounded-[20px] flex gap-4">
+        <AlertCircle className="w-6 h-6 text-yellow-400 shrink-0" />
+        <div>
+          <h3 className="text-white font-medium mb-1">Recommendation {technical_state}</h3>
+          <p className="text-white/60 text-sm">
+            {technical_state === 'unauthorized' 
+              ? 'You do not have the required authority to view this recommendation.'
+              : 'The authoritative recommendation cannot be definitively resolved.'}
+          </p>
         </div>
       </div>
     );
@@ -179,7 +152,7 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
                 {recommendation.status}
               </div>
               <div className="px-2.5 py-1 bg-white/5 rounded-full text-xs text-white/70 border border-white/10">
-                Priority: {recommendation.priority}
+                Priority: {recommendation.priority || 'Unavailable'}
               </div>
             </div>
             

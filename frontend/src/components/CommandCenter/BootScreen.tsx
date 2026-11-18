@@ -42,14 +42,28 @@ export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
               window.location.href = '/';
               return;
             }
-            return res.json().catch(() => ({}));
+            if (!res.ok) {
+              if (isMounted) {
+                setHealthStatus('failed');
+                setErrorMessage(`Readiness check failed (HTTP ${res.status})`);
+              }
+              return;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (isMounted) {
+              if (data && data.ready === true) {
+                setHealthStatus('ready');
+              } else {
+                setHealthStatus('failed');
+                setErrorMessage('Authoritative readiness returned ready: false');
+              }
+            }
           })
           .catch(err => {
-            console.warn("Backend warming up:", err);
-          })
-          .finally(() => {
+            console.warn("Readiness network error:", err);
             if (isMounted) {
-              setHealthStatus('ready');
+              setHealthStatus('failed');
+              setErrorMessage((err as Error).message || 'Network rejection during readiness check');
             }
           });
 

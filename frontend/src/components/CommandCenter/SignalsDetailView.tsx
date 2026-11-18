@@ -493,124 +493,65 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null }> = 
             </ProgressiveSection>
 
             {/* D4 — Decision Basis (read-only projection) */}
-            {(() => {
-              const codeMatch = selectedSignal.message && selectedSignal.message.includes('[') && selectedSignal.message.includes(']')
-                ? selectedSignal.message.split('[')[1].split(']')[0]
-                : 'CO16';
+            <ProgressiveSection
+              id="decision-basis"
+              title="Decision Basis"
+              icon={<BookOpen className="w-4 h-4 text-violet-400" />}
+              defaultExpanded={false}
+              dataState={
+                basisLoading
+                  ? 'loading'
+                  : !basisData || basisData.technical_state === 'unavailable'
+                    ? 'unavailable'
+                    : basisData.technical_state === 'unauthorized'
+                      ? 'unauthorized'
+                      : 'ready'
+              }
+              dataStateMessage={
+                basisData?.technical_state === 'unauthorized'
+                  ? 'You do not have permission to view the Decision Basis for this signal.'
+                  : basisLoading
+                    ? undefined
+                    : 'Decision Basis detail is unavailable for this signal.'
+              }
+            >
+              {basisData && basisData.technical_state === 'ready' && (
+                <div className="space-y-6 pt-2">
+                  {/* Level 1 — Decision Context Summary */}
+                  <DecisionContextSummary context={basisData.decision_context} />
 
-              const effectiveBasis: DecisionBasisDTO = (basisData && basisData.technical_state === 'ready') ? basisData : {
-                object_ref: { object_type: 'Signal', object_id: selectedSignal.id },
-                journey_id: selectedSignal.id,
-                decision_context: {
-                  context_id: `CTX-UAE-${selectedSignal.id}`,
-                  status: selectedSignal.primary_context || "Financial Integrity",
-                  sufficiency_status: "SUFFICIENT",
-                  evaluated_at: selectedSignal.timestamp,
-                  mode: selectedSignal.metadata?.is_historical ? 'historical' : 'current'
-                },
-                evidence: {
-                  used: [
-                    {
-                      evidence_id: `EV-CLAIM-${selectedSignal.id}`,
-                      type: "DHPO eClaimLink 835 Remittance",
-                      value: selectedSignal.message,
-                      retrieved_at: selectedSignal.timestamp,
-                      retrieval_status: "RETRIEVED"
-                    },
-                    {
-                      evidence_id: `EV-SCRUBBER-${selectedSignal.id}`,
-                      type: "Sentinel Automated Scrubber Rule",
-                      value: `Matched UAE Payer Denial Code [${codeMatch}] against DHA Health Insurance Adjudication Policy Circular 2026/04`,
-                      retrieved_at: selectedSignal.timestamp,
-                      retrieval_status: "RETRIEVED"
-                    }
-                  ],
-                  missing: [],
-                  conflicts: [],
-                  freshness: [
-                    {
-                      evidence_id: `EV-CLAIM-${selectedSignal.id}`,
-                      is_stale: false,
-                      freshness_status: "CURRENT"
-                    }
-                  ]
-                },
-                policy: {
-                  policy_id: "POL-UAE-DHPO-2026",
-                  version: "2026.04",
-                  lifecycle_state: "ACTIVE",
-                  effective_from: "2026-01-01T00:00:00Z",
-                  effective_until: null
-                },
-                rules: [
-                  {
-                    evaluation_id: `EVAL-UAE-${selectedSignal.id}`,
-                    rule_id: `RULE-DHPO-${codeMatch}-SCRUBBER`,
-                    rule_version: "2026.1",
-                    policy_id: "POL-UAE-DHPO-2026",
-                    policy_version: "2026.04",
-                    result: "VIOLATION_TRIGGERED",
-                    evaluation_timestamp: selectedSignal.timestamp
-                  }
-                ],
-                provenance: {
-                  context_id: `CTX-UAE-${selectedSignal.id}`,
-                  provenance_items: [
-                    {
-                      evidence_id: `EV-CLAIM-${selectedSignal.id}`,
-                      source_system: "DHPO eClaimLink Gateway",
-                      ingestion_timestamp: selectedSignal.timestamp
-                    }
-                  ]
-                },
-                technical_state: "ready"
-              };
+                  <div className="border-t border-white/10" />
 
-              return (
-                <ProgressiveSection
-                  id="decision-basis"
-                  title="Decision Basis"
-                  icon={<BookOpen className="w-4 h-4 text-violet-400" />}
-                  defaultExpanded={false}
-                  dataState={basisLoading ? 'loading' : 'ready'}
-                >
-                  <div className="space-y-6 pt-2">
-                    {/* Level 1 — Decision Context Summary */}
-                    <DecisionContextSummary context={effectiveBasis.decision_context} />
+                  {/* Level 2 — Evidence (Used / Missing / Conflicts / Freshness) */}
+                  <EvidenceSummary evidence={basisData.evidence} />
 
-                    <div className="border-t border-white/10" />
+                  <div className="border-t border-white/10" />
 
-                    {/* Level 2 — Evidence (Used / Missing / Conflicts / Freshness) */}
-                    <EvidenceSummary evidence={effectiveBasis.evidence} />
+                  {/* Policy Basis */}
+                  <PolicySummary policy={basisData.policy} />
 
-                    <div className="border-t border-white/10" />
+                  <div className="border-t border-white/10" />
 
-                    {/* Policy Basis */}
-                    <PolicySummary policy={effectiveBasis.policy} />
+                  {/* Rule Evaluations */}
+                  <RuleResultList rules={basisData.rules} highlightEvaluationId={highlightedRuleId || undefined} />
 
-                    <div className="border-t border-white/10" />
+                  {/* Level 3 — Provenance (collapsed by default) */}
+                  {basisData.provenance && (
+                    <>
+                      <div className="border-t border-white/10" />
+                      <ProvenanceDetail provenance={basisData.provenance} />
+                    </>
+                  )}
 
-                    {/* Rule Evaluations */}
-                    <RuleResultList rules={effectiveBasis.rules} highlightEvaluationId={highlightedRuleId || undefined} />
-
-                    {/* Level 3 — Provenance (collapsed by default) */}
-                    {effectiveBasis.provenance && (
-                      <>
-                        <div className="border-t border-white/10" />
-                        <ProvenanceDetail provenance={effectiveBasis.provenance} />
-                      </>
-                    )}
-
-                    {/* Journey ID for traceability */}
-                    {effectiveBasis.journey_id && (
-                      <p className="text-[10px] font-mono text-white/30 border-t border-white/10 pt-3">
-                        Journey: {effectiveBasis.journey_id}
-                      </p>
-                    )}
-                  </div>
-                </ProgressiveSection>
-              );
-            })()}
+                  {/* Journey ID for traceability */}
+                  {basisData.journey_id && (
+                    <p className="text-[10px] font-mono text-white/30 border-t border-white/10 pt-3">
+                      Journey: {basisData.journey_id}
+                    </p>
+                  )}
+                </div>
+              )}
+            </ProgressiveSection>
 
             {/* D8 — Historical Trace & Reproducibility */}
             {(() => {

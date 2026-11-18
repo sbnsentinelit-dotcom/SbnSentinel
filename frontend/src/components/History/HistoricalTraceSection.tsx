@@ -54,90 +54,9 @@ export const HistoricalTraceSection: React.FC<HistoricalTraceSectionProps> = ({ 
             } catch (err: any) {
                 if (cancelled) return;
                 console.error("History fetch error:", err);
-                const fallbackContext: HistoricalContextResponse = {
-                    anchor: {
-                        object_type: 'journey',
-                        object_id: journeyId,
-                        journey_id: journeyId,
-                        mode: 'historical'
-                    },
-                    bindings: {
-                        evidence_refs: [
-                            { evidence_id: `EV-TRACE-${journeyId}`, version: '1.0' }
-                        ],
-                        decision_context_id: `CTX-UAE-${journeyId}`,
-                        policy: {
-                            policy_id: 'POL-UAE-DHPO-2026',
-                            policy_version: '2026.04'
-                        },
-                        rule_evaluations: [
-                            {
-                                evaluation_id: `EVAL-${journeyId}`,
-                                rule_id: 'RULE-DHPO-CO16-SCRUBBER',
-                                rule_version: '2026.1',
-                                policy_id: 'POL-UAE-DHPO-2026',
-                                policy_version: '2026.04',
-                                evaluated_at: new Date().toISOString()
-                            }
-                        ],
-                        recommendations: [
-                            {
-                                recommendation_id: `REC-${journeyId}`,
-                                mapping_id: 'MAP-UAE-CO16',
-                                mapping_version: '2026.1',
-                                status: 'ACTIVE',
-                                generated_at: new Date().toISOString()
-                            }
-                        ],
-                        decisions: [
-                            {
-                                decision_id: `DEC-${journeyId}`,
-                                actor_id: 'DXB-CLINIC-ADMIN',
-                                decision_type: 'APPROVE',
-                                status: 'RECORDED',
-                                timestamp: new Date().toISOString()
-                            }
-                        ],
-                        actions: [
-                            {
-                                action_id: `ACT-${journeyId}`,
-                                action_type: 'RECONCILE_DHPO_CLAIM',
-                                status: 'DISPATCHED',
-                                current_result: 'SUCCESS',
-                                attempts: [
-                                    { attempt_id: `ATT-1-${journeyId}`, attempt_number: 1, result: 'SUCCESS' }
-                                ],
-                                outcome: {
-                                    outcome_id: `OUT-1-${journeyId}`,
-                                    confirmation_state: 'CONFIRMED',
-                                    resolution_state: 'RESOLVED'
-                                }
-                            }
-                        ]
-                    },
-                    technical_state: 'valid'
-                };
-                setContext(fallbackContext);
-                setReproductionResult({
-                    status: 'MATCH',
-                    recommendation_id: `REC-${journeyId}`,
-                    original: {
-                        recommendation_id: `REC-${journeyId}`,
-                        content: 'Attach mandatory supporting clinical documentation and re-route via DHPO eClaimLink adjudication gateway.',
-                        hash: 'sha256-d8a7c29e1f5b4038a8e291'
-                    },
-                    reproduced: {
-                        recommendation_id: `REC-${journeyId}`,
-                        content: 'Attach mandatory supporting clinical documentation and re-route via DHPO eClaimLink adjudication gateway.',
-                        hash: 'sha256-d8a7c29e1f5b4038a8e291'
-                    },
-                    differences: [],
-                    diagnostic: {
-                        stage: 'VERIFIED',
-                        code: 'DETERMINISTIC_REPRODUCTION_SUCCESS',
-                        missing_dependency: null
-                    }
-                });
+                setError(err.message || t.history.fetchError);
+                setContext(null);
+                setReproductionResult(null);
             } finally {
                 if (!cancelled) setLoading(false);
             }
