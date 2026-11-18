@@ -186,7 +186,7 @@
   ],
   "release_status": "NOT COMPLETE: implemented components; mandatory integrated acceptance gates remain blocked",
   "migration_parent": "g8_financial_reporting",
-  "declared_migration_head": "hsp01_auditor_corrections",
+  "declared_migration_head": "hsp01_schema_completion",
   "external_in_progress_work": "Unknown; user explicitly authorized shared edits and later conflict reconciliation",
   "existing_database_accessed_by_agent": false,
   "pending": [
@@ -215,7 +215,7 @@
     "owner": "New developer",
     "base_commit": "a9ee9895021186163f95006a42a51418265f9d87",
     "target_main_commit": "70503767215582d14431f7289d0bcebd503d17c9",
-    "state": "CONFLICT_RESOLVED_MERGE_PENDING_NO_COMMIT",
+    "state": "MERGED_AND_PUSHED",
     "affected_files": [
       "src/runtime/app/api/v1/endpoints/encounters.py",
       "tests/integration/test_hsp01_encounter_merge.py"
@@ -240,19 +240,18 @@
     },
     "head_unchanged": "a9ee9895021186163f95006a42a51418265f9d87",
     "merge_head": "70503767215582d14431f7289d0bcebd503d17c9",
-    "commit_created": false,
-    "push_performed": false,
+    "commit_created": true,
+    "push_performed": true,
     "existing_application_database_accessed": false,
     "hsp02_stashes_retained": [
       "3d44cdc5447f27eef9e8a338e2e92aa5b98bb172",
       "99e0c896e12925e1e7453e3a2c93716e567e048e"
     ],
     "remaining_auditor_items": [
-      "picomatch GHSA-fc5q-39xc-vjpf: no patched version listed; actual unchanged policy gate fails; security/release approval unavailable",
-      "Shared startup-screen tests fail; shared frontend owner/name confirmation required",
-      "Windows standalone packaging EPERM; Linux CI verification pending",
-      "No new combined commit or remote CI run; user has not authorized commit/push"
-    ]
+      "picomatch GHSA-fc5q-39xc-vjpf: still no patched version (advisory rechecked 18 Nov 2026); policy gate active; disposition approval pending (see qa_review_corrections.remaining_dependencies)",
+      "Shared startup-screen tests (BootScreen T03/T05, T06) fail on main and branch; existing shared frontend owner"
+    ],
+    "merge_commit_sha": "f58c08e7549065de72aac2a4bfb1992ab33ee06f"
   },
   "auditor_followup": {
     "owner": "New developer",
@@ -286,10 +285,9 @@
       "frontend_build": "Compile and TypeScript pass; standalone packaging blocked by Windows EPERM; full build NOT PASS"
     },
     "release_blockers": [
-      "picomatch GHSA-fc5q-39xc-vjpf: no patched version listed; actual unchanged policy gate fails; security/release approval unavailable",
-      "Shared startup-screen tests fail; shared frontend owner/name confirmation required",
-      "Windows standalone packaging EPERM; Linux CI verification pending",
-      "No new combined commit or remote CI run; user has not authorized commit/push"
+      "picomatch GHSA-fc5q-39xc-vjpf: no patched version; policy gate active; disposition approval pending",
+      "Shared startup-screen tests fail on main and branch; existing shared frontend owner",
+      "Backend Flake8 step fails in Linux CI on main and on this branch since the main merge; exact lines require the CI log"
     ],
     "owners": {
       "functional_corrections": "New developer",
@@ -297,14 +295,108 @@
       "dependency_disposition": "Authorized security/release owner; approval unavailable",
       "startup_screen": "Existing shared frontend owner; individual name not confirmed"
     },
-    "published_pr_head": "a9ee9895021186163f95006a42a51418265f9d87",
+    "published_pr_head": "f58c08e7549065de72aac2a4bfb1992ab33ee06f",
     "local_merge_head": "70503767215582d14431f7289d0bcebd503d17c9",
-    "followup_commit_created": false,
-    "followup_pushed": false,
+    "followup_commit_created": true,
+    "followup_pushed": true,
     "existing_database_accessed": false,
     "hsp02_stashes_retained": [
       "3d44cdc5447f27eef9e8a338e2e92aa5b98bb172",
       "99e0c896e12925e1e7453e3a2c93716e567e048e"
-    ]
+    ],
+    "followup_commit_sha": "f58c08e7549065de72aac2a4bfb1992ab33ee06f",
+    "ci_status_note": "f58c08e7 workflow was invalid (runner context in job-level env), so no CI job ran; fixed in 70b84838122bacf5eb54fda6cebcafb4c37e70a2; see qa_review_corrections.ci_evidence"
+  },
+  "qa_review_corrections": {
+    "owner": "New developer (user); QA review fixes prepared by QA reviewer and committed by the user",
+    "base_commit": "f58c08e7549065de72aac2a4bfb1992ab33ee06f",
+    "commits": [
+      {
+        "sha": "15f8bf7179259ba6038beae7fa4f8e7a806dc908",
+        "items": [
+          "Fresh install by Alembic only missed decision-context tables; every event failed at L4 (no such table: dce_context_evidence)",
+          "hospital_legacy_guard read actor.org_id directly; principals without org_id raised 500 (broke 2 existing D4/D5 tests)",
+          "test_at28 allowed-heads list did not include HSP01 migration heads"
+        ],
+        "files": [
+          "alembic/versions/hsp01_schema_completion.py",
+          "alembic/env.py",
+          "src/runtime/app/services/hospital_legacy_guard.py",
+          "tests/integration/test_round2_acceptance.py"
+        ]
+      },
+      {
+        "sha": "70b84838122bacf5eb54fda6cebcafb4c37e70a2",
+        "items": [
+          "quality_gate.yml used ${{ runner.temp }} in job-level env (not allowed); workflow was invalid and started no jobs"
+        ],
+        "files": [
+          ".github/workflows/quality_gate.yml"
+        ]
+      }
+    ],
+    "pending_combined_commit": {
+      "content": [
+        "Latest main af0496b8 NOT merged: it removes human-decision scope enforcement in decisions.py and adds 8 Flake8 errors; correct on main first (see hsp01_correction_matrix.md)",
+        "CI isolated step also runs tests/integration/test_hsp01_encounter_merge.py",
+        "This register, the correction matrix and the picomatch disposition draft"
+      ],
+      "status": "Prepared locally; to be committed and pushed by the user"
+    },
+    "migration": {
+      "sequence": "g8_financial_reporting -> hsp01_hospital_extension -> hsp01_auditor_corrections -> hsp01_schema_completion",
+      "fresh_install": "alembic upgrade head creates 70 tables; a real EHR event reaches Completed (previously Failed at L4)",
+      "upgrade_from_hsp01_auditor_corrections": "Passes; adds 6 dce_context_* tables and decision_records",
+      "upgrade_where_tables_already_exist": "Passes (checkfirst); legacy create_all databases keep their rows",
+      "not_added": "Model modules no runtime code imports (governance, collaboration, explainability, evidence evaluation, recommendation generation, integration)",
+      "downgrade": "Refused: governed decision context and decision history must be preserved"
+    },
+    "ci_evidence": {
+      "run": "https://github.com/sbnsentinelit-dotcom/SbnSentinel/actions/runs/44349431745",
+      "commit": "8d5fee00adc1f9f2da78771b6dada4e4e4bc9823 (CI run commit; same tree as 70b84838122bacf5eb54fda6cebcafb4c37e70a2 after a message-only rewrite)",
+      "hsp01_postgresql_job": "PASS: fresh forward migrations; hospital concurrency, authority recovery and regressions",
+      "backend_quality_job": "FAIL at SES-011 Flake8 (migration step passed); later steps skipped. Same step fails on main commits 04c1e0f4, eb42cc07, 70503767, af0496b8. Local flake8 6.1.0 reports 0 issues; CI log needed for exact lines",
+      "frontend_quality_job": "FAIL at F-33 Dependency Audit (picomatch); tests, lint and build skipped. Same failure on main"
+    },
+    "local_verification_combined_with_latest_main": {
+      "code": "HSP01 branch + af0496b899606261987f59fcaaa0882a6233723e (merge-tree, no conflict)",
+      "frontend": "tsc 0 errors; hospital eslint 0 errors; vitest 106 passed, 2 failed (existing BootScreen tests), 10 skipped",
+      "backend": "Combined with af0496b8: HSP01 suites 3/3, unit 3/3, full 140/143 (2 extra failures also fail on main af0496b8), Flake8 8 errors from af0496b8"
+    },
+    "remaining_dependencies": [
+      {
+        "item": "af0496b8 decision-scope regression on main (decisions.py)",
+        "owner": "Existing developer"
+      },
+      {
+        "item": "Backend Flake8 failure in Linux CI (inherited from main)",
+        "owner": "New developer with existing developer for main files"
+      },
+      {
+        "item": "picomatch GHSA-fc5q-39xc-vjpf disposition",
+        "owner": "Accountable approver named in dependency-disposition.json (Platform Owner & Lead Security Officer)"
+      },
+      {
+        "item": "BootScreen startup-screen tests",
+        "owner": "Existing shared frontend owner"
+      },
+      {
+        "item": "test_a026b_practice_fusion_readiness (fails on main too)",
+        "owner": "Existing developer"
+      },
+      {
+        "item": "Governed billing evidence/context/policy/rule/review/outcome; FR01-FR08 schedules; legacy reconciliation; T01-T12 acceptance",
+        "owner": "HSP02 workstream"
+      },
+      {
+        "item": "Private RSA key committed in quality_gate.yml (QA report BUG-054)",
+        "owner": "Security owner; move to CI secrets and rotate"
+      }
+    ],
+    "local_verification_pr_head": {
+      "backend": "HSP01 suites 3/3; full 142/143 (test_a026b also fails on main); flake8 0 issues locally",
+      "frontend": "vitest 106 passed, 2 BootScreen failures (also on main), 10 skipped; tsc 0 errors"
+    },
+    "evidence_map": "hsp01_correction_matrix.md; hsp01_picomatch_disposition_draft.md"
   }
 }

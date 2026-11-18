@@ -48,7 +48,7 @@ jobs:
       env:
         SENTINEL_DISABLE_SCHEMA_AUTOCREATE: "1"
       run: |
-        python -B -m pytest --noconftest -p no:cacheprovider tests/integration/test_hospital_directory.py tests/integration/test_hospital_source_contract.py -v
+        python -B -m pytest --noconftest -p no:cacheprovider tests/integration/test_hospital_directory.py tests/integration/test_hospital_source_contract.py tests/integration/test_hsp01_encounter_merge.py -v
 
     - name: SES-011 Unit Testing (Pytest)
       env:
