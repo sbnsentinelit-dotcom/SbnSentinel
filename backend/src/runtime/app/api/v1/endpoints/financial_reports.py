@@ -12,8 +12,8 @@ router = APIRouter()
 
 
 def _default_dates():
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=30)
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2027, 12, 31, tzinfo=timezone.utc)
     return start, end
 
 
@@ -26,7 +26,7 @@ def get_owner_summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     s_date, e_date = start_date, end_date
     if not s_date or not e_date:
         def_s, def_e = _default_dates()
@@ -50,7 +50,7 @@ def get_payer_summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     s_date, e_date = start_date, end_date
     if not s_date or not e_date:
         def_s, def_e = _default_dates()
@@ -73,7 +73,7 @@ def get_claim_register(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     s_date, e_date = start_date, end_date
     if not s_date or not e_date:
         def_s, def_e = _default_dates()
@@ -96,7 +96,7 @@ def get_unpaid_lines(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     s_date, e_date = start_date, end_date
     if not s_date or not e_date:
         def_s, def_e = _default_dates()
@@ -119,7 +119,7 @@ def get_denials(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     s_date, e_date = start_date, end_date
     if not s_date or not e_date:
         def_s, def_e = _default_dates()
@@ -142,7 +142,7 @@ def get_reconciliation(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     s_date, e_date = start_date, end_date
     if not s_date or not e_date:
         def_s, def_e = _default_dates()
@@ -163,7 +163,7 @@ def get_ageing(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     return financial_reporting_service.generate_ageing_report(
         clinic_id=target_clinic,
         db=db,
@@ -176,7 +176,7 @@ def get_completeness(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     return financial_reporting_service.generate_completeness_exceptions(
         clinic_id=target_clinic,
         db=db,
@@ -192,7 +192,7 @@ def create_report_snapshot(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "clinic_alpha"
+    target_clinic = clinic_id or getattr(current_user, "clinic_id", None) or "DXB-CLINIC-01"
     s_date, e_date = start_date, end_date
     if not s_date or not e_date:
         def_s, def_e = _default_dates()
