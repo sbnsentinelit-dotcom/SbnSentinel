@@ -11,8 +11,10 @@ jobs:
     name: Backend Quality Assurance
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: sqlite:///${{ runner.temp }}/hsp01_backend_quality.db
-      SQLALCHEMY_DATABASE_URL: sqlite:///${{ runner.temp }}/hsp01_backend_quality.db
+      # The runner context is not available in job-level env; use a fixed
+      # disposable path on the Ubuntu runner instead.
+      DATABASE_URL: sqlite:////tmp/hsp01_backend_quality.db
+      SQLALCHEMY_DATABASE_URL: sqlite:////tmp/hsp01_backend_quality.db
       SENTINEL_DISABLE_SCHEMA_AUTOCREATE: "1"
       SECRET_KEY: "test-secret-key-for-ci"
     
