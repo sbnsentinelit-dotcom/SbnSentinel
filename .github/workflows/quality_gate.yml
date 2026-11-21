@@ -37,6 +37,9 @@ jobs:
         cat /tmp/ci_rsa_key.pem >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
 
+    - name: Migrate disposable quality database before application imports
+      run: python -B -m alembic upgrade head
+
     - name: SES-011 Linting (Flake8)
       run: |
         flake8 src/runtime/app/ tests/

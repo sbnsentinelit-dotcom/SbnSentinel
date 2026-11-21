@@ -58,16 +58,24 @@ def create_app() -> FastAPI:
         from app.services.governance_registry import initialize_registry_seeds
         initialize_registry_seeds()
         # Auto-seed a super_admin account on first startup.
-        # Default credentials: superadmin@sbnsentinel.com / SBNAdmin@2024
         from app.db.database import SessionLocal
         from app.core.security import get_password_hash
+        import os
+        import sys
         db = SessionLocal()
         try:
             existing = db.query(User).filter(User.email == "superadmin@sbnsentinel.com").first()
             if not existing:
+                admin_pwd = (
+                    os.getenv("BOOTSTRAP_ADMIN_PASSWORD")
+                    or getattr(settings, "BOOTSTRAP_ADMIN_PASSWORD", None)
+                )
+                if not admin_pwd:
+                    import secrets
+                    admin_pwd = secrets.token_urlsafe(16)
                 admin = User(
                     email="superadmin@sbnsentinel.com",
-                    hashed_password=get_password_hash(settings.BOOTSTRAP_ADMIN_PASSWORD),
+                    hashed_password=get_password_hash(admin_pwd),
                     full_name="SBN Super Admin",
                     role=UserRole.SYSTEM_ADMINISTRATOR.value,
                     is_active=True
@@ -76,8 +84,6 @@ def create_app() -> FastAPI:
                 db.commit()
                 print("[SUCCESS] Super Admin seeded: superadmin@sbnsentinel.com / [HIDDEN]")
 
-            import os
-            import sys
             is_production = getattr(settings, "ENVIRONMENT", "").upper() in ["PRODUCTION", "PROD"]
             is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "1"
             if is_production:
@@ -91,7 +97,10 @@ def create_app() -> FastAPI:
             elif not is_testing:
                 existing_clinic = db.query(User).filter(User.email == "clinicadmin@sbnsentinel.com").first()
                 if not existing_clinic:
-                    demo_pwd = getattr(settings, "DEMO_ADMIN_PASSWORD", "ClinicPassword@123")
+                    demo_pwd = os.getenv("DEMO_ADMIN_PASSWORD") or getattr(settings, "DEMO_ADMIN_PASSWORD", None)
+                    if not demo_pwd:
+                        import secrets
+                        demo_pwd = secrets.token_urlsafe(16)
                     clinic_admin = User(
                         email="clinicadmin@sbnsentinel.com",
                         hashed_password=get_password_hash(demo_pwd),

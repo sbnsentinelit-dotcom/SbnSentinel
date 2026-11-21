@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     CLINIC_TIMEZONE: str = "UTC"
     SYNTHETIC_TEST_ENABLED: bool = False
     BUILD_ID: str = "unknown"
-    BOOTSTRAP_ADMIN_PASSWORD: str = "SBNAdmin@2024"  # Default for dev
+    BOOTSTRAP_ADMIN_PASSWORD: str = ""
 
     ENABLE_PRACTICE_FUSION: bool = True
 

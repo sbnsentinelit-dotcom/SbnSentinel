@@ -9,8 +9,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def seed_clinic_admin():
     db = SessionLocal()
-    email = "clinicadmin@sbnsentinel.com"
-    password = "ClinicPassword@123"
+    email = os.getenv("CLINIC_ADMIN_EMAIL", "clinicadmin@sbnsentinel.com")
+    password = os.getenv("CLINIC_ADMIN_PASSWORD") or os.getenv("ADMIN_PASSWORD")
+    if not password:
+        import secrets
+        password = secrets.token_urlsafe(16)
+        print("[NOTICE] Generated random password since no CLINIC_ADMIN_PASSWORD env set.")
 
     existing = db.query(User).filter(User.email == email).first()
     if existing:
