@@ -32,27 +32,7 @@ def get_historical_recommendation(
     """
     rec = db.query(RecommendationModel).filter(RecommendationModel.recommendation_id == recommendation_id).first()
     if not rec:
-        return {
-            "status": "MATCH",
-            "recommendation_id": recommendation_id,
-            "original": {
-                "recommendation_id": recommendation_id,
-                "content": "Attach mandatory supporting clinical documentation and re-route via DHPO eClaimLink adjudication gateway.",
-                "hash": "sha256-d8a7c29e1f5b4038a8e291"
-            },
-            "reproduced": {
-                "recommendation_id": recommendation_id,
-                "content": "Attach mandatory supporting clinical documentation and re-route via DHPO eClaimLink adjudication gateway.",
-                "hash": "sha256-d8a7c29e1f5b4038a8e291"
-            },
-            "differences": [],
-            "diagnostic": {
-                "stage": "VERIFIED",
-                "code": "DETERMINISTIC_REPRODUCTION_SUCCESS",
-                "divergence": None,
-                "reproduction_trace": ["Ingestion Normalization", "Rule Evaluation", "Recommendation Mapping", "Hash Validation"]
-            }
-        }
+        raise HTTPException(status_code=404, detail="Recommendation not found")
 
     # Missing or unresolvable ownership must deny access for ordinary users
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
@@ -73,74 +53,7 @@ def get_historical_journey(
     """
     recs = db.query(RecommendationModel).filter(RecommendationModel.journey_id == journey_id).order_by(RecommendationModel.generated_at.asc()).all()
     if not recs:
-        # Synthesize valid historical lifecycle for UAE Sentinel journey
-        return {
-            "anchor": {
-                "object_type": "journey",
-                "object_id": journey_id,
-                "journey_id": journey_id,
-                "mode": "historical"
-            },
-            "bindings": {
-                "evidence_refs": [
-                    {"evidence_id": f"EV-CLAIM-{journey_id}", "version": "1.0"}
-                ],
-                "decision_context_id": f"CTX-UAE-{journey_id}",
-                "policy": {
-                    "policy_id": "POL-UAE-DHPO-2026",
-                    "policy_version": "2026.04"
-                },
-                "rule_evaluations": [
-                    {
-                        "evaluation_id": f"EVAL-UAE-{journey_id}",
-                        "rule_id": "RULE-DHPO-CO16-SCRUBBER",
-                        "rule_version": "2026.1",
-                        "policy_id": "POL-UAE-DHPO-2026",
-                        "policy_version": "2026.04",
-                        "evaluated_at": "2026-11-18T10:00:00Z"
-                    }
-                ],
-                "recommendations": [
-                    {
-                        "recommendation_id": f"REC-UAE-{journey_id}",
-                        "mapping_id": "MAP-UAE-CO16",
-                        "mapping_version": "2026.1",
-                        "status": "ACTIVE",
-                        "generated_at": "2026-11-18T10:00:00Z"
-                    }
-                ],
-                "decisions": [
-                    {
-                        "decision_id": f"DEC-UAE-{journey_id}",
-                        "actor_id": str(current_user.id),
-                        "decision_type": "APPROVE",
-                        "status": "RECORDED",
-                        "authority_basis": "ORGANIZATION_ADMINISTRATOR",
-                        "reason": "Approved claim documentation review protocol",
-                        "override_indicator": False,
-                        "timestamp": "2026-11-18T10:05:00Z"
-                    }
-                ],
-                "actions": [
-                    {
-                        "action_id": f"ACT-UAE-{journey_id}",
-                        "action_type": "RECONCILE_DHPO_CLAIM",
-                        "status": "DISPATCHED",
-                        "current_result": "SUCCESS",
-                        "attempts": [
-                            {"attempt_id": f"ATT-1-{journey_id}", "attempt_number": 1, "result": "SUCCESS"}
-                        ],
-                        "outcome": {
-                            "outcome_id": f"OUT-1-{journey_id}",
-                            "confirmation_state": "CONFIRMED",
-                            "resolution_state": "RESOLVED"
-                        }
-                    }
-                ]
-            },
-            "errors": [],
-            "technical_state": "valid"
-        }
+        raise HTTPException(status_code=404, detail="No historical records found for journey")
 
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
         if not recs[0].intended_target_reference:
@@ -176,27 +89,7 @@ def get_reproduction(
     """
     rec = db.query(RecommendationModel).filter(RecommendationModel.recommendation_id == recommendation_id).first()
     if not rec:
-        return {
-            "status": "MATCH",
-            "recommendation_id": recommendation_id,
-            "original": {
-                "recommendation_id": recommendation_id,
-                "content": "Attach mandatory supporting clinical documentation and re-route via DHPO eClaimLink adjudication gateway.",
-                "hash": "sha256-d8a7c29e1f5b4038a8e291"
-            },
-            "reproduced": {
-                "recommendation_id": recommendation_id,
-                "content": "Attach mandatory supporting clinical documentation and re-route via DHPO eClaimLink adjudication gateway.",
-                "hash": "sha256-d8a7c29e1f5b4038a8e291"
-            },
-            "differences": [],
-            "diagnostic": {
-                "stage": "VERIFIED",
-                "code": "DETERMINISTIC_REPRODUCTION_SUCCESS",
-                "divergence": None,
-                "reproduction_trace": ["Ingestion Normalization", "Rule Evaluation", "Recommendation Mapping", "Hash Validation"]
-            }
-        }
+        raise HTTPException(status_code=404, detail="Recommendation not found")
     # Missing or unresolvable ownership must deny access for ordinary users
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
         if not rec.intended_target_reference:

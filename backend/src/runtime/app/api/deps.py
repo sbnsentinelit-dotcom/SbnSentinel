@@ -87,8 +87,7 @@ def get_scoped_user(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role == UserRole.SYSTEM_ADMINISTRATOR.value:
         return current_user
     if not current_user.org_id or current_user.org_id == "UNASSIGNED":
-        # Default active organization scope to UAE Sentinel Healthcare
-        current_user.org_id = "ORG-UAE-01"
+        raise HTTPException(status_code=403, detail="Missing required organization scope")
     return current_user
 
 
@@ -96,17 +95,15 @@ def get_signal_for_actor(db: Session, actor: User, signal_id: str):
     from app.models.signal import SignalModel
     q = db.query(SignalModel).filter(SignalModel.id == signal_id)
     if actor.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        effective_org = actor.org_id or "ORG-UAE-01"
-        if actor.role == UserRole.ORGANIZATION_ADMINISTRATOR.value:
-            q = q.filter((SignalModel.org_id == effective_org) | (SignalModel.org_id == None) | (SignalModel.org_id == "ORG-UAE-01"))
-        else:
-            q = q.filter((SignalModel.org_id == effective_org) | (SignalModel.org_id == None))
+        if not actor.org_id or actor.org_id == "UNASSIGNED":
+            raise HTTPException(status_code=403, detail="Missing required organization scope")
+        q = q.filter(SignalModel.org_id == actor.org_id)
+        if actor.role in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
             if hasattr(actor, 'clinic_id') and actor.clinic_id:
-                q = q.filter((SignalModel.clinic_id == actor.clinic_id) | (SignalModel.clinic_id == None) | (SignalModel.clinic_id == "DXB-CLINIC-01"))
+                q = q.filter(SignalModel.clinic_id == actor.clinic_id)
+            else:
+                q = q.filter(SignalModel.clinic_id == "UNASSIGNED_FORCE_FAIL")
     obj = q.first()
     if not obj:
-        # Fallback: check if signal exists by ID
-        obj = db.query(SignalModel).filter(SignalModel.id == signal_id).first()
-        if not obj:
-            raise HTTPException(status_code=404, detail="Signal not found or out of scope")
+        raise HTTPException(status_code=404, detail="Signal not found or out of scope")
     return obj

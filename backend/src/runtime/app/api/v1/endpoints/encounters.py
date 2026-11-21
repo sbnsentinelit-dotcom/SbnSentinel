@@ -1,9 +1,12 @@
 import math
+import random
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from app.db.database import get_db
+from app.api.deps import get_scoped_user, RoleChecker
+from app.models.user import User, UserRole
 from app.models.encounter import EncounterModel
 from app.schemas.encounter import EncounterCreate, EncounterUpdate, EncounterResponse
 
@@ -172,13 +175,25 @@ def get_all_encounters(
     status: Optional[str] = Query(None),
     billing_status: Optional[str] = Query(None),
     clinic_id: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
 ):
     """
-    Get clinical patient encounters with high-performance server-side pagination.
+    Get clinical patient encounters with high-performance server-side pagination and facility scoping.
     """
     query = db.query(EncounterModel)
-    if clinic_id:
+
+    # Server-side facility scope enforcement (BUG-026)
+    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
+        effective_clinic = clinic_id or getattr(current_user, 'clinic_id', None)
+        if current_user.role in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
+            if getattr(current_user, 'clinic_id', None):
+                query = query.filter(EncounterModel.clinic_id == current_user.clinic_id)
+            else:
+                query = query.filter(EncounterModel.clinic_id == "UNASSIGNED_FORCE_FAIL")
+        elif effective_clinic:
+            query = query.filter(EncounterModel.clinic_id == effective_clinic)
+    elif clinic_id:
         query = query.filter(EncounterModel.clinic_id == clinic_id)
 
     if search:
@@ -212,24 +227,21 @@ def get_all_encounters(
         query = query.offset(offset_val).limit(limit)
 
     encounters = query.all()
-    if not encounters and total_count == 0:
-        try:
-            from app.services.dubai_seed_service import auto_seed_dubai_if_empty
-            auto_seed_dubai_if_empty(db)
-            encounters = db.query(EncounterModel).all()
-            response.headers["X-Total-Count"] = str(len(encounters))
-        except Exception as e:
-            print(f"[ERROR] Auto-seed dubai encounters failed: {e}")
-
     return encounters
 
 
 @router.post("/seed-dubai", status_code=status.HTTP_200_OK)
 @router.post("/seed-dubai/", status_code=status.HTTP_200_OK)
-def trigger_seed_dubai(db: Session = Depends(get_db)):
+def trigger_seed_dubai(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value]))
+):
     """
-    Explicit endpoint to seed or refresh the UAE Dubai clinic demo dataset.
+    Explicit endpoint to seed or refresh the UAE Dubai clinic demo dataset (development/test only).
     """
+    from app.core.config import settings
+    if getattr(settings, "ENVIRONMENT", "").upper() in ["PRODUCTION", "PROD"]:
+        raise HTTPException(status_code=403, detail="Demo data seeding is permanently disabled in production.")
     try:
         from app.services.dubai_seed_service import seed_dubai_data
         seed_dubai_data(db)
@@ -244,10 +256,25 @@ def trigger_seed_dubai(db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=EncounterResponse, status_code=status.HTTP_201_CREATED)
-def create_encounter(encounter_in: EncounterCreate, db: Session = Depends(get_db)):
+def create_encounter(
+    encounter_in: EncounterCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
     """
     Register a new patient encounter in the clinic flow.
+    Enforces write permissions and clinic facility ownership (BUG-026).
     """
+    if current_user.role == UserRole.READ_ONLY_AUDITOR.value:
+        raise HTTPException(status_code=403, detail="Read-Only Auditor cannot create encounters")
+
+    effective_clinic = encounter_in.clinic_id or getattr(current_user, 'clinic_id', None)
+    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
+        if not effective_clinic:
+            raise HTTPException(status_code=400, detail="Missing required clinic facility for encounter")
+        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and effective_clinic != current_user.clinic_id:
+            raise HTTPException(status_code=403, detail="Cannot create encounter for another clinic facility")
+
     existing = db.query(EncounterModel).filter(EncounterModel.id == encounter_in.id).first()
     if existing:
         raise HTTPException(
@@ -258,6 +285,7 @@ def create_encounter(encounter_in: EncounterCreate, db: Session = Depends(get_db
         id=encounter_in.id,
         patient_name=encounter_in.patient_name,
         provider_name=encounter_in.provider_name,
+        clinic_id=effective_clinic,
         date=encounter_in.date,
         diagnosis=encounter_in.diagnosis,
         type=encounter_in.type,
@@ -269,7 +297,10 @@ def create_encounter(encounter_in: EncounterCreate, db: Session = Depends(get_db
         department=encounter_in.department,
         avatar=encounter_in.avatar or f"https://i.pravatar.cc/150?img={random.randint(1, 70)}",
         clinical_notes=encounter_in.clinical_notes,
-        medications=encounter_in.medications
+        medications=encounter_in.medications,
+        payer_network=encounter_in.payer_network,
+        cpt_code=encounter_in.cpt_code,
+        billing_amount=encounter_in.billing_amount
     )
     db.add(new_enc)
     db.commit()
@@ -279,15 +310,25 @@ def create_encounter(encounter_in: EncounterCreate, db: Session = Depends(get_db
 
 @router.put("/{encounter_id}", response_model=EncounterResponse)
 def update_encounter(
-        encounter_id: str,
-        encounter_in: EncounterUpdate,
-        db: Session = Depends(get_db)):
+    encounter_id: str,
+    encounter_in: EncounterUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
     """
     Update status, billing_status, wait time, or diagnosis of an existing clinical encounter.
+    Enforces write permissions and facility isolation (BUG-026).
     """
+    if current_user.role == UserRole.READ_ONLY_AUDITOR.value:
+        raise HTTPException(status_code=403, detail="Read-Only Auditor cannot modify encounters")
+
     enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
     if not enc:
         raise HTTPException(status_code=404, detail="Encounter record not found")
+
+    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
+        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and enc.clinic_id and enc.clinic_id != current_user.clinic_id:
+            raise HTTPException(status_code=403, detail="Cannot modify encounter belonging to another clinic facility")
 
     if encounter_in.status is not None:
         enc.status = encounter_in.status
@@ -303,6 +344,12 @@ def update_encounter(
         enc.clinical_notes = encounter_in.clinical_notes
     if encounter_in.medications is not None:
         enc.medications = encounter_in.medications
+    if encounter_in.payer_network is not None:
+        enc.payer_network = encounter_in.payer_network
+    if encounter_in.cpt_code is not None:
+        enc.cpt_code = encounter_in.cpt_code
+    if encounter_in.billing_amount is not None:
+        enc.billing_amount = encounter_in.billing_amount
 
     db.commit()
     db.refresh(enc)
@@ -310,13 +357,25 @@ def update_encounter(
 
 
 @router.delete("/{encounter_id}", status_code=status.HTTP_200_OK)
-def delete_encounter(encounter_id: str, db: Session = Depends(get_db)):
+def delete_encounter(
+    encounter_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
     """
     Remove/Checkout an encounter record from the active flows.
+    Enforces write permissions and facility isolation (BUG-026).
     """
+    if current_user.role == UserRole.READ_ONLY_AUDITOR.value:
+        raise HTTPException(status_code=403, detail="Read-Only Auditor cannot delete encounters")
+
     enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
     if not enc:
         raise HTTPException(status_code=404, detail="Encounter record not found")
+
+    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
+        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and enc.clinic_id and enc.clinic_id != current_user.clinic_id:
+            raise HTTPException(status_code=403, detail="Cannot delete encounter belonging to another clinic facility")
 
     db.delete(enc)
     db.commit()

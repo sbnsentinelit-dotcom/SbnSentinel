@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.settings import SettingsModel
 from app.models.user import User, UserRole
-from app.api.deps import get_current_user, RoleChecker
+from app.api.deps import get_current_user, RoleChecker, get_scoped_user
 from app.schemas.settings import SettingsUpdate, SettingsResponse
 from app.core.email import send_email
 
@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=SettingsResponse, dependencies=[Depends(RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value, UserRole.CLINIC_MANAGER.value]))])
-def get_settings(db: Session = Depends(get_db)):
+def get_settings(db: Session = Depends(get_db), current_user: User = Depends(get_scoped_user)):
     """
     Retrieve clinical settings. Auto-initializes default clinic settings if none exists.
     """
@@ -37,7 +37,7 @@ def get_settings(db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=SettingsResponse, dependencies=[Depends(RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value, UserRole.CLINIC_MANAGER.value]))])
-def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
+def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_scoped_user)):
     """
     Update clinical settings. Creates a default record first if none exists.
     """

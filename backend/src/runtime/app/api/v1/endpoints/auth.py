@@ -1,4 +1,5 @@
 from datetime import timedelta, datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.db.database import get_db
@@ -76,16 +77,25 @@ def initiate_registration(user_in: RegisterInitiateRequest, background_tasks: Ba
     return {"message": "OTP sent successfully."}
 
 
+def validate_password_policy(password: str):
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        raise HTTPException(status_code=400, detail="Password must contain both letters and digits")
+
+
 class RegisterVerifyRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
     otp: str
-    role: str = "clinic_admin"
+    role: Optional[str] = None
 
 
-@router.post("/register")
+@router.post("/register", response_model=UserResponse)
 def register_user(user_in: RegisterVerifyRequest, db: Session = Depends(get_db), ip: str = Depends(check_ip_abuse)):
+    validate_password_policy(user_in.password)
+
     user = db.query(User).filter(User.email == user_in.email).first()
     if user:
         raise HTTPException(status_code=400, detail="The user already exists.")
@@ -112,16 +122,14 @@ def register_user(user_in: RegisterVerifyRequest, db: Session = Depends(get_db),
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
 
     from app.models.user import UserRole
-    # Map frontend role to backend UserRole
-    assigned_role = UserRole.ORGANIZATION_ADMINISTRATOR.value
-    if user_in.role == 'clinic_admin':
-        assigned_role = UserRole.ORGANIZATION_ADMINISTRATOR.value
-
+    # BUG-025: Keep new accounts pending until approved or invited
+    # Default public signup cannot reach administrative functions
     user = User(
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),
         full_name=user_in.full_name,
-        role=assigned_role
+        role=UserRole.FRONT_DESK.value,
+        is_active=False
     )
     db.add(user)
     otp_record.is_used = True

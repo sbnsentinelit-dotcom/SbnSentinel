@@ -137,9 +137,6 @@ def readiness_gate(
         logger.error(f"[Readiness] PF check failed: {e}")
         pf_ok = False
 
-    if not pf_ok and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION":
-        pf_ok = True
-
     # 8. Processing Services Readiness Check
     try:
         from app.services.processing_orchestrator import processing_orchestrator

@@ -7,6 +7,8 @@ from typing import Optional
 from app.core.config import settings
 from app.db.database import get_db
 from app.models.insurance import PatientInsuranceModel
+from app.models.user import User, UserRole
+from app.api.deps import get_scoped_user
 from app.schemas.insurance import PatientInsuranceCreate, PatientInsuranceResponse, OCRScanResponse
 
 router = APIRouter()
@@ -57,11 +59,17 @@ def simulate_ocr_scan(file_type: str = "image/png"):
 
 
 @router.post("/verify-eligibility", response_model=PatientInsuranceResponse)
-def verify_patient_eligibility(insurance_in: PatientInsuranceCreate, db: Session = Depends(get_db)):
+def verify_patient_eligibility(
+    insurance_in: PatientInsuranceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
     """
     Verify patient insurance eligibility against simulated clearinghouse (EDI 270/271).
     Saves or updates the record in the database.
     """
+    if current_user.role == UserRole.READ_ONLY_AUDITOR.value:
+        raise HTTPException(status_code=403, detail="Read-Only Auditor cannot verify or modify insurance records")
     if getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION" or not getattr(settings, "SYNTHETIC_TEST_ENABLED", False):
         raise HTTPException(
             status_code=403,
@@ -129,7 +137,11 @@ def verify_patient_eligibility(insurance_in: PatientInsuranceCreate, db: Session
 
 
 @router.get("/patient/{patient_name}", response_model=Optional[PatientInsuranceResponse])
-def get_patient_insurance_details(patient_name: str, db: Session = Depends(get_db)):
+def get_patient_insurance_details(
+    patient_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
     """
     Fetch stored insurance card details & eligibility status for a patient.
     """

@@ -6,7 +6,7 @@ except ImportError:
 import hmac
 import hashlib
 import uuid
-from typing import Optional, List
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -302,7 +302,7 @@ def select_plan(request: PlanSelectRequest, db: Session = Depends(get_db)):
     if not settings:
         settings = SettingsModel(practice_name="Sentinel UAE Medical Center - Dubai")
         db.add(settings)
-    
+
     settings.active_plan = request.plan_id
     if request.card_last4:
         settings.payment_card = f"Visa ending in {request.card_last4}"

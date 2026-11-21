@@ -76,36 +76,48 @@ def create_app() -> FastAPI:
                 db.commit()
                 print("[SUCCESS] Super Admin seeded: superadmin@sbnsentinel.com / [HIDDEN]")
 
-            existing_clinic = db.query(User).filter(User.email == "clinicadmin@sbnsentinel.com").first()
-            if not existing_clinic:
-                clinic_admin = User(
-                    email="clinicadmin@sbnsentinel.com",
-                    hashed_password=get_password_hash("ClinicPassword@123"),
-                    full_name="UAE Clinic Administrator",
-                    role=UserRole.ORGANIZATION_ADMINISTRATOR.value,
-                    is_active=True
-                )
-                db.add(clinic_admin)
-                db.commit()
-                print("[SUCCESS] Clinic Admin seeded: clinicadmin@sbnsentinel.com / ClinicPassword@123")
-            # Auto-seed UAE Dubai clinic demo dataset if encounters is empty
-            try:
-                from app.models.encounter import EncounterModel
-                from app.services.dubai_seed_service import auto_seed_dubai_if_empty
-                enc_count = db.query(EncounterModel).count()
-                if enc_count == 0:
-                    print("[INFO] Encounters empty on startup. Auto-seeding UAE Dubai clinic data...")
-                    auto_seed_dubai_if_empty(db)
-                    print("[SUCCESS] UAE Dubai clinic dataset seeded automatically.")
-            except Exception as seed_err:
-                print(f"[WARNING] Could not auto-seed dubai data: {seed_err}")
+            import os
+            import sys
+            is_production = getattr(settings, "ENVIRONMENT", "").upper() in ["PRODUCTION", "PROD"]
+            is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "1"
+            if is_production:
+                # BUG-053: In production, do NOT create demo admin or demo data.
+                # Disable demo accounts if present.
+                existing_clinic = db.query(User).filter(User.email == "clinicadmin@sbnsentinel.com").first()
+                if existing_clinic and existing_clinic.is_active:
+                    existing_clinic.is_active = False
+                    db.commit()
+                    print("[SECURITY] Disabled demo clinicadmin account in production environment.")
+            elif not is_testing:
+                existing_clinic = db.query(User).filter(User.email == "clinicadmin@sbnsentinel.com").first()
+                if not existing_clinic:
+                    demo_pwd = getattr(settings, "DEMO_ADMIN_PASSWORD", "ClinicPassword@123")
+                    clinic_admin = User(
+                        email="clinicadmin@sbnsentinel.com",
+                        hashed_password=get_password_hash(demo_pwd),
+                        full_name="UAE Clinic Administrator",
+                        role=UserRole.ORGANIZATION_ADMINISTRATOR.value,
+                        is_active=True
+                    )
+                    db.add(clinic_admin)
+                    db.commit()
+
+                # Auto-seed UAE Dubai clinic demo dataset if encounters is empty (development only)
+                try:
+                    from app.models.encounter import EncounterModel
+                    from app.services.dubai_seed_service import auto_seed_dubai_if_empty
+                    enc_count = db.query(EncounterModel).count()
+                    if enc_count == 0:
+                        print("[INFO] Encounters empty on startup. Auto-seeding UAE Dubai clinic data...")
+                        auto_seed_dubai_if_empty(db)
+                        print("[SUCCESS] UAE Dubai clinic dataset seeded automatically.")
+                except Exception as seed_err:
+                    print(f"[WARNING] Could not auto-seed dubai data: {seed_err}")
 
         except Exception as e:
             print(f"[WARNING] Could not seed bootstrap data: {e}")
         finally:
             db.close()
-
-    seed_data()
 
     return app
 

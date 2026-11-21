@@ -6,6 +6,7 @@ class EncounterCreate(BaseModel):
     id: str
     patient_name: str
     provider_name: str
+    clinic_id: Optional[str] = None
     date: str
     diagnosis: Optional[str] = None
     type: str
@@ -24,6 +25,7 @@ class EncounterCreate(BaseModel):
 
 
 class EncounterUpdate(BaseModel):
+    clinic_id: Optional[str] = None
     status: Optional[str] = None
     billing_status: Optional[str] = None
     diagnosis: Optional[str] = None
@@ -40,6 +42,7 @@ class EncounterResponse(BaseModel):
     id: str
     patient_name: Optional[str] = "Patient"
     provider_name: Optional[str] = "Provider"
+    clinic_id: Optional[str] = None
     date: Optional[str] = "2026-01-01"
     diagnosis: Optional[str] = None
     type: Optional[str] = "Consultation"

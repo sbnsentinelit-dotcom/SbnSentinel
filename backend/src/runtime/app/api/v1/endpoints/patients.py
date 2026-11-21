@@ -3,7 +3,9 @@ import os
 import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Response, Depends
+from app.api.deps import get_scoped_user
+from app.models.user import User
 
 router = APIRouter()
 
@@ -116,6 +118,7 @@ def get_all_uae_patients(
     search: Optional[str] = Query(None),
     emirate: Optional[str] = Query(None),
     payer: Optional[str] = Query(None),
+    current_user: User = Depends(get_scoped_user),
 ):
     """
     Returns UAE Patient Master Directory matching the Dubai Clinic dataset with backend pagination.
@@ -150,6 +153,6 @@ def get_all_uae_patients(
         total_pages = max(1, math.ceil(total_count / p_size))
         response.headers["X-Total-Pages"] = str(total_pages)
         start = (page - 1) * p_size
-        return patients[start : start + p_size]
+        return patients[start:start + p_size]
 
     return patients
