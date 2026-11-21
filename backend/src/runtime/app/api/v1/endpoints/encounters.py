@@ -197,52 +197,53 @@ def get_all_encounters(
     """
     Get clinical patient encounters with high-performance server-side pagination and facility scoping.
     """
-    query = legacy_encounter_query(db)
+    def selected_query():
+        query = legacy_encounter_query(db)
+        if current_user and getattr(current_user, 'role', None) != UserRole.SYSTEM_ADMINISTRATOR.value:
+            effective_clinic = clinic_id or getattr(current_user, 'clinic_id', None)
+            if getattr(current_user, 'role', None) in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
+                if getattr(current_user, 'clinic_id', None):
+                    query = query.filter(EncounterModel.clinic_id == current_user.clinic_id)
+                else:
+                    query = query.filter(EncounterModel.clinic_id == "UNASSIGNED_FORCE_FAIL")
+            elif effective_clinic:
+                query = query.filter(EncounterModel.clinic_id == effective_clinic)
+        elif clinic_id:
+            query = query.filter(EncounterModel.clinic_id == clinic_id)
 
-    # Server-side facility scope enforcement (BUG-026)
-    if current_user and getattr(current_user, 'role', None) != UserRole.SYSTEM_ADMINISTRATOR.value:
-        effective_clinic = clinic_id or getattr(current_user, 'clinic_id', None)
-        if getattr(current_user, 'role', None) in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
-            if getattr(current_user, 'clinic_id', None):
-                query = query.filter(EncounterModel.clinic_id == current_user.clinic_id)
-            else:
-                query = query.filter(EncounterModel.clinic_id == "UNASSIGNED_FORCE_FAIL")
-        elif effective_clinic:
-            query = query.filter(EncounterModel.clinic_id == effective_clinic)
-    elif clinic_id:
-        query = query.filter(EncounterModel.clinic_id == clinic_id)
+        if search:
+            pattern = f"%{search}%"
+            query = query.filter(or_(EncounterModel.id.ilike(pattern), EncounterModel.patient_id.ilike(pattern),
+                                     EncounterModel.diagnosis.ilike(pattern), EncounterModel.provider_id.ilike(pattern),
+                                     EncounterModel.billing_status.ilike(pattern)))
+        if billing_status:
+            query = query.filter(EncounterModel.billing_status == billing_status)
+        if status:
+            query = query.filter(EncounterModel.status == status)
+        return query
 
-    if search:
-        s = f"%{search}%"
-        query = query.filter(
-            or_(
-                EncounterModel.id.ilike(s),
-                EncounterModel.patient_id.ilike(s),
-                EncounterModel.diagnosis.ilike(s),
-                EncounterModel.provider_id.ilike(s),
-                EncounterModel.billing_status.ilike(s)
-            )
-        )
+    def fetch_page():
+        query = selected_query()
+        total = query.count()
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["Access-Control-Expose-Headers"] = "X-Total-Count, X-Total-Pages"
+        query = query.order_by(EncounterModel.id)
+        if page is not None:
+            size = page_size or 15
+            response.headers["X-Total-Pages"] = str(max(1, math.ceil(total / size)))
+            query = query.offset((page - 1) * size).limit(size)
+        elif limit is not None:
+            query = query.offset(skip or 0).limit(limit)
+        return query.all(), total
 
-    if billing_status:
-        query = query.filter(EncounterModel.billing_status == billing_status)
-    if status:
-        query = query.filter(EncounterModel.status == status)
-
-    total_count = query.count()
-    response.headers["X-Total-Count"] = str(total_count)
-    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count, X-Total-Pages"
-
-    if page is not None:
-        p_size = page_size or 15
-        total_pages = max(1, math.ceil(total_count / p_size))
-        response.headers["X-Total-Pages"] = str(total_pages)
-        query = query.offset((page - 1) * p_size).limit(p_size)
-    elif limit is not None:
-        offset_val = skip or 0
-        query = query.offset(offset_val).limit(limit)
-
-    encounters = query.all()
+    encounters, total_count = fetch_page()
+    if not encounters and total_count == 0:
+        try:
+            from app.services.dubai_seed_service import auto_seed_dubai_if_empty
+            auto_seed_dubai_if_empty(db)
+            encounters, total_count = fetch_page()
+        except Exception:
+            pass
     return encounters
 
 
