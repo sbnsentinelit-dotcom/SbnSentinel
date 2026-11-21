@@ -95,7 +95,7 @@ def get_signal_for_actor(db: Session, actor: User, signal_id: str):
     from app.models.signal import SignalModel
     q = db.query(SignalModel).filter(SignalModel.id == signal_id)
     if actor.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        if not actor.org_id or actor.org_id == "UNASSIGNED":
+        if not actor.org_id:
             raise HTTPException(status_code=403, detail="Missing required organization scope")
         q = q.filter(SignalModel.org_id == actor.org_id)
         if actor.role in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
