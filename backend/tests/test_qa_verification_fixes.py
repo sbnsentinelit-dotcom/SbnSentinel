@@ -13,6 +13,7 @@ from app.services.financial_reporting_service import financial_reporting_service
 from app.models.financial_reporting import (  # noqa: E402
     FinancialClaimModel,
     FinancialClaimLineModel,
+    FinancialSubmissionAttemptModel,
     FinancialRemittanceModel,
     FinancialPaymentReceiptModel,
 )
@@ -426,13 +427,183 @@ def test_denials_and_rejections_currency_isolation():
         db.commit()
 
 
+def test_reconciliation_separate_currency_totals():
+    # FR06: Two independently valid settlements, AED 640 and USD 100, must NOT combine into 740
+    clinic = "clinic_recon_sep_01"
+    now = datetime.now(timezone.utc)
+    p_start = now - timedelta(days=2)
+    p_end = now + timedelta(days=1)
+
+    with SessionLocal() as db:
+        db.query(FinancialPaymentReceiptModel).filter(
+            FinancialPaymentReceiptModel.clinic_id == clinic
+        ).delete()
+        db.query(FinancialRemittanceModel).filter(
+            FinancialRemittanceModel.clinic_id == clinic
+        ).delete()
+        db.commit()
+
+        # Settlement 1: AED 640 advised, AED 640 received
+        rem_aed = FinancialRemittanceModel(
+            remittance_id="rem_sep_aed",
+            clinic_id=clinic,
+            payer_id="payer_aed",
+            payment_reference="REF_AED",
+            remittance_date=now - timedelta(days=1),
+            total_paid=640.0,
+            currency="AED",
+        )
+        rcpt_aed = FinancialPaymentReceiptModel(
+            receipt_id="rcpt_sep_aed",
+            clinic_id=clinic,
+            receipt_type="payer_payment",
+            amount=640.0,
+            currency="AED",
+            received_date=now - timedelta(days=1),
+            remittance_id="rem_sep_aed",
+            bank_confirmed=True,
+        )
+
+        # Settlement 2: USD 100 advised, USD 100 received
+        rem_usd = FinancialRemittanceModel(
+            remittance_id="rem_sep_usd",
+            clinic_id=clinic,
+            payer_id="payer_usd",
+            payment_reference="REF_USD",
+            remittance_date=now - timedelta(days=1),
+            total_paid=100.0,
+            currency="USD",
+        )
+        rcpt_usd = FinancialPaymentReceiptModel(
+            receipt_id="rcpt_sep_usd",
+            clinic_id=clinic,
+            receipt_type="payer_payment",
+            amount=100.0,
+            currency="USD",
+            received_date=now - timedelta(days=1),
+            remittance_id="rem_sep_usd",
+            bank_confirmed=True,
+        )
+
+        db.add_all([rem_aed, rcpt_aed, rem_usd, rcpt_usd])
+        db.commit()
+
+    report = financial_reporting_service.generate_reconciliation_report(clinic, p_start, p_end)
+    assert "currency_totals" in report
+    assert "AED" in report["currency_totals"]
+    assert "USD" in report["currency_totals"]
+
+    assert report["currency_totals"]["AED"]["total_payer_advised"] == 640.0
+    assert report["currency_totals"]["AED"]["total_cash_received"] == 640.0
+
+    assert report["currency_totals"]["USD"]["total_payer_advised"] == 100.0
+    assert report["currency_totals"]["USD"]["total_cash_received"] == 100.0
+
+    # Ensure total_payer_advised does NOT mix currencies into 740!
+    assert report["total_payer_advised"] == 640.0 or report["total_payer_advised"] == 100.0
+    assert report["total_payer_advised"] != 740.0
+
+    with SessionLocal() as db:
+        db.query(FinancialPaymentReceiptModel).filter(
+            FinancialPaymentReceiptModel.clinic_id == clinic
+        ).delete()
+        db.query(FinancialRemittanceModel).filter(
+            FinancialRemittanceModel.clinic_id == clinic
+        ).delete()
+        db.commit()
+
+
+def test_technical_rejection_period_filter():
+    # FR05: An October technical rejection must NOT appear on the November denials report
+    clinic = "clinic_tech_rej_01"
+    oct_date = datetime(2026, 10, 15, tzinfo=timezone.utc)
+    nov_date = datetime(2026, 11, 15, tzinfo=timezone.utc)
+    p_start_nov = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    p_end_nov = datetime(2026, 11, 30, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        db.query(FinancialSubmissionAttemptModel).filter(
+            FinancialSubmissionAttemptModel.attempt_id.in_(["att_oct_01", "att_nov_01"])
+        ).delete()
+        db.query(FinancialClaimModel).filter(
+            FinancialClaimModel.claim_id.in_(["clm_oct_01", "clm_nov_01"])
+        ).delete()
+        db.commit()
+
+        c_oct = FinancialClaimModel(
+            claim_id="clm_oct_01",
+            clinic_id=clinic,
+            patient_id="pat_oct",
+            provider_id="prv_01",
+            payer_id="payer_allianz",
+            status="rejected_technical",
+            billed_amount=300.0,
+            currency="AED",
+            service_date=oct_date,
+        )
+        c_nov = FinancialClaimModel(
+            claim_id="clm_nov_01",
+            clinic_id=clinic,
+            patient_id="pat_nov",
+            provider_id="prv_01",
+            payer_id="payer_allianz",
+            status="rejected_technical",
+            billed_amount=150.0,
+            currency="AED",
+            service_date=nov_date,
+        )
+        db.add_all([c_oct, c_nov])
+        db.flush()
+
+        att_oct = FinancialSubmissionAttemptModel(
+            attempt_id="att_oct_01",
+            claim_id="clm_oct_01",
+            attempt_number=1,
+            submission_date=oct_date,
+            response_date=oct_date,
+            outcome="rejected_technical",
+            rejection_reason="Format error in header",
+        )
+        att_nov = FinancialSubmissionAttemptModel(
+            attempt_id="att_nov_01",
+            claim_id="clm_nov_01",
+            attempt_number=1,
+            submission_date=nov_date,
+            response_date=nov_date,
+            outcome="rejected_technical",
+            rejection_reason="Format error in header",
+        )
+        db.add_all([att_oct, att_nov])
+        db.commit()
+
+    report_nov = financial_reporting_service.generate_denials_and_rejections(
+        clinic, p_start_nov, p_end_nov
+    )
+    # November report must ONLY contain November rejection (150.0), NOT October (300.0)
+    tech_rows = [r for r in report_nov["rows"] if r["code"] == "TECH_REJECT"]
+    assert len(tech_rows) == 1
+    assert tech_rows[0]["affected_lines_count"] == 1
+    assert tech_rows[0]["total_denied_amount"] == 150.0
+
+    with SessionLocal() as db:
+        db.query(FinancialSubmissionAttemptModel).filter(
+            FinancialSubmissionAttemptModel.attempt_id.in_(["att_oct_01", "att_nov_01"])
+        ).delete()
+        db.query(FinancialClaimModel).filter(
+            FinancialClaimModel.claim_id.in_(["clm_oct_01", "clm_nov_01"])
+        ).delete()
+        db.commit()
+
+
 if __name__ == "__main__":
     test_currency_mapping_no_db_sniffing()
     test_gender_authoritative_source_preservation()
     test_financial_reporting_isolated_by_currency()
     test_payer_summary_groups_by_currency()
     test_reconciliation_currency_mismatch()
+    test_reconciliation_separate_currency_totals()
     test_ageing_report_isolates_currencies()
     test_unpaid_lines_currency_isolation()
     test_denials_and_rejections_currency_isolation()
+    test_technical_rejection_period_filter()
     print("All QA verification fix tests passed successfully!")

@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
@@ -413,6 +414,10 @@ class FinancialReportingService:
                 denial_groups[key]["total_denied_amount"] += line.billed_amount or 0.0
 
             # Technical Rejections (from Submission Attempts)
+            rej_date = func.coalesce(
+                FinancialSubmissionAttemptModel.response_date,
+                FinancialSubmissionAttemptModel.submission_date,
+            )
             attempts_q = session.query(
                 FinancialSubmissionAttemptModel, FinancialClaimModel
             ).join(
@@ -420,6 +425,8 @@ class FinancialReportingService:
             ).filter(
                 FinancialClaimModel.clinic_id == clinic_id,
                 FinancialSubmissionAttemptModel.outcome == "rejected_technical",
+                rej_date >= period_start,
+                rej_date <= period_end,
             )
             if currency:
                 attempts_q = attempts_q.filter(FinancialClaimModel.currency == currency)
@@ -469,6 +476,7 @@ class FinancialReportingService:
         clinic_id: str,
         period_start: datetime,
         period_end: datetime,
+        currency: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         """
@@ -478,17 +486,23 @@ class FinancialReportingService:
         """
         session = db or SessionLocal()
         try:
-            remittances = session.query(FinancialRemittanceModel).filter(
+            rem_q = session.query(FinancialRemittanceModel).filter(
                 FinancialRemittanceModel.clinic_id == clinic_id,
                 FinancialRemittanceModel.remittance_date >= period_start,
                 FinancialRemittanceModel.remittance_date <= period_end,
-            ).all()
+            )
+            if currency:
+                rem_q = rem_q.filter(FinancialRemittanceModel.currency == currency)
+            remittances = rem_q.all()
 
-            receipts = session.query(FinancialPaymentReceiptModel).filter(
+            rcpt_q = session.query(FinancialPaymentReceiptModel).filter(
                 FinancialPaymentReceiptModel.clinic_id == clinic_id,
                 FinancialPaymentReceiptModel.received_date >= period_start,
                 FinancialPaymentReceiptModel.received_date <= period_end,
-            ).all()
+            )
+            if currency:
+                rcpt_q = rcpt_q.filter(FinancialPaymentReceiptModel.currency == currency)
+            receipts = rcpt_q.all()
 
             # Link receipts to remittances by remittance_id
             matched_remittance_ids = set()
@@ -534,23 +548,44 @@ class FinancialReportingService:
 
             # Unallocated receipts
             unallocated_receipts = [r for r in receipts if not r.remittance_id or r.remittance_id not in matched_remittance_ids]
-            unallocated_amount = sum(r.amount for r in unallocated_receipts)
 
-            rep_currency = remittances[0].currency if remittances else (receipts[0].currency if receipts else None)
+            rep_currency = currency or (remittances[0].currency if remittances else (receipts[0].currency if receipts else None))
             if not rep_currency:
                 from app.core.config import get_deployment_currency
                 rep_currency = get_deployment_currency()
+
+            # Separate advised, received, and unallocated amounts by currency
+            all_currencies = set(r.currency or "AED" for r in remittances) | set(r.currency or "AED" for r in receipts)
+            currency_totals: Dict[str, Dict[str, Any]] = {}
+            for curr in all_currencies:
+                c_rems = [r for r in remittances if (r.currency or "AED") == curr]
+                c_rcpts = [r for r in receipts if (r.currency or "AED") == curr]
+                c_unallocated = [r for r in unallocated_receipts if (r.currency or "AED") == curr]
+                currency_totals[curr] = {
+                    "total_payer_advised": round(sum(r.total_paid for r in c_rems), 2),
+                    "total_cash_received": round(sum(r.amount for r in c_rcpts), 2),
+                    "unallocated_cash_total": round(sum(r.amount for r in c_unallocated), 2),
+                    "unallocated_receipts_count": len(c_unallocated),
+                }
+
+            eff_curr_totals = currency_totals.get(rep_currency, {
+                "total_payer_advised": 0.0,
+                "total_cash_received": 0.0,
+                "unallocated_cash_total": 0.0,
+                "unallocated_receipts_count": 0,
+            })
 
             return {
                 "report_code": "FR06",
                 "report_name": "Payer Receipts and Reconciliation",
                 "clinic_id": clinic_id,
                 "currency": rep_currency,
+                "currency_totals": currency_totals,
                 "reconciled_items": reconciled_rows,
-                "unallocated_receipts_count": len(unallocated_receipts),
-                "unallocated_cash_total": round(unallocated_amount, 2),
-                "total_payer_advised": round(sum(r.total_paid for r in remittances), 2),
-                "total_cash_received": round(sum(r.amount for r in receipts), 2),
+                "unallocated_receipts_count": eff_curr_totals["unallocated_receipts_count"],
+                "unallocated_cash_total": eff_curr_totals["unallocated_cash_total"],
+                "total_payer_advised": eff_curr_totals["total_payer_advised"],
+                "total_cash_received": eff_curr_totals["total_cash_received"],
             }
         finally:
             if not db:

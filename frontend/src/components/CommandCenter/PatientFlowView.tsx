@@ -45,6 +45,7 @@ export const PatientFlowView: React.FC = () => {
   }, [selectedPatientEncounter]);
 
   const [journeyData, setJourneyData] = useState<any | null>(null);
+  const [journeysByEncounter, setJourneysByEncounter] = useState<Record<string, any>>({});
   const [isLoadingEncounters, setIsLoadingEncounters] = useState(true);
 
   const getInitials = (name?: string) => {
@@ -65,6 +66,7 @@ export const PatientFlowView: React.FC = () => {
         .then(data => {
           if (!cancelled && data && data.encounter_id === encId) {
             setJourneyData(data);
+            setJourneysByEncounter(prev => ({ ...prev, [encId]: data }));
           }
         })
         .catch(err => {
@@ -493,7 +495,8 @@ export const PatientFlowView: React.FC = () => {
     setIsExporting(true);
     let csvContent = "Patient Name,Provider,Department,Priority,Wait Time,Status\n";
     encounters.forEach(e => {
-      csvContent += `${e.patient_name || 'N/A'},${e.provider_name || 'N/A'},${e.department || 'N/A'},${e.priority || 'N/A'},${e.wait_time || '0 mins'},${e.status || 'N/A'}\n`;
+      const waitVal = e.wait_time != null && e.wait_time !== '' ? e.wait_time : 'Unavailable';
+      csvContent += `${e.patient_name || 'N/A'},${e.provider_name || 'N/A'},${e.department || 'N/A'},${e.priority || 'N/A'},${waitVal},${e.status || 'N/A'}\n`;
     });
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -1120,17 +1123,21 @@ export const PatientFlowView: React.FC = () => {
 
           {/* Top Stats */}
       {(() => {
-        // Group encounters by calendar day (B-74)
-        const dateGroups: Record<string, any[]> = {};
-        for (const enc of encounters) {
-          const rawDate = enc.date || (enc.created_at ? enc.created_at.slice(0, 10) : 'current');
-          const dKey = String(rawDate).slice(0, 10);
-          if (!dateGroups[dKey]) dateGroups[dKey] = [];
-          dateGroups[dKey].push(enc);
-        }
-        const sortedDates = Object.keys(dateGroups).sort();
-        const currentDayEncs = sortedDates.length > 0 ? dateGroups[sortedDates[sortedDates.length - 1]] : [];
-        const priorDayEncs = sortedDates.length > 1 ? dateGroups[sortedDates[sortedDates.length - 2]] : [];
+        // Clinic calendar clock for today and previous calendar day (B-74)
+        const now = new Date();
+        const todayStr = now.toISOString().slice(0, 10);
+        const yesterdayDate = new Date(now.getTime() - 86400000);
+        const yesterdayStr = yesterdayDate.toISOString().slice(0, 10);
+
+        // Group encounters strictly by calendar day (B-74: Today's cards only count today's clinic date)
+        const currentDayEncs = encounters.filter(e => {
+          const raw = e.date || (e.created_at ? e.created_at.slice(0, 10) : null);
+          return raw && String(raw).slice(0, 10) === todayStr;
+        });
+        const priorDayEncs = encounters.filter(e => {
+          const raw = e.date || (e.created_at ? e.created_at.slice(0, 10) : null);
+          return raw && String(raw).slice(0, 10) === yesterdayStr;
+        });
 
         // Current-day only metrics for top cards (B-74: Today's cards only count today's patients)
         const checkedInCount = currentDayEncs.filter(e => e.status === 'Waiting').length;
@@ -1219,7 +1226,8 @@ export const PatientFlowView: React.FC = () => {
         const activeEncounter = selectedPatientEncounter || (encounters.length > 0 ? encounters[0] : null);
         const targetEncId = activeEncounter?.id;
         // Key journey data strictly to the active encounter (B-72: prevent cached journey of A appearing under B)
-        const verifiedJourney = (journeyData && journeyData.encounter_id === targetEncId) ? journeyData : null;
+        const verifiedJourney = (targetEncId && journeysByEncounter[targetEncId])
+          || ((journeyData && journeyData.encounter_id === targetEncId) ? journeyData : null);
         const stageList = ['Check In', 'Waiting', 'Consultation', 'Lab', 'Billing', 'Completed'];
         const currentStageName = verifiedJourney?.current_stage || activeEncounter?.journey_stage || (activeEncounter?.status === 'In Room' ? 'Consultation' : activeEncounter?.status === 'Completed' ? 'Completed' : 'Waiting');
         const activeStageIndex = stageList.indexOf(currentStageName) !== -1 ? stageList.indexOf(currentStageName) : 1;
@@ -1259,8 +1267,11 @@ export const PatientFlowView: React.FC = () => {
                   const jRes = await fetchWithAuth(`/api/v1/encounters/${targetEncId}/journey`);
                   if (jRes && jRes.ok) {
                     const jData = await jRes.json();
-                    if (selectedPatientEncounterRef.current?.id === targetEncId && jData && jData.encounter_id === targetEncId) {
-                      setJourneyData(jData);
+                    if (jData && jData.encounter_id === targetEncId) {
+                      setJourneysByEncounter(prev => ({ ...prev, [targetEncId]: jData }));
+                      if (selectedPatientEncounterRef.current?.id === targetEncId) {
+                        setJourneyData(jData);
+                      }
                     }
                   }
                 } catch (jErr) {}
@@ -1425,7 +1436,7 @@ export const PatientFlowView: React.FC = () => {
                           <p className="text-sm font-bold text-white/70">{row.provider_name}</p>
                           <p className="text-[10px] text-white/50 font-bold uppercase">{row.department || 'General'}</p>
                         </td>
-                        <td className="py-4 px-2 font-mono text-white/70 transition-all">{row.wait_time || '0 mins'}</td>
+                        <td className="py-4 px-2 font-mono text-white/70 transition-all">{row.wait_time != null && row.wait_time !== '' ? row.wait_time : 'Unavailable'}</td>
                         <td className="py-4 px-2">
                           <select
                             value={row.status}
@@ -1447,17 +1458,19 @@ export const PatientFlowView: React.FC = () => {
                                 });
                                 if (response && response.ok) {
                                   fetchEncounters();
-                                  if (selectedPatientEncounter?.id === row.id) {
-                                    try {
-                                      const jRes = await fetchWithAuth(`/api/v1/encounters/${row.id}/journey`);
-                                      if (jRes && jRes.ok) {
-                                        const jData = await jRes.json();
-                                        if (jData && jData.encounter_id === row.id) {
+                                  try {
+                                    const jRes = await fetchWithAuth(`/api/v1/encounters/${row.id}/journey`);
+                                    if (jRes && jRes.ok) {
+                                      const jData = await jRes.json();
+                                      if (jData && jData.encounter_id === row.id) {
+                                        setJourneysByEncounter(prev => ({ ...prev, [row.id]: jData }));
+                                        // Guard: Only update visible journeyData if reviewer is STILL on this encounter! (B-72)
+                                        if (selectedPatientEncounterRef.current?.id === row.id) {
                                           setJourneyData(jData);
                                         }
                                       }
-                                    } catch (jErr) {}
-                                  }
+                                    }
+                                  } catch (jErr) {}
                                 }
                               } catch (err) {
                                 console.error("Error updating patient status:", err);

@@ -132,6 +132,7 @@ export const ClinicalLogsView: React.FC = () => {
   const totalPages = Math.ceil(totalEncounters / pageSize) || 1;
 
   const activeEncounter = encounters.find(e => e.id === activeBillId);
+  const encounterCharge = activeEncounter?.billing_amount ?? activeEncounter?.amount;
 
   // Export all logs helper
   const handleExportAllLogs = () => {
@@ -866,14 +867,14 @@ export const ClinicalLogsView: React.FC = () => {
                             </div>
                             <div className="text-right">
                               <p className="text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-0.5">Charge amount</p>
-                              <p className="text-xl font-extrabold text-white">{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</p>
+                              <p className="text-xl font-extrabold text-white">{formatMoney(encounterCharge, activeEncounter?.currency)}</p>
                             </div>
                           </div>
 
                           <div className="space-y-2.5">
                             <div className="flex justify-between text-xs font-semibold">
                               <span className="text-white/60">{activeEncounter?.cpt_code ? `${activeEncounter.cpt_code} (Source Procedure)` : 'Source Code Pending'}</span>
-                              <span className="text-white">{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</span>
+                              <span className="text-white">{formatMoney(encounterCharge, activeEncounter?.currency)}</span>
                             </div>
                             <div className="flex justify-between text-xs font-semibold">
                               <span className="text-white/60">Patient Copay / Responsibility</span>
@@ -1109,11 +1110,11 @@ export const ClinicalLogsView: React.FC = () => {
             <tbody>
               <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
                 <td style={{ padding: '8px 0' }}>{activeEncounter?.cpt_code ? `${activeEncounter.cpt_code} - ${activeEncounter.reason_for_visit || 'Clinical Consultation'}` : 'Not Coded'}</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>{formatMoney(encounterCharge, activeEncounter?.currency)}</td>
               </tr>
               <tr style={{ fontWeight: 'bold', fontSize: '13px' }}>
                 <td style={{ padding: '12px 0' }}>TOTAL ENCOUNTER CHARGES</td>
-                <td style={{ padding: '12px 0', textAlign: 'right' }}>{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</td>
+                <td style={{ padding: '12px 0', textAlign: 'right' }}>{formatMoney(encounterCharge, activeEncounter?.currency)}</td>
               </tr>
             </tbody>
           </table>

@@ -328,7 +328,7 @@ def create_encounter(
         billing_status=encounter_in.billing_status or "Pending",
         copay=encounter_in.copay or 245.0,
         priority=encounter_in.priority or "Normal",
-        wait_time=encounter_in.wait_time or "0 mins",
+        wait_time=encounter_in.wait_time,
         department=encounter_in.department,
         avatar=encounter_in.avatar or None,
         clinical_notes=encounter_in.clinical_notes,
@@ -430,6 +430,13 @@ def update_encounter(
         enc.journey_stage = new_stage
         if new_stage not in timestamps:
             timestamps[new_stage] = now_iso
+        else:
+            # B-71: Re-entering a stage preserves first entry as initial and records current entry
+            initial_key = f"{new_stage}_initial"
+            if initial_key not in timestamps:
+                timestamps[initial_key] = timestamps[new_stage]
+            timestamps[new_stage] = now_iso
+            timestamps[f"{new_stage}_current"] = now_iso
         enc.stage_timestamps = timestamps
 
     if encounter_in.status is not None:
