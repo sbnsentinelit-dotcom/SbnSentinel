@@ -17,6 +17,11 @@ os.environ["SQLALCHEMY_DATABASE_URL"] = (
 )
 atexit.register(shutil.rmtree, _test_db_dir, ignore_errors=True)
 
+# Import the database module before any test module imports a model. Its startup then creates
+# every table in the throwaway database; a test module that imports a model first would load the
+# model half-way through and its table (e.g. connectors) would be missing.
+import app.db.database  # noqa: E402,F401
+
 
 @pytest.fixture(autouse=True)
 def clear_rate_limits():
