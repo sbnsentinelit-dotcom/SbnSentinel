@@ -118,6 +118,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   ]);
 
   // Billing States
+  const [regionCurrency, setRegionCurrency] = useState('USD');
   const [activePlan, setActivePlan] = useState('professional'); // starter, professional, enterprise
   const [paymentCard, setPaymentCard] = useState('Visa ending in 4242');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -232,6 +233,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
           setReminderInterval(data.reminder_interval || '24h');
           setActivePlan(data.active_plan || 'professional');
           setPaymentCard(data.payment_card || 'Visa ending in 4242');
+          if (data.currency) setRegionCurrency(data.currency);
         }
       } catch (err) {
         console.error("Failed to load settings from clinical server:", err);
@@ -1050,7 +1052,7 @@ document.body
                       </div>
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Financial Claims</p>
-                         <p className="text-xl font-extrabold text-emerald-400 mt-0.5">766 Claims (AED)</p>
+                         <p className="text-xl font-extrabold text-emerald-400 mt-0.5">766 Claims ({regionCurrency})</p>
                       </div>
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Active Payer Network</p>
