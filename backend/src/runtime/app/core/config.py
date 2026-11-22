@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import model_validator
 
@@ -101,3 +102,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_deployment_currency(region: Optional[str] = None) -> str:
+    """
+    Authoritative regional currency mapping:
+    UAE -> AED, US -> USD (or fallback to USD).
+    """
+    reg = region or getattr(settings, "DEPLOYMENT_REGION", "US")
+    return "AED" if str(reg).upper() == "UAE" else "USD"

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float
+from sqlalchemy import Column, String, Float, JSON
 from app.db.database import Base
 
 
@@ -13,6 +13,8 @@ class EncounterModel(Base):
     diagnosis = Column(String, nullable=True)
     type = Column(String, nullable=False)  # Consultation, Urgent Care, Checkup, etc.
     status = Column(String, default="Completed")  # Waiting, In Room, Completed, Delayed
+    journey_stage = Column(String, default="Check In")  # Check In, Waiting, Consultation, Lab, Billing, Completed
+    stage_timestamps = Column(JSON, nullable=True)  # {"Check In": "...", "Waiting": "..."}
     billing_status = Column(String, default="Pending")  # Pending, Billed, Paid, Claim Denied
     copay = Column(Float, nullable=True)
     priority = Column(String, default="Normal")  # High, Normal, Urgent

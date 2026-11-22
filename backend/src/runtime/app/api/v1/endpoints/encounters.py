@@ -1,22 +1,11 @@
 import math
-import random
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from app.db.database import get_db
-try:
-    from app.api.deps import get_scoped_user, RoleChecker
-except (ImportError, AttributeError):
-    try:
-        from app.api.deps import get_current_user as get_scoped_user
-    except Exception:
-        get_scoped_user = None
-
-    def RoleChecker(roles):
-        def _check(user=None):
-            return user
-        return _check
+from app.api.deps import get_scoped_user, RoleChecker
 from app.models.user import User, UserRole
 from app.models.encounter import EncounterModel
 from app.schemas.encounter import EncounterCreate, EncounterUpdate, EncounterResponse
@@ -37,7 +26,7 @@ def seed_default_encounters(db: Session):
                            "priority": "High",
                            "wait_time": "14 mins",
                            "department": "Cardiology",
-                           "avatar": "https://i.pravatar.cc/150?img=11",
+                           "avatar": None,
                            "clinical_notes": "Subjective: Patient reports mild headaches and occasional palpitations. Objective: BP 145/95 mmHg, HR 82 bpm, regular rhythm. Assessment: Unspecified essential hypertension. Plan: Advised low sodium diet. Initiated Lisinopril 10mg daily. Follow-up in 2 weeks.",
                            "medications": "Lisinopril 10mg daily"},
                           {"id": "enc_02",
@@ -52,7 +41,7 @@ def seed_default_encounters(db: Session):
                            "priority": "Normal",
                            "wait_time": "5 mins",
                            "department": "General Practice",
-                           "avatar": "https://i.pravatar.cc/150?img=5",
+                           "avatar": None,
                            "clinical_notes": "Subjective: Patient reports sore throat, congestion, and dry cough for 3 days. Objective: Temp 99.1 F, pharynx erythematous without exudate. Lungs clear to auscultation. Assessment: Acute upper respiratory infection (viral). Plan: Rest, hydration, OTC decongestants. Follow-up if symptoms worsen.",
                            "medications": "OTC Decongestants, Saline Nasal Spray"},
                           {"id": "enc_03",
@@ -67,7 +56,7 @@ def seed_default_encounters(db: Session):
                            "priority": "Normal",
                            "wait_time": "25 mins",
                            "department": "Cardiology",
-                           "avatar": "https://i.pravatar.cc/150?img=12",
+                           "avatar": None,
                            "clinical_notes": "Subjective: Patient presents for routine diabetic checkup. Reports compliance with medication. Objective: HbA1c 6.8%, BP 122/78 mmHg. Foot exam normal. Assessment: Controlled Type 2 diabetes mellitus. Plan: Continue Metformin 500mg BID. Recommended annual eye exam.",
                            "medications": "Metformin 500mg BID"},
                           {"id": "enc_04",
@@ -82,7 +71,7 @@ def seed_default_encounters(db: Session):
                            "priority": "Normal",
                            "wait_time": "18 mins",
                            "department": "Radiology",
-                           "avatar": "https://i.pravatar.cc/150?img=23",
+                           "avatar": None,
                            "clinical_notes": "Subjective: Patient reports sharp pain in the right knee after a minor twist yesterday. Objective: Swelling noted over the lateral patellar region. Limited range of motion. Assessment: Suspected ligamentous strain. Plan: X-ray completed to rule out fracture. Rest, Ice, Compression, Elevation.",
                            "medications": "Ibuprofen 400mg q6h PRN"},
                           {"id": "enc_05",
@@ -97,7 +86,7 @@ def seed_default_encounters(db: Session):
                            "priority": "Urgent",
                            "wait_time": "40 mins",
                            "department": "General Practice",
-                           "avatar": "https://i.pravatar.cc/150?img=15",
+                           "avatar": None,
                            "clinical_notes": "Subjective: Patient reports chronic burning sensation in chest, worse after meals and when lying down. Objective: Abdomen soft, non-tender, no organomegaly. Assessment: GERD. Plan: Avoid trigger foods. Initiated Omeprazole 20mg daily 30 mins before breakfast.",
                            "medications": "Omeprazole 20mg daily"},
                           {"id": "enc_06",
@@ -112,7 +101,7 @@ def seed_default_encounters(db: Session):
                            "priority": "Normal",
                            "wait_time": "12 mins",
                            "department": "Physical Therapy",
-                           "avatar": "https://i.pravatar.cc/150?img=3",
+                           "avatar": None,
                            "clinical_notes": "Subjective: Patient reports lower back pain radiating down the right leg. Objective: Straight leg raise positive on the right at 45 degrees. Palpable lumbar spasm. Assessment: Sciatica secondary to lumbar strain. Plan: Initiated physical therapy program, heat packs, and gentle stretching.",
                            "medications": "Cyclobenzaprine 5mg daily"},
                           {"id": "enc_07",
@@ -127,7 +116,7 @@ def seed_default_encounters(db: Session):
                            "priority": "Normal",
                            "wait_time": "8 mins",
                            "department": "Psychiatry",
-                           "avatar": "https://i.pravatar.cc/150?img=9",
+                           "avatar": None,
                            "clinical_notes": "Subjective: Patient reports persistent worry, insomnia, and muscle tension for over 6 months. Objective: Patient appears anxious, hyperactive fidgeting, speech normal. Assessment: Generalized anxiety disorder. Plan: Recommended Cognitive Behavioral Therapy (CBT). Initiated Sertraline 25mg daily.",
                            "medications": "Sertraline 25mg daily"}]
     for enc_data in default_encounters:
@@ -307,12 +296,14 @@ def create_encounter(
         diagnosis=encounter_in.diagnosis,
         type=encounter_in.type,
         status=encounter_in.status or "Waiting",
+        journey_stage=encounter_in.journey_stage or "Check In",
+        stage_timestamps=encounter_in.stage_timestamps or {"Check In": datetime.utcnow().isoformat()},
         billing_status=encounter_in.billing_status or "Pending",
         copay=encounter_in.copay or 245.0,
         priority=encounter_in.priority or "Normal",
         wait_time=encounter_in.wait_time or "0 mins",
         department=encounter_in.department,
-        avatar=encounter_in.avatar or f"https://i.pravatar.cc/150?img={random.randint(1, 70)}",
+        avatar=encounter_in.avatar or None,
         clinical_notes=encounter_in.clinical_notes,
         medications=encounter_in.medications,
         payer_network=encounter_in.payer_network,
@@ -323,6 +314,53 @@ def create_encounter(
     db.commit()
     db.refresh(new_enc)
     return new_enc
+
+
+@router.get("/{encounter_id}/journey")
+def get_encounter_journey(
+    encounter_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
+    """
+    B-71 / B-72: Authoritative Patient Flow Journey endpoint.
+    Returns encounter stages, timestamps, patient details, MRN, provider, department, insurance with clinic scope check.
+    """
+    enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter record not found")
+
+    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
+        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and enc.clinic_id and enc.clinic_id != current_user.clinic_id:
+            raise HTTPException(status_code=403, detail="Cannot access encounter belonging to another clinic facility")
+
+    timestamps = dict(enc.stage_timestamps or {})
+    current_stage = enc.journey_stage or "Check In"
+    if not timestamps:
+        timestamps["Check In"] = enc.date or datetime.utcnow().isoformat()
+        if current_stage != "Check In":
+            timestamps[current_stage] = datetime.utcnow().isoformat()
+
+    patient_id_val = str(enc.patient_id or enc.id or "000000")
+    mrn_val = getattr(enc, "mrn", None) or (
+        f"MRN-{patient_id_val[-6:]}" if len(patient_id_val) >= 6 else f"MRN-{patient_id_val}"
+    )
+
+    return {
+        "encounter_id": enc.id,
+        "patient_id": enc.patient_id or enc.id,
+        "patient_name": enc.patient_name or "Unknown Patient",
+        "mrn": mrn_val,
+        "provider_name": enc.provider_name or "Unknown Provider",
+        "department": enc.department or "General Practice",
+        "insurance": enc.payer_network or "Self Pay",
+        "current_stage": current_stage,
+        "stage_timestamps": timestamps,
+        "stages": ["Check In", "Waiting", "Consultation", "Lab", "Billing", "Completed"],
+        "status": enc.status or "Waiting",
+        "priority": enc.priority or "Normal",
+        "wait_time": enc.wait_time or "0 mins"
+    }
 
 
 @router.put("/{encounter_id}", response_model=EncounterResponse)
@@ -346,6 +384,31 @@ def update_encounter(
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
         if hasattr(current_user, 'clinic_id') and current_user.clinic_id and enc.clinic_id and enc.clinic_id != current_user.clinic_id:
             raise HTTPException(status_code=403, detail="Cannot modify encounter belonging to another clinic facility")
+
+    now_iso = datetime.utcnow().isoformat()
+    timestamps = dict(enc.stage_timestamps or {})
+    if not timestamps and enc.journey_stage:
+        timestamps[enc.journey_stage or "Check In"] = now_iso
+
+    new_stage = encounter_in.journey_stage
+    if not new_stage and encounter_in.status:
+        status_map = {
+            "Check In": "Check In",
+            "Waiting": "Waiting",
+            "In Room": "Consultation",
+            "Consultation": "Consultation",
+            "Lab": "Lab",
+            "Billing": "Billing",
+            "Completed": "Completed",
+            "Delayed": "Waiting"
+        }
+        new_stage = status_map.get(encounter_in.status, enc.journey_stage or "Check In")
+
+    if new_stage:
+        enc.journey_stage = new_stage
+        if new_stage not in timestamps:
+            timestamps[new_stage] = now_iso
+        enc.stage_timestamps = timestamps
 
     if encounter_in.status is not None:
         enc.status = encounter_in.status

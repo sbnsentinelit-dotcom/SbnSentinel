@@ -94,9 +94,9 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
                 </filter>
               </defs>
               <g className="text-slate-500 text-[8px] font-mono">
-                 <text x="-5" y="10">$15K</text>
-                 <text x="-5" y="60">$10K</text>
-                 <text x="-5" y="110">$5K</text>
+                 <text x="-5" y="10">15K</text>
+                 <text x="-5" y="60">10K</text>
+                 <text x="-5" y="110">5K</text>
                  <text x="5" y="130">Mon</text>
                  <text x="70" y="130">Tue</text>
                  <text x="140" y="130">Wed</text>
@@ -116,7 +116,7 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
               <circle cx="260" cy="80" r="5" fill="var(--color-semantic-positive)" stroke="#FFFFFF" strokeWidth="2.5" className="animate-pulse" />
               <g transform="translate(230, 42)">
                  <rect width="60" height="24" rx="12" fill="#1E293B" stroke="var(--color-semantic-positive)" strokeWidth="1" />
-                 <text x="30" y="15" fill="var(--color-semantic-positive)" fontSize="9" fontWeight="black" textAnchor="middle">{hasFinancialEvidence ? '$0.00' : 'Audit Lock'}</text>
+                 <text x="30" y="15" fill="var(--color-semantic-positive)" fontSize="9" fontWeight="black" textAnchor="middle">{hasFinancialEvidence ? '0.00' : 'Audit Lock'}</text>
                  <polygon points="30,24 26,28 34,28" fill="#1E293B" transform="rotate(180 30 26)" />
               </g>
            </svg>

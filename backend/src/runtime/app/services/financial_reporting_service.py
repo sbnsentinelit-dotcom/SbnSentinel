@@ -47,9 +47,12 @@ class FinancialReportingService:
         clinic_id: str,
         period_start: datetime,
         period_end: datetime,
-        currency: str = "AED",
+        currency: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
+        if not currency:
+            from app.core.config import get_deployment_currency
+            currency = get_deployment_currency()
         session = db or SessionLocal()
         try:
             claims = session.query(FinancialClaimModel).filter(

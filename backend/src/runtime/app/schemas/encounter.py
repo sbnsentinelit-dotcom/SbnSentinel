@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 
 
 class EncounterCreate(BaseModel):
@@ -11,6 +11,8 @@ class EncounterCreate(BaseModel):
     diagnosis: Optional[str] = None
     type: str
     status: Optional[str] = "Waiting"
+    journey_stage: Optional[str] = "Check In"
+    stage_timestamps: Optional[Dict[str, Any]] = None
     billing_status: Optional[str] = "Pending"
     copay: Optional[float] = None
     priority: Optional[str] = "Normal"
@@ -27,6 +29,8 @@ class EncounterCreate(BaseModel):
 class EncounterUpdate(BaseModel):
     clinic_id: Optional[str] = None
     status: Optional[str] = None
+    journey_stage: Optional[str] = None
+    stage_timestamps: Optional[Dict[str, Any]] = None
     billing_status: Optional[str] = None
     diagnosis: Optional[str] = None
     wait_time: Optional[str] = None
@@ -47,6 +51,8 @@ class EncounterResponse(BaseModel):
     diagnosis: Optional[str] = None
     type: Optional[str] = "Consultation"
     status: Optional[str] = "Completed"
+    journey_stage: Optional[str] = "Check In"
+    stage_timestamps: Optional[Dict[str, Any]] = None
     billing_status: Optional[str] = "Billed"
     copay: Optional[float] = 0.0
     priority: Optional[str] = "Normal"

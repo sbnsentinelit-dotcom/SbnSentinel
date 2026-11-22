@@ -20,6 +20,42 @@ FIRST_NAMES = ["Mariam", "Reem", "Aisha", "Mona", "Huda", "Khalid", "Tariq", "Mo
 LAST_NAMES = ["Ali", "Malik", "Verma", "Sharma", "George", "Nair", "Al-Mansoori", "Rahman", "Al-Hassan", "Ahmed", "Al-Nuaimi", "Patel", "Siddiqui", "Khan", "Hussain", "Thomas"]
 
 
+FEMALE_NAMES = {
+    "mariam", "reem", "aisha", "mona", "huda", "layla", "sara", "sarah",
+    "fatima", "amira", "noor", "nour", "zainab", "salma", "yasmin", "dina",
+    "farah", "samira", "lina", "rania", "hessa", "amna", "moza", "shamsa"
+}
+
+MALE_NAMES = {
+    "khalid", "tariq", "mohammed", "ahmed", "rashid", "hassan", "ali",
+    "omar", "saeed", "ibrahim", "abdullah", "zayed", "hamad", "sultan",
+    "mansour", "salem", "faisal", "michael", "david", "james"
+}
+
+
+def _convert_excel_date(val: Any) -> Optional[str]:
+    if val is None or val == "":
+        return None
+    val_str = str(val).strip()
+    if val_str.isdigit():
+        try:
+            d = datetime(1899, 12, 30) + timedelta(days=int(val_str))
+            return d.strftime("%Y-%m-%d")
+        except Exception:
+            return val_str
+    return val_str
+
+
+def _resolve_gender(first_name: Optional[str], raw_gender: Optional[str]) -> str:
+    if first_name:
+        fn_clean = first_name.strip().lower()
+        if fn_clean in FEMALE_NAMES:
+            return "F"
+        if fn_clean in MALE_NAMES:
+            return "M"
+    return (raw_gender or "M").strip().upper()
+
+
 def _get_all_raw_patients() -> List[Dict[str, Any]]:
     global _cached_patients
     if _cached_patients:
@@ -45,8 +81,8 @@ def _get_all_raw_patients() -> List[Dict[str, Any]]:
                                 "first_name": p.get("First_Name"),
                                 "last_name": p.get("Last_Name"),
                                 "name": f"{p.get('First_Name')} {p.get('Last_Name')}",
-                                "dob": p.get("DOB"),
-                                "gender": p.get("Gender"),
+                                "dob": _convert_excel_date(p.get("DOB")),
+                                "gender": _resolve_gender(p.get("First_Name"), p.get("Gender")),
                                 "nationality": p.get("Nationality"),
                                 "emirate": p.get("Emirate"),
                                 "mobile": p.get("Mobile"),
@@ -54,9 +90,9 @@ def _get_all_raw_patients() -> List[Dict[str, Any]]:
                                 "payer": p.get("Payer"),
                                 "plan": p.get("Plan"),
                                 "member_id": p.get("Member_ID"),
-                                "policy_start": p.get("Policy_Start"),
-                                "policy_end": p.get("Policy_End"),
-                                "registration_date": p.get("Registration_Date"),
+                                "policy_start": _convert_excel_date(p.get("Policy_Start")),
+                                "policy_end": _convert_excel_date(p.get("Policy_End")),
+                                "registration_date": _convert_excel_date(p.get("Registration_Date")),
                                 "status": p.get("Status", "Active")
                             })
                         _cached_patients = formatted

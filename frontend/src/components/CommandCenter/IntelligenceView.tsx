@@ -3,7 +3,13 @@ import { Activity, CheckCircle2, AlertTriangle, ArrowRight, UserCircle2, FileTex
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '@/store';
 import { removeSignal, incrementActionsTaken, fetchHistoricalSignals } from '@/store/slices/signalSlice';
-export const IntelligenceView: React.FC = () => {
+import { formatMoney } from '@/utils/currency';
+
+interface IntelligenceViewProps {
+  onExecute?: (signalId: string) => void;
+}
+
+export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute }) => {
   const dispatch = useDispatch<any>();
 
   useEffect(() => {
@@ -23,9 +29,13 @@ export const IntelligenceView: React.FC = () => {
   };
   const handleApply = () => {
     if (selectedEvent) {
-      dispatch(incrementActionsTaken());
-      dispatch(removeSignal(selectedEvent.id));
-      setSelectedEventIndex(0);
+      if (onExecute) {
+        onExecute(selectedEvent.id);
+      } else {
+        dispatch(incrementActionsTaken());
+        dispatch(removeSignal(selectedEvent.id));
+        setSelectedEventIndex(0);
+      }
     }
   };
   const getRiskColor = (risk: string) => {
@@ -90,10 +100,13 @@ export const IntelligenceView: React.FC = () => {
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Total Financial Exposure</div>
             <div className="text-2xl font-black text-white">
-              ${actionableEvents.reduce((total, event) => {
-                const amount = parseFloat((event.estimated_financial_exposure || '0').replace(/[^0-9.-]+/g,""));
-                return total + (isNaN(amount) ? 0 : amount);
-              }, 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+              {formatMoney(
+                actionableEvents.reduce((total, event) => {
+                  const amount = parseFloat((event.estimated_financial_exposure || '0').replace(/[^0-9.-]+/g,""));
+                  return total + (isNaN(amount) ? 0 : amount);
+                }, 0),
+                actionableEvents[0]?.currency
+              )}
             </div>
           </div>
         </div>
@@ -226,7 +239,7 @@ export const IntelligenceView: React.FC = () => {
                       <div className="grid grid-cols-2 gap-4 mt-2">
                         <div>
                           <div className="text-xs text-amber-500/50 uppercase tracking-widest font-bold mb-1">Financial Exposure</div>
-                          <div className="text-amber-400 font-bold text-xl">{selectedEvent.estimated_financial_exposure || '$0.00'}</div>
+                          <div className="text-amber-400 font-bold text-xl">{formatMoney(selectedEvent.estimated_financial_exposure, selectedEvent.currency)}</div>
                         </div>
                         <div>
                           <div className="text-xs text-amber-500/50 uppercase tracking-widest font-bold mb-1">Risk Category</div>
@@ -290,9 +303,15 @@ export const IntelligenceView: React.FC = () => {
                 <button onClick={handleDismiss} className="px-6 py-3 rounded-2xl font-bold text-white/70 hover:bg-white/10 transition-colors flex items-center gap-2">
                   <X className="w-5 h-5" /> Dismiss
                 </button>
-                <button onClick={handleApply} className="px-8 py-3 rounded-2xl font-bold text-white bg-emerald-500 hover:bg-emerald-600 shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:shadow-lg hover:-translate-y-0.5 transition-all flex items-center gap-2">
-                  Execute Action <ArrowRight className="w-5 h-5" />
-                </button>
+                {(selectedEvent as any)?.decision_status === 'APPROVED' || (selectedEvent as any)?.status === 'APPROVED' ? (
+                  <span className="px-6 py-3 rounded-2xl font-bold text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" /> Decision Recorded – APPROVED
+                  </span>
+                ) : (
+                  <button onClick={handleApply} className="px-8 py-3 rounded-2xl font-bold text-white bg-emerald-500 hover:bg-emerald-600 shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:shadow-lg hover:-translate-y-0.5 transition-all flex items-center gap-2">
+                    Execute Action <ArrowRight className="w-5 h-5" />
+                  </button>
+                )}
               </div>
 
             </div>

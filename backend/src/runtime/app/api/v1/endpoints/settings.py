@@ -33,6 +33,9 @@ def get_settings(db: Session = Depends(get_db), current_user: User = Depends(get
             db.refresh(settings)
         except Exception:
             db.rollback()
+    from app.core.config import settings as app_settings, get_deployment_currency
+    settings.currency = get_deployment_currency()
+    settings.deployment_region = getattr(app_settings, "DEPLOYMENT_REGION", "US")
     return settings
 
 
@@ -55,6 +58,9 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db), curr
 
     db.commit()
     db.refresh(settings)
+    from app.core.config import settings as app_settings, get_deployment_currency
+    settings.currency = get_deployment_currency()
+    settings.deployment_region = getattr(app_settings, "DEPLOYMENT_REGION", "US")
     return settings
 
 

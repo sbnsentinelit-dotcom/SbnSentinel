@@ -7,5 +7,5 @@
     "python.testing.pytestArgs": [
         "backend/tests"
     ],
-    "python.defaultInterpreterPath": "./backend/.venv/Scripts/python.exe"
+    "python.defaultInterpreterPath": "./backend/venv/Scripts/python.exe"
 }

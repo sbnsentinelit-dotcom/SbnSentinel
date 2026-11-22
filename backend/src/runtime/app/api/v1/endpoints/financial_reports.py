@@ -22,7 +22,7 @@ def get_owner_summary(
     clinic_id: Optional[str] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    currency: str = Query("AED"),
+    currency: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -33,11 +33,14 @@ def get_owner_summary(
         s_date = s_date or def_s
         e_date = e_date or def_e
 
+    from app.core.config import get_deployment_currency
+    curr = currency or get_deployment_currency()
+
     return financial_reporting_service.generate_owner_summary(
         clinic_id=target_clinic,
         period_start=s_date,
         period_end=e_date,
-        currency=currency,
+        currency=curr,
         db=db,
     )
 

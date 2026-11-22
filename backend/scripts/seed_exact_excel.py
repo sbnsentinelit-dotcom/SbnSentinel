@@ -137,6 +137,15 @@ def seed_exact():
 
             payer = clm.get('Payer', 'Daman')
 
+            status_val = enc.get('Encounter_Status', 'Completed')
+            stage_map = {
+                "Waiting": "Waiting",
+                "In Room": "Consultation",
+                "Completed": "Completed",
+                "Delayed": "Waiting"
+            }
+            j_stage = stage_map.get(status_val, "Check In")
+
             db_enc = EncounterModel(
                 id=eid,
                 patient_id=pname,
@@ -145,13 +154,15 @@ def seed_exact():
                 date=edate,
                 diagnosis=full_diag,
                 type=f"{specialty} {enc.get('Visit_Type', 'Consultation')}",
-                status=enc.get('Encounter_Status', 'Completed'),
+                status=status_val,
+                journey_stage=j_stage,
+                stage_timestamps={"Check In": edate, j_stage: edate},
                 billing_status=b_status,
                 copay=50.0 if payer != 'Self Pay' else billed,
                 priority='Urgent' if 'Urgent' in enc.get('Visit_Type', '') else 'Normal',
                 wait_time='15 mins',
                 department=specialty,
-                avatar=f"https://i.pravatar.cc/150?u={pid}",
+                avatar=None,
                 clinical_notes=f"UAE Clinical Visit: Patient {pname} evaluated by {doc} ({specialty}). Diagnosis: {full_diag}. Payer: {payer}.",
                 medications="Standard UAE formulary prescription as indicated",
                 payer_network=payer,

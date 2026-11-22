@@ -30,7 +30,7 @@ def seed_data():
                 priority="High",
                 wait_time="8 mins",
                 department="Cardiology",
-                avatar="https://i.pravatar.cc/150?img=12",
+                avatar=None,
                 clinical_notes="Subjective: Patient reports intermittent chest tightness post-exercise. Objective: BP 142/88 mmHg, HR 76 bpm, EKG shows sinus rhythm. Assessment: Essential hypertension with mild exercise intolerance. Plan: Prescribe Lisinopril 10mg daily, order echocardiogram.",
                 medications="Lisinopril 10mg, Aspirin 81mg"
             ),
@@ -47,7 +47,7 @@ def seed_data():
                 priority="Normal",
                 wait_time="4 mins",
                 department="Endocrinology",
-                avatar="https://i.pravatar.cc/150?img=47",
+                avatar=None,
                 clinical_notes="Subjective: Patient reports good glycemic control, fasting blood glucose 110 mg/dL. Objective: HbA1c 6.8%, BP 124/78 mmHg. Assessment: Type 2 Diabetes Mellitus well controlled. Plan: Continue Metformin 500mg BID, recheck HbA1c in 3 months.",
                 medications="Metformin 500mg BID"
             ),
@@ -64,7 +64,7 @@ def seed_data():
                 priority="Normal",
                 wait_time="12 mins",
                 department="Pulmonology",
-                avatar="https://i.pravatar.cc/150?img=33",
+                avatar=None,
                 clinical_notes="Subjective: Patient complains of persistent dry cough for 5 days following viral URI. Objective: Temp 98.6F, SpO2 98% on room air, bilateral wheezing. Assessment: Acute viral bronchitis. Plan: Prescribe Albuterol inhaler PRN and Benzonatate 100mg.",
                 medications="Albuterol Inhaler, Benzonatate 100mg"
             ),
@@ -81,7 +81,7 @@ def seed_data():
                 priority="Low",
                 wait_time="2 mins",
                 department="Psychiatry",
-                avatar="https://i.pravatar.cc/150?img=20",
+                avatar=None,
                 clinical_notes="Subjective: Patient expresses feeling overwhelmed by work stress, difficulty sleeping. Objective: GAD-7 score 14 (moderate anxiety). Assessment: Generalized anxiety disorder. Plan: Recommended CBT therapy, initiated Sertraline 50mg daily.",
                 medications="Sertraline 50mg daily"
             ),
@@ -98,7 +98,7 @@ def seed_data():
                 priority="High",
                 wait_time="15 mins",
                 department="Orthopedics",
-                avatar="https://i.pravatar.cc/150?img=60",
+                avatar=None,
                 clinical_notes="Subjective: Lower back pain radiating down right leg for 2 weeks. Objective: Positive straight leg raise test on right at 45 degrees. Assessment: Lumbar radiculopathy L5-S1. Plan: Order Lumbar MRI, initiate physical therapy twice weekly.",
                 medications="Gabapentin 300mg TID, Naproxen 500mg BID"
             ),
@@ -115,7 +115,7 @@ def seed_data():
                 priority="Normal",
                 wait_time="6 mins",
                 department="Gastroenterology",
-                avatar="https://i.pravatar.cc/150?img=25",
+                avatar=None,
                 clinical_notes="Subjective: Frequent heartburn symptoms worse at night. Objective: Abdomen soft, non-tender, no organomegaly. Assessment: GERD refractory to OTC antacids. Plan: Prescribe Omeprazole 20mg daily before breakfast.",
                 medications="Omeprazole 20mg daily"
             ),
@@ -132,7 +132,7 @@ def seed_data():
                 priority="Normal",
                 wait_time="10 mins",
                 department="Radiology",
-                avatar="https://i.pravatar.cc/150?img=68",
+                avatar=None,
                 clinical_notes="Subjective: Twisting injury during sports 3 days ago. Joint joint effusion and clicking sound. Objective: Joint line tenderness, positive McMurray test. Assessment: Suspected medial meniscal tear. Plan: MRI right knee without contrast.",
                 medications="Ibuprofen 600mg TID"
             )

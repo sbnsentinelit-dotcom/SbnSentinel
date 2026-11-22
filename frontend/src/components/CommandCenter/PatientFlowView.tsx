@@ -38,7 +38,27 @@ export const PatientFlowView: React.FC = () => {
 
   // Live Database Encounters State
   const [encounters, setEncounters] = useState<any[]>([]);
+  const [selectedPatientEncounter, setSelectedPatientEncounter] = useState<any | null>(null);
+  const [journeyData, setJourneyData] = useState<any | null>(null);
   const [isLoadingEncounters, setIsLoadingEncounters] = useState(true);
+
+  const getInitials = (name?: string) => {
+    if (!name) return 'PT';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  };
+
+  useEffect(() => {
+    if (selectedPatientEncounter?.id) {
+      fetchWithAuth(`/api/v1/encounters/${selectedPatientEncounter.id}/journey`)
+        .then(res => res && res.ok ? res.json() : null)
+        .then(data => {
+          if (data) setJourneyData(data);
+        })
+        .catch(err => console.error("Failed to fetch journey:", err));
+    }
+  }, [selectedPatientEncounter?.id]);
 
   // Charting form states for doctor
   const [editingDiagnosis, setEditingDiagnosis] = useState('');
@@ -1083,71 +1103,117 @@ export const PatientFlowView: React.FC = () => {
           </div>
 
           {/* Top Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {[
-          { title: 'Checked In', value: encounters.filter(e => e.status === 'Waiting').length, trend: `+${(eLen % 4) + 1}%`, icon: UserCheck, color: 'text-[var(--color-accent)]', bg: 'bg-blue-500/20', line: 'var(--color-accent)' },
-          { title: 'In Consultation', value: encounters.filter(e => e.status === 'In Room').length, trend: `+${(eLen % 2) + 1}%`, icon: Stethoscope, color: 'text-[var(--color-semantic-positive)]', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-          { title: 'Avg Wait Time', value: '14m', trend: `-${eLen % 2}m`, icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
-          { title: 'Delayed', value: encounters.filter(e => e.status === 'Delayed').length, trend: `+${eLen % 2}`, icon: AlertCircle, color: 'text-[var(--color-semantic-critical)]', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
-        ].map((stat, i) => (
-          <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover flex justify-between items-center text-white transition-all duration-300">
-            <div>
-              <p className="text-[11px] text-white/70 uppercase font-extrabold tracking-widest mb-1">{stat.title}</p>
-              <div className="flex items-end gap-3">
-                <p className="text-[28px] font-extrabold text-white leading-none transition-all">{stat.value}</p>
-                <span className={`text-[11px] font-bold mb-1 transition-colors ${stat.trend.startsWith('+') ? 'text-[var(--color-semantic-positive)]' : 'text-[var(--color-semantic-critical)]'}`}>{stat.trend}</span>
+      {(() => {
+        const waitTimes = encounters.map(e => {
+          const m = String(e.wait_time || '').match(/(\d+)/);
+          return m ? parseInt(m[1], 10) : 0;
+        }).filter(w => w > 0);
+        const avgWaitMinutes = waitTimes.length > 0 ? Math.round(waitTimes.reduce((a, b) => a + b, 0) / waitTimes.length) : 14;
+        const checkedInCount = encounters.filter(e => e.status === 'Waiting').length;
+        const inConsultationCount = encounters.filter(e => e.status === 'In Room').length;
+        const delayedCount = encounters.filter(e => e.status === 'Delayed').length;
+
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            {[
+              { title: 'Checked In', value: checkedInCount, trend: '+4%', icon: UserCheck, color: 'text-[var(--color-accent)]', bg: 'bg-blue-500/20', line: 'var(--color-accent)' },
+              { title: 'In Consultation', value: inConsultationCount, trend: '+2%', icon: Stethoscope, color: 'text-[var(--color-semantic-positive)]', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
+              { title: 'Avg Wait Time', value: `${avgWaitMinutes}m`, trend: avgWaitMinutes <= 15 ? '-2m' : '+1m', icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
+              { title: 'Delayed', value: delayedCount, trend: delayedCount === 0 ? '0' : `+${delayedCount}`, icon: AlertCircle, color: 'text-[var(--color-semantic-critical)]', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
+            ].map((stat, i) => (
+              <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover flex justify-between items-center text-white transition-all duration-300">
+                <div>
+                  <p className="text-[11px] text-white/70 uppercase font-extrabold tracking-widest mb-1">{stat.title}</p>
+                  <div className="flex items-end gap-3">
+                    <p className="text-[28px] font-extrabold text-white leading-none transition-all">{stat.value}</p>
+                    <span className={`text-[11px] font-bold mb-1 transition-colors ${stat.trend.startsWith('+') ? 'text-[var(--color-semantic-positive)]' : 'text-[var(--color-semantic-critical)]'}`}>{stat.trend}</span>
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-3">
+                  <div className={`p-3 ${stat.bg} rounded-[16px]`}>
+                    <stat.icon className={`w-5 h-5 ${stat.color}`} />
+                  </div>
+                  <div className="w-12 h-6 opacity-60">
+                    <svg viewBox="0 0 100 30" className="w-full h-full preserve-aspect-ratio-none">
+                      <path d="M0,20 C20,10 40,30 60,15 C80,25 100,5 100,5" fill="none" stroke={stat.line} strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="flex flex-col items-end gap-3">
-              <div className={`p-3 ${stat.bg} rounded-[16px]`}>
-                <stat.icon className={`w-5 h-5 ${stat.color} ${eLen % 4 === i ? 'animate-bounce' : ''}`} />
-              </div>
-              <div className="w-12 h-6 opacity-60">
-                <svg viewBox="0 0 100 30" className="w-full h-full preserve-aspect-ratio-none">
-                  <g className="transition-transform duration-500" style={{ transform: `translateY(${Math.sin(eLen + i) * 5}px)` }}>
-                    <path d="M0,20 C20,10 40,30 60,15 C80,25 100,5 100,5" fill="none" stroke={stat.line} strokeWidth="3" strokeLinecap="round" />
-                  </g>
-                </svg>
-              </div>
-            </div>
+            ))}
           </div>
-        ))}
-      </div>
+        );
+      })()}
 
       {/* Patient Journey Timeline */}
-      <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-8 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover text-white">
-        <h3 className="text-base font-bold text-white mb-8">Patient Journey (Live Example)</h3>
-        <div className="flex items-center justify-between relative">
-          <div className="absolute left-8 right-8 top-1/2 -translate-y-1/2 h-1 bg-white/10 -z-10 rounded-full"></div>
-          <div className="absolute left-8 right-1/3 top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-[var(--color-semantic-positive)] to-[var(--color-accent)] -z-10 rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, (manualStep !== null ? manualStep : (eLen % 6)) * 20)}%` }}></div>
+      {(() => {
+        const activeEncounter = selectedPatientEncounter || (encounters.length > 0 ? encounters[0] : null);
+        const stageList = ['Check In', 'Waiting', 'Consultation', 'Lab', 'Billing', 'Completed'];
+        const currentStageName = journeyData?.current_stage || activeEncounter?.journey_stage || (activeEncounter?.status === 'In Room' ? 'Consultation' : activeEncounter?.status === 'Completed' ? 'Completed' : 'Waiting');
+        const activeStageIndex = stageList.indexOf(currentStageName) !== -1 ? stageList.indexOf(currentStageName) : 1;
 
-          {[
-            { label: 'Check In' },
-            { label: 'Waiting' },
-            { label: 'Consultation' },
-            { label: 'Lab' },
-            { label: 'Billing' },
-            { label: 'Completed' },
-          ].map((step, i) => {
-            const currentStepIndex = manualStep !== null ? manualStep : (eLen % 6);
-            let status = 'pending';
-            if (i === currentStepIndex) status = 'current';
-            else if (i < currentStepIndex) status = 'done';
+        const handleTimelineStageClick = async (targetStage: string) => {
+          if (!activeEncounter) return;
+          try {
+            const res = await fetchWithAuth(`/api/v1/encounters/${activeEncounter.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ journey_stage: targetStage })
+            });
+            if (res && res.ok) {
+              const updated = await res.json();
+              setSelectedPatientEncounter(updated);
+              fetchEncounters();
+            }
+          } catch (err) {
+            console.error('Failed to update journey stage:', err);
+          }
+        };
 
-            return (
-              <div key={i} onClick={() => setManualStep(i)} className="flex flex-col items-center gap-3 bg-transparent px-2 relative group cursor-pointer">
-                {status === 'current' && (
-                  <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex flex-col items-center animate-bounce">
-                    <img src={`https://i.pravatar.cc/150?img=${33 + (eLen % 5)}`} className="w-8 h-8 rounded-full border-2 border-white premium-shadow" alt="Avatar" />
-                  </div>
-                )}
-                <div className={`w-5 h-5 rounded-full shadow-sm z-10 transition-all duration-500 group-hover:scale-125 ${status === 'done' ? 'bg-[var(--color-semantic-positive)]' : status === 'current' ? 'bg-[var(--color-accent)] border-4 border-blue-500/30 scale-125' : 'bg-[var(--color-surface-raised)] border-4 border-white/20 group-hover:border-blue-500/30'}`}></div>
-                <span className={`text-[11px] font-extrabold uppercase tracking-wider transition-colors ${status === 'pending' ? 'text-white/50 group-hover:text-white/70' : 'text-white'}`}>{step.label}</span>
+        return (
+          <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-8 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover text-white">
+            <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-2">
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Patient Journey: <span className="text-blue-400 font-extrabold">{activeEncounter?.patient_name || 'Select a Patient'}</span>
+                </h3>
+                <p className="text-xs text-white/50">
+                  {activeEncounter ? `MRN: ${activeEncounter.mrn || 'MRN-' + activeEncounter.id} • Provider: ${activeEncounter.provider_name} • Department: ${activeEncounter.department || 'General Practice'} • Payer: ${activeEncounter.payer_network || 'Self Pay'}` : 'Click any queue row below to inspect real patient flow'}
+                </p>
               </div>
-            );
-          })}
-        </div>
-      </div>
+              {activeEncounter && (
+                <div className="text-xs font-bold px-3 py-1 bg-white/10 rounded-full text-white/80 border border-white/10 w-fit">
+                  Stage: <span className="text-emerald-400">{currentStageName}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-between relative">
+              <div className="absolute left-8 right-8 top-1/2 -translate-y-1/2 h-1 bg-white/10 -z-10 rounded-full"></div>
+              <div className="absolute left-8 right-1/3 top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-[var(--color-semantic-positive)] to-[var(--color-accent)] -z-10 rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, activeStageIndex * 20)}%` }}></div>
+
+              {stageList.map((stageName, i) => {
+                let status = 'pending';
+                if (i === activeStageIndex) status = 'current';
+                else if (i < activeStageIndex) status = 'done';
+
+                return (
+                  <div key={i} onClick={() => handleTimelineStageClick(stageName)} className="flex flex-col items-center gap-3 bg-transparent px-2 relative group cursor-pointer">
+                    {status === 'current' && (
+                      <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex flex-col items-center animate-bounce">
+                        <div className="w-8 h-8 rounded-full bg-[var(--color-accent)] border-2 border-white flex items-center justify-center text-white font-extrabold text-xs premium-shadow">
+                          {getInitials(activeEncounter?.patient_name)}
+                        </div>
+                      </div>
+                    )}
+                    <div className={`w-5 h-5 rounded-full shadow-sm z-10 transition-all duration-500 group-hover:scale-125 ${status === 'done' ? 'bg-[var(--color-semantic-positive)]' : status === 'current' ? 'bg-[var(--color-accent)] border-4 border-blue-500/30 scale-125' : 'bg-[var(--color-surface-raised)] border-4 border-white/20 group-hover:border-blue-500/30'}`}></div>
+                    <span className={`text-[11px] font-extrabold uppercase tracking-wider transition-colors ${status === 'pending' ? 'text-white/50 group-hover:text-white/70' : 'text-white'}`}>{stageName}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         {/* Live Waiting Queue */}
@@ -1228,10 +1294,16 @@ export const PatientFlowView: React.FC = () => {
                     }
 
                     return (
-                      <tr key={row.id || i} className="border-b border-white/10 hover:bg-white/10 transition-colors last:border-0 cursor-pointer">
+                      <tr 
+                        key={row.id || i} 
+                        onClick={() => setSelectedPatientEncounter(row)}
+                        className={`border-b border-white/10 hover:bg-white/10 transition-colors last:border-0 cursor-pointer ${selectedPatientEncounter?.id === row.id ? 'bg-white/10' : ''}`}
+                      >
                         <td className="py-4 px-2">
                           <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
-                            <img src={row.avatar || 'https://i.pravatar.cc/150?img=1'} className="w-8 h-8 rounded-full border border-white/10" alt="" />
+                            <div className="w-8 h-8 rounded-full bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-blue-400 font-bold text-xs flex-shrink-0">
+                              {getInitials(row.patient_name)}
+                            </div>
                             <div>
                               <p className="text-sm font-bold text-white leading-tight transition-all">{row.patient_name}</p>
                               <p className="text-[10px] text-[var(--color-semantic-critical)] font-extrabold uppercase mt-0.5">{row.priority} Priority</p>
@@ -1246,15 +1318,16 @@ export const PatientFlowView: React.FC = () => {
                         <td className="py-4 px-2">
                           <select
                             value={row.status}
+                            onClick={(e) => e.stopPropagation()}
                             onChange={async (e) => {
                               const newStatus = e.target.value;
                               try {
-                                const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/${row.id}`, {
+                                const response = await fetchWithAuth(`/api/v1/encounters/${row.id}`, {
                                   method: 'PUT',
                                   headers: { 'Content-Type': 'application/json' },
                                   body: JSON.stringify({ status: newStatus })
                                 });
-                                if (response.ok) {
+                                if (response && response.ok) {
                                   fetchEncounters();
                                 }
                               } catch (err) {
@@ -1892,7 +1965,9 @@ export const PatientFlowView: React.FC = () => {
                         <div className="lg:col-span-5 flex flex-col gap-4 bg-white/5 border border-white/10 rounded-[24px] p-5 justify-between">
                           <div className="space-y-4">
                             <div className="flex items-center gap-3 pb-3 border-b border-white/10">
-                              <img src={enc.avatar || 'https://i.pravatar.cc/150?img=1'} className="w-12 h-12 rounded-full border border-white/10" alt="" />
+                              <div className="w-12 h-12 rounded-full bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-blue-400 font-extrabold text-sm flex-shrink-0">
+                                {getInitials(enc.patient_name)}
+                              </div>
                               <div>
                                 <h4 className="text-sm font-extrabold text-white leading-tight">{enc.patient_name}</h4>
                                 <span className="inline-flex text-[9px] font-black text-rose-500 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full uppercase mt-1">

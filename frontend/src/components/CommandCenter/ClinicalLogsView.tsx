@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
+import { formatMoney } from '@/utils/currency';
 import { FileText, Search, Filter, Download, CheckCircle2, FileSignature, Receipt, CreditCard, ChevronLeft, ChevronRight, AlertTriangle, ShieldCheck, ShieldAlert, Check, Sparkles, Info, Printer, Plus, X, FileSpreadsheet, Users } from 'lucide-react';
 
 export const ClinicalLogsView: React.FC = () => {
@@ -518,11 +519,11 @@ export const ClinicalLogsView: React.FC = () => {
       priority: 'Normal',
       wait_time: '0 mins',
       department: visitType === 'Consultation' ? 'General Practice' : 'Urgent Care',
-      avatar: `https://i.pravatar.cc/150?img=${Math.floor(Math.random() * 70)}`
+      avatar: null
     };
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters`, {
+      const response = await fetchWithAuth('/api/v1/encounters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newEnc)
@@ -552,8 +553,8 @@ export const ClinicalLogsView: React.FC = () => {
 
     const loadInsurance = async () => {
       try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/insurance/patient/${encodeURIComponent(activeEncounter.patient_name)}`);
-        if (response.ok) {
+        const response = await fetchWithAuth(`/api/v1/insurance/patient/${encodeURIComponent(activeEncounter.patient_name)}`);
+        if (response && response.ok) {
           const data = await response.json();
           setSelectedPatientInsurance(data || null);
         } else {
@@ -581,12 +582,12 @@ export const ClinicalLogsView: React.FC = () => {
     if (!activeBillId) return;
     setProcessing(true);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/${activeBillId}`, {
+      const response = await fetchWithAuth(`/api/v1/encounters/${activeBillId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ billing_status: 'Paid' })
       });
-      if (response.ok) {
+      if (response && response.ok) {
         setBillingSuccess('Paid');
         await fetchEncounters();
       }
@@ -601,7 +602,7 @@ export const ClinicalLogsView: React.FC = () => {
     if (!activeBillId) return;
     setProcessing(true);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/${activeBillId}`, {
+      const response = await fetchWithAuth(`/api/v1/encounters/${activeBillId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ billing_status: 'Billed' })
@@ -854,18 +855,18 @@ export const ClinicalLogsView: React.FC = () => {
                             </div>
                             <div className="text-right">
                               <p className="text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-0.5">Charge amount</p>
-                              <p className="text-xl font-extrabold text-white">{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'Unavailable'}</p>
+                              <p className="text-xl font-extrabold text-white">{activeEncounter?.amount ? formatMoney(activeEncounter.amount, activeEncounter.currency) : 'Unavailable'}</p>
                             </div>
                           </div>
 
                           <div className="space-y-2.5">
                             <div className="flex justify-between text-xs font-semibold">
                               <span className="text-white/60">{activeEncounter?.cpt_code ? `${activeEncounter.cpt_code} (Source Procedure)` : 'Source Code Pending'}</span>
-                              <span className="text-white">{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'N/A'}</span>
+                              <span className="text-white">{activeEncounter?.amount ? formatMoney(activeEncounter.amount, activeEncounter.currency) : 'N/A'}</span>
                             </div>
                             <div className="flex justify-between text-xs font-semibold">
                               <span className="text-white/60">Patient Copay / Responsibility</span>
-                              <span className="text-white">{activeEncounter?.copay !== null && activeEncounter?.copay !== undefined ? `$${activeEncounter.copay.toFixed(2)}` : 'N/A'}</span>
+                              <span className="text-white">{activeEncounter?.copay !== null && activeEncounter?.copay !== undefined ? formatMoney(activeEncounter.copay, activeEncounter.currency) : 'N/A'}</span>
                             </div>
                           </div>
 
@@ -893,11 +894,11 @@ export const ClinicalLogsView: React.FC = () => {
                                       <div className="grid grid-cols-2 gap-3 mt-3 pt-2 border-t border-emerald-200/50">
                                         <div>
                                           <p className="text-[9px] uppercase font-bold text-emerald-400">Primary Copay</p>
-                                          <p className="font-extrabold text-sm">${selectedPatientInsurance.copay_primary?.toFixed(2)}</p>
+                                          <p className="font-extrabold text-sm">{formatMoney(selectedPatientInsurance.copay_primary, selectedPatientInsurance?.currency)}</p>
                                         </div>
                                         <div>
                                           <p className="text-[9px] uppercase font-bold text-emerald-400">Deductible</p>
-                                          <p className="font-extrabold text-sm">${selectedPatientInsurance.deductible?.toFixed(2)}</p>
+                                          <p className="font-extrabold text-sm">{formatMoney(selectedPatientInsurance.deductible, selectedPatientInsurance?.currency)}</p>
                                         </div>
                                       </div>
                                     </div>

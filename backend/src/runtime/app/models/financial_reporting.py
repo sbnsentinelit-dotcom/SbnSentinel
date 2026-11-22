@@ -1,6 +1,7 @@
 from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, Text, ForeignKey
 from datetime import datetime
 from app.db.database import Base
+from app.core.config import get_deployment_currency
 
 
 class FinancialClaimModel(Base):
@@ -17,7 +18,7 @@ class FinancialClaimModel(Base):
     allowed_amount = Column(Float, nullable=True)
     paid_amount = Column(Float, nullable=True)
     patient_share = Column(Float, nullable=True, default=0.0)
-    currency = Column(String(8), nullable=False, default="AED")
+    currency = Column(String(8), nullable=False, default=get_deployment_currency)
     service_date = Column(DateTime, nullable=False)
     submission_date = Column(DateTime, nullable=True)
     adjudication_date = Column(DateTime, nullable=True)
@@ -66,7 +67,7 @@ class FinancialRemittanceModel(Base):
     payment_reference = Column(String(128), nullable=False)
     remittance_date = Column(DateTime, nullable=False, default=datetime.utcnow)
     total_paid = Column(Float, nullable=False, default=0.0)
-    currency = Column(String(8), nullable=False, default="AED")
+    currency = Column(String(8), nullable=False, default=get_deployment_currency)
 
 
 class FinancialPaymentReceiptModel(Base):
@@ -76,7 +77,7 @@ class FinancialPaymentReceiptModel(Base):
     clinic_id = Column(String(64), index=True, nullable=False)
     receipt_type = Column(String(32), nullable=False)  # payer_payment, patient_copay, patient_selfpay
     amount = Column(Float, nullable=False, default=0.0)
-    currency = Column(String(8), nullable=False, default="AED")
+    currency = Column(String(8), nullable=False, default=get_deployment_currency)
     received_date = Column(DateTime, nullable=False, default=datetime.utcnow)
     remittance_id = Column(String(64), nullable=True)
     claim_id = Column(String(64), nullable=True)

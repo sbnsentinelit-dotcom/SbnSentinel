@@ -83,6 +83,9 @@ def seed_dubai_data(db: Session):
     """
     Seeds the complete UAE Dubai healthcare dataset into the provided database session.
     """
+    from app.core.config import get_deployment_currency
+    curr = get_deployment_currency()
+
     clinic_id = "DXB-CLINIC-01"
     clinic = db.query(ClinicModel).filter(ClinicModel.id == clinic_id).first()
     if not clinic:
@@ -239,7 +242,7 @@ def seed_dubai_data(db: Session):
             allowed_amount=allowed,
             paid_amount=paid,
             patient_share=round(billed * 0.15, 2) if enc["payer"] != "Self Pay" else billed,
-            currency="AED",
+            currency=curr,
             service_date=serv_date,
             submission_date=serv_date + timedelta(days=2),
             adjudication_date=(serv_date + timedelta(days=14)) if status == "paid" else None,
@@ -298,7 +301,7 @@ def seed_dubai_data(db: Session):
                 payment_reference=remit_id,
                 remittance_date=datetime.strptime(enc["date"], "%Y-%m-%d") + timedelta(days=15),
                 total_paid=paid_val,
-                currency="AED",
+                currency=curr,
             )
             remits_to_add.append(remittance)
             existing_remits.add(remit_id)
@@ -308,7 +311,7 @@ def seed_dubai_data(db: Session):
             clinic_id=clinic_id,
             receipt_type="payer_payment" if enc["payer"] != "Self Pay" else "patient_selfpay",
             amount=paid_val,
-            currency="AED",
+            currency=curr,
             received_date=datetime.strptime(enc["date"], "%Y-%m-%d") + timedelta(days=15),
             remittance_id=remit_id,
             claim_id=f"CLM2026{i:06d}",
@@ -368,7 +371,7 @@ def seed_dubai_data(db: Session):
         ("CO29", "TIMELY_FILING_RISK", "Critical", 640.0,
          "UAE Timely Filing Horizon Critical (T-4 Days)",
          "Adjudicated claim from Orient Insurance approaching 90-day statutory dispute cutoff.",
-         "Unrecoverable bad debt write-off of AED 640.00 if appeal is not lodged.",
+         "Unrecoverable bad debt write-off if appeal is not lodged.",
          "Dispatch automated electronic dispute pack with proof of original timely submission.",
          99),
         ("CO16", "DOCUMENTATION_INSUFFICIENCY", "Medium", 280.0,
@@ -430,7 +433,9 @@ def seed_dubai_data(db: Session):
             "cpt_code": CPT_CATALOG[idx % len(CPT_CATALOG)][0],
             "claim_id": f"CLM2026-DXB-{idx + 1:04d}",
             "decision_context_id": ctx_id,
-            "exposure_aed": exposure
+            "exposure_amount": exposure,
+            "currency": curr,
+            "exposure_aed": exposure if curr == "AED" else None
         }
 
         if sig_id in existing_signals:
@@ -444,7 +449,7 @@ def seed_dubai_data(db: Session):
             id=sig_id,
             source="Sentinel UAE Governance Engine",
             type=sig_type,
-            message=f"[{code}] {title}: Exposure AED {exposure:.2f}",
+            message=f"[{code}] {title}: Exposure {curr} {exposure:.2f}",
             timestamp=datetime.now(timezone.utc) - timedelta(hours=idx * 6),
             org_id="ORG-UAE-01",
             clinic_id=clinic_id,
@@ -456,7 +461,7 @@ def seed_dubai_data(db: Session):
             expected_outcome="100% claim preservation and zero revenue leakage.",
             primary_context="Financial Integrity",
             secondary_context="UAE Insurance Adjudication",
-            estimated_financial_exposure=f"AED {exposure:.2f}",
+            estimated_financial_exposure=f"{curr} {exposure:.2f}",
             priority_score=score,
             metadata_data=meta_payload,
         )

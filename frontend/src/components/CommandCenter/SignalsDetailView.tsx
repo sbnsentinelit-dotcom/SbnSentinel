@@ -1,5 +1,5 @@
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createGovernedRef, createPrimaryContext, createNestedContext } from '@/utils/governedNavigation';
 import { GovernedWorkspace } from '@/components/GovernedUI/GovernedWorkspace';
 import { RecommendationReview } from '@/components/GovernedUI/RecommendationReview';
@@ -31,10 +31,11 @@ import { mapStateToSemantic } from '@/utils/failurePresentation';
 import { FailureNotice } from '@/components/GovernedUI/FailureNotice';
 import { DegradedStateBanner } from '@/components/GovernedUI/DegradedStateBanner';
 
-export const SignalsDetailView: React.FC<{ initialSignalId?: string | null }> = ({ initialSignalId }) => {
+export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onClose?: () => void }> = ({ initialSignalId, onClose }) => {
   const dispatch = useDispatch();
   const reduxSignals = useSelector((state: RootState) => state.signals.events);
   const [dbSignals, setDbSignals] = useState<SignalEvent[]>([]);
+  const initialAppliedRef = useRef<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<'All' | 'EHR' | 'Phone' | 'Email'>('All');
   const [selectedSignal, setSelectedSignal] = useState<SignalEvent | null>(null);
@@ -115,7 +116,7 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null }> = 
         // Fail open to safe (production) mode
         setIsProd(true);
       });
-  }, [reduxSignals]);
+  }, []);
   const allSignalsMap = new Map<string, SignalEvent>();
   dbSignals.forEach(s => allSignalsMap.set(s.id, s));
   reduxSignals.forEach(s => allSignalsMap.set(s.id, s));
@@ -123,10 +124,11 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null }> = 
     new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
   useEffect(() => {
-    if (initialSignalId) {
+    if (initialSignalId && initialAppliedRef.current !== initialSignalId) {
       const sig = allSignalsMap.get(initialSignalId);
       if (sig) {
         setSelectedSignal(sig);
+        initialAppliedRef.current = initialSignalId;
       }
     }
   }, [initialSignalId, dbSignals, reduxSignals]);
@@ -569,7 +571,10 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null }> = 
           context={primaryCtx}
           primaryContent={primaryContent}
           contextPanels={contextPanels}
-          onClose={() => setSelectedSignal(null)}
+          onClose={() => {
+            setSelectedSignal(null);
+            if (onClose) onClose();
+          }}
         />
       </div>
     );
@@ -597,6 +602,14 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null }> = 
           <p className="text-sm text-white/70 font-medium">Real-time Secure Data EHR connections, Twilio hooks, and automated audit stream logs.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="flex items-center gap-2 bg-white/10 border border-white/20 text-white font-bold text-xs px-4 py-2.5 rounded-[16px] hover:bg-white/20 transition-colors cursor-pointer"
+            >
+              Back
+            </button>
+          )}
           <button
             onClick={fetchDbSignals}
             disabled={isRefreshing}

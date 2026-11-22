@@ -52,6 +52,8 @@ class SettingsResponse(BaseModel):
 
     active_plan: str
     payment_card: str
+    currency: Optional[str] = "USD"
+    deployment_region: Optional[str] = "US"
 
     class Config:
         from_attributes = True

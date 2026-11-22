@@ -1,4 +1,5 @@
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
+import { formatMoney } from '@/utils/currency';
 import React, { useState, useEffect } from 'react';
 import { Download, Filter, TrendingUp, DollarSign, Activity, FileText, AlertCircle, BrainCircuit, ArrowRight, ShieldCheck, PieChart, Check, X, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { createPortal } from 'react-dom';
@@ -160,8 +161,8 @@ export const RevenueReportsView: React.FC = () => {
       {/* Dynamic Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { title: "Daily Revenue (Est)", value: dailyRevenue !== null ? `$${dailyRevenue.toLocaleString()}` : 'Unavailable', trend: dailyRevenue !== null ? `+${(4.2 + (eLen % 10) * 0.1).toFixed(1)}%` : 'N/A', icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-          { title: "Saved by Sentinel AI", value: savedRevenue !== null ? `$${savedRevenue.toLocaleString()}` : 'Unavailable', trend: savedRevenue !== null ? `+${18 + (eLen % 3)}%` : 'N/A', icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
+          { title: "Daily Revenue (Est)", value: dailyRevenue !== null ? formatMoney(dailyRevenue, backendSummary?.currency) : 'Unavailable', trend: dailyRevenue !== null ? `+${(4.2 + (eLen % 10) * 0.1).toFixed(1)}%` : 'N/A', icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
+          { title: "Saved by Sentinel AI", value: savedRevenue !== null ? formatMoney(savedRevenue, backendSummary?.currency) : 'Unavailable', trend: savedRevenue !== null ? `+${18 + (eLen % 3)}%` : 'N/A', icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
           { title: "Pending Claims", value: pendingClaims !== null ? pendingClaims : 'Unavailable', trend: pendingClaims !== null ? `-${2 + (eLen % 2)}` : 'N/A', icon: FileText, color: 'text-orange-400', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
           { title: "Claim Denials", value: claimDenials !== null ? claimDenials : 'Unavailable', trend: claimDenials !== null ? `-${12 + (eLen % 4)}%` : 'N/A', icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
         ].map((stat, i) => (
@@ -329,7 +330,7 @@ export const RevenueReportsView: React.FC = () => {
                   patient_name: enc.patient_name,
                   code: cpt,
                   payer: payer,
-                  amt: `AED ${amount.toFixed(2)}`,
+                  amt: formatMoney(amount, enc.currency || backendSummary?.currency),
                   status: enc.billing_status || 'Pending',
                   date: enc.date || 'Today',
                   diagnosis: enc.diagnosis || 'No Diagnosis Recorded',

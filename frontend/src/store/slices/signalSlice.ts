@@ -21,10 +21,13 @@ export interface SignalEvent {
   context_reason?: string;
   revenue_risk_category?: string;
   estimated_financial_exposure?: string;
+  exposure_amount?: number;
+  currency?: string;
   revenue_impact_status?: string;
   operational_dependency?: string;
   ai_insight?: string;
-  status?: 'active' | 'acknowledged' | 'expired' | 'superseded';
+  status?: 'active' | 'acknowledged' | 'expired' | 'superseded' | 'APPROVED' | 'REJECTED';
+  decision_status?: string;
   correlation_id?: string;
 }
 
