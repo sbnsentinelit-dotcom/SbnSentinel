@@ -42,13 +42,28 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+# Every module that defines tables. All of them must be imported before create_all, otherwise
+# their tables are missing on a new database (the pipeline then fails, e.g. dce_context_evidence).
+_TABLE_MODULES = (
+    "event", "signal", "user", "otp", "governance_storage", "intelligence",
+    "organization", "encounter", "clinic", "billing", "insurance", "connector",
+    "audit", "telemetry", "settings", "rule", "evidence", "financial_reporting",
+    "collaboration_models", "decision_context_models", "decision_record",
+    "evidence_evaluation_models", "explainability_models",
+    "integration", "recommendation_generation_models",
+    # models/governance.py is not listed: it is unused and redefines the "rules" table of models/rule.py.
+)
+
+
 def ensure_schema_compatibility():
+    import importlib
+    import logging
+    for name in _TABLE_MODULES:
+        try:
+            importlib.import_module(f"app.models.{name}")
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Could not load table module %s: %s", name, exc)
     try:
-        from app.models import (  # noqa
-            event, signal, user, otp, governance_storage, intelligence,
-            organization, encounter, clinic, billing, insurance, connector,
-            audit, telemetry, settings, rule, evidence, financial_reporting
-        )
         from app.services.cursor_store import CursorModel  # noqa: F401
     except Exception:
         pass

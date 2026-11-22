@@ -23,7 +23,9 @@ class ExecuteActionRequest(BaseModel):
 async def create_operational_action(
     request: CreateActionRequest,
     current_user: Any = Depends(RoleChecker(
-        [UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.CLINIC_MANAGER.value, UserRole.FRONT_DESK.value]
+        # DEMO: Organization Administrator added for the demo; review role permissions after the demo.
+        [UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value,
+         UserRole.CLINIC_MANAGER.value, UserRole.FRONT_DESK.value]
     ))
 ):
     """
@@ -165,7 +167,9 @@ async def create_operational_action(
 async def execute_operational_action(
     request: ExecuteActionRequest,
     current_user: Any = Depends(
-        RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.CLINIC_MANAGER.value])
+        # DEMO: Organization Administrator added for the demo; review role permissions after the demo.
+        RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value,
+                     UserRole.CLINIC_MANAGER.value])
     )
 ):
     """

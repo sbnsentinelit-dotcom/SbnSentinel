@@ -129,12 +129,15 @@ def readiness_gate(
     from app.core.config import settings
     config_ok = bool(getattr(settings, "ENVIRONMENT", None))
 
-    # 7. Practice Fusion Connector Readiness Check
+    # 7. Required Connector Readiness Check (Practice Fusion by default).
+    # The same rule applies in every environment: a deployment that does not use a
+    # connector removes it from REQUIRED_CONNECTORS instead of being reported healthy.
+    required_connectors = list(getattr(settings, "REQUIRED_CONNECTORS", ["PRACTICE_FUSION"]) or [])
     try:
         from app.services.connector_manager import connector_manager
-        pf_ok = connector_manager.is_ready("PRACTICE_FUSION")
+        pf_ok = all(connector_manager.is_ready(name) for name in required_connectors)
     except Exception as e:
-        logger.error(f"[Readiness] PF check failed: {e}")
+        logger.error(f"[Readiness] Required connector check failed: {e}")
         pf_ok = False
 
     # 8. Processing Services Readiness Check

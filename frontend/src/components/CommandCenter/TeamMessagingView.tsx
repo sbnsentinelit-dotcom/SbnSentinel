@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, MessageSquare, Send, CheckCircle2 } from 'lucide-react';
+import { getBackendWsBaseUrl } from '@/utils/wsUrl';
 
 const threadKey = (a: string, b: string) =>
   [a, b].map((s) => s.toLowerCase().trim()).sort().join('|');
@@ -88,8 +89,16 @@ export const TeamMessagingView: React.FC<{ currentUser?: { full_name: string }; 
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [activeMessages]);
 
+  const orgId: string | undefined = (currentUser as { org_id?: string } | undefined)?.org_id;
+
   useEffect(() => {
-    const socket = new WebSocket('ws://localhost:8000/api/v1/pasme/chat/ws');
+    // The backend room is "org_<org id>" and the socket is authenticated with the session token.
+    const base = getBackendWsBaseUrl();
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (!base || !token || !orgId) return;
+    const socket = new WebSocket(
+      `${base}/api/v1/pasme/chat/ws/${encodeURIComponent(`org_${orgId}`)}?token=${encodeURIComponent(token)}`
+    );
     ws.current = socket;
 
     socket.onmessage = (event) => {
@@ -113,7 +122,7 @@ export const TeamMessagingView: React.FC<{ currentUser?: { full_name: string }; 
     };
 
     return () => socket.close();
-  }, []);
+  }, [orgId]);
 
   const handleSendMessage = () => {
     if (!newMessageText.trim() || !activeContact) return;

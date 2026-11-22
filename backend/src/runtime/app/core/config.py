@@ -56,7 +56,11 @@ class Settings(BaseSettings):
     # In production set: SQLALCHEMY_DATABASE_URL=postgresql://user:pass@host/db
     SQLALCHEMY_DATABASE_URL: str = "sqlite:///./sentinel.db"
 
-    ALLOWED_WS_ORIGINS: list[str] = ["http://localhost:3000", "https://sbnsentinel.com"]
+    ALLOWED_WS_ORIGINS: list[str] = ["http://localhost:3000", "https://sbnsentinel.com", "https://www.sbnsentinel.com"]
+
+    # Connectors that must be ready for /health/ready to pass, in every environment.
+    # Set as a JSON list, e.g. REQUIRED_CONNECTORS='[]' for a deployment with no live EHR connector.
+    REQUIRED_CONNECTORS: list[str] = ["PRACTICE_FUSION"]
 
     @model_validator(mode='after')
     def validate_sesr012_config(self) -> 'Settings':

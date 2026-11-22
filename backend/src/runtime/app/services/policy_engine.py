@@ -21,8 +21,13 @@ from typing import Dict, Any, List
 from dataclasses import dataclass
 import uuid
 from app.services.base_service import BaseService
+from app.services.uae_claims_governance import UAE_POLICY_ID, UAE_CLAIMS_SOURCE
 
 logger = logging.getLogger(__name__)
+
+# Sources accepted without a connector binding outside production.
+NON_PRODUCTION_SOURCES = ("Practice Fusion", "PRACTICE_FUSION", "practice_fusion", "PF", "EHR_SYSTEM", "EHR", "System",
+                          UAE_CLAIMS_SOURCE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POLICY RESULT — Output of policy evaluation
@@ -79,7 +84,8 @@ class PolicyEngine(BaseService):
             return True, f"PASS: {p_id} v{p_ver}"
 
         elif p_id == "POL-002":
-            allowed_event_types = ["EHR", "Phone", "Email", "Manual"]
+            # "Claim": payer adjudication / remittance events (UAE claim denials).
+            allowed_event_types = ["EHR", "Phone", "Email", "Manual", "Claim"]
             if event_type not in allowed_event_types:
                 return False, f"BLOCKED: Event type '{event_type}' not authorized for {p_id} v{p_ver}."
             return True, f"PASS: {p_id} v{p_ver}"
@@ -94,7 +100,7 @@ class PolicyEngine(BaseService):
                     if not source or not any(pf in str(source).lower() for pf in ("practice fusion", "practice_fusion", "pf")):
                         return False, f"BLOCKED: Source '{source}' is not authorized by {p_id} v{p_ver} (Practice Fusion required in production)."
                 else:
-                    if not source or source not in ("Practice Fusion", "PRACTICE_FUSION", "practice_fusion", "PF", "EHR_SYSTEM", "EHR", "System"):
+                    if not source or source not in NON_PRODUCTION_SOURCES:
                         return False, f"BLOCKED: Source '{source}' is not authorized by {p_id} v{p_ver}."
                 return True, f"PASS: {p_id} v{p_ver}"
 
@@ -116,7 +122,7 @@ class PolicyEngine(BaseService):
 
             binding = connector_store.get(str(source))
             if not binding:
-                if not is_prod and source in ("Practice Fusion", "PRACTICE_FUSION", "practice_fusion", "PF", "EHR_SYSTEM", "EHR", "System"):
+                if not is_prod and source in NON_PRODUCTION_SOURCES:
                     return True, f"PASS: {p_id} v{p_ver}"
                 return False, f"BLOCKED: Source '{source}' is not registered with connector authority for {p_id} v{p_ver}."
             if binding.state != "AUTHORIZED_READY":
@@ -127,6 +133,12 @@ class PolicyEngine(BaseService):
             if not connector_manager.is_capability_ready(str(source), required_capability):
                 return False, f"BLOCKED: Capability '{required_capability}' is not ready for connector '{source}' for {p_id} v{p_ver}."
 
+            return True, f"PASS: {p_id} v{p_ver}"
+
+        elif p_id == UAE_POLICY_ID:
+            # UAE adjudication policy: a decision needs operational evidence, as for POL-001.
+            if not evidence_package or (not evidence_package.get("evidence_items") and not evidence_package.get("evidence_references")):
+                return False, f"BLOCKED: No operational evidence available for {p_id} v{p_ver}."
             return True, f"PASS: {p_id} v{p_ver}"
 
         return False, f"NOT_EVALUABLE: Unknown or unsupported policy {p_id} v{p_ver}"

@@ -16,7 +16,6 @@ from app.models.financial_reporting import (
 from app.models.signal import SignalModel
 from app.models.connector import ConnectorModel
 from app.models.governance_storage import (
-    GovernedPolicyVersionModel,
     RuleEvaluationModel,
     RecommendationModel,
 )
@@ -331,22 +330,11 @@ def seed_dubai_data(db: Session):
     db.commit()
 
     # 5. Seed Sentinel Governance Signals & Governance Models
-    policy_id = "POL-UAE-DHPO-2026"
-    existing_pol = db.query(GovernedPolicyVersionModel).filter(GovernedPolicyVersionModel.policy_id == policy_id).first()
-    if not existing_pol:
-        pol = GovernedPolicyVersionModel(
-            policy_id=policy_id,
-            version="2026.04",
-            lifecycle_state="ACTIVE",
-            content="Dubai Health Authority (DHPO) Unified Insurance Adjudication Policy & Automated Claims Scrubber Rules.",
-            effective_from="2026-01-01T00:00:00Z",
-            approval_state="APPROVED",
-            approved_by="DHA Health Funding Department",
-            approval_timestamp="2026-01-01T00:00:00Z",
-            scope="Dubai / UAE Healthcare Jurisdiction"
-        )
-        db.add(pol)
-        db.commit()
+    # The UAE policy, its denial rules and mappings are registered through the governance
+    # registry (dates without timezone, scope "UAE") so live claim events can use them too.
+    from app.services.uae_claims_governance import register_uae_claims_governance, UAE_POLICY_ID
+    register_uae_claims_governance()
+    policy_id = UAE_POLICY_ID
 
     existing_signals = {s.id for s in db.query(SignalModel.id).all()}
     uae_governance_rules = [
@@ -418,7 +406,8 @@ def seed_dubai_data(db: Session):
                 priority="HIGH" if risk in ["Critical", "High"] else "NORMAL",
                 generated_at=(datetime.now(timezone.utc) - timedelta(hours=idx * 6)).isoformat(),
                 intended_target_reference=sig_id,
-                authority_requirement="ORGANIZATION_ADMINISTRATOR",
+                # Must be an AuthorityRequirement value; a human must approve before any action.
+                authority_requirement="APPROVAL_REQUIRED",
                 problem=prob,
                 business_impact=impact,
                 expected_outcome="100% claim preservation and zero revenue leakage."
@@ -494,3 +483,32 @@ def auto_seed_dubai_if_empty(db: Session):
     count = db.query(EncounterModel).count()
     if count == 0:
         seed_dubai_data(db)
+
+
+# Dubai demo recommendations seeded before this fix carry "ORGANIZATION_ADMINISTRATOR",
+# which is a role, not an AuthorityRequirement; loading them failed with ValueError.
+_INVALID_SEEDED_AUTHORITY = "ORGANIZATION_ADMINISTRATOR"
+
+
+def repair_seeded_authority_requirement(db: Session) -> int:
+    """Sets the stored authority of previously seeded Dubai recommendations to APPROVAL_REQUIRED."""
+    rows = db.query(RecommendationModel).filter(
+        RecommendationModel.authority_requirement == _INVALID_SEEDED_AUTHORITY
+    ).all()
+    for row in rows:
+        row.authority_requirement = "APPROVAL_REQUIRED"
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+_patient_names_by_id = {}
+
+
+def synthetic_patient_name(patient_id: str) -> str:
+    """Name of a seeded Dubai patient (same formula the seed uses for IDs and names)."""
+    if not _patient_names_by_id:
+        for i in range(1, 501):
+            eid = f"784-19{60 + (i % 40):02d}-{i * 137 % 9000000 + 1000000:07d}-{(i * 3) % 9 + 1}"
+            _patient_names_by_id[eid] = f"{FIRST_NAMES[(i * 7) % len(FIRST_NAMES)]} {LAST_NAMES[(i * 11) % len(LAST_NAMES)]}"
+    return _patient_names_by_id.get(patient_id, patient_id)

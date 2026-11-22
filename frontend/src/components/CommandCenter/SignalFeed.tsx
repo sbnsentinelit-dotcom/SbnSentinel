@@ -1,10 +1,13 @@
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Activity, Phone, Mail, Calendar, ChevronRight, X, Clock, Database, Sparkles, Check, Shield, ArrowRight } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from '@/store';
-import { incrementActionsTaken, SignalEvent, acknowledgeSignal } from '@/store/slices/signalSlice';
+import { RootState, AppDispatch } from '@/store';
+import { incrementActionsTaken, SignalEvent, acknowledgeSignal, fetchSignalSummary, markSignalDecided } from '@/store/slices/signalSlice';
+import { recordSignalReview } from '@/utils/signalReview';
+import { isActionable } from '@/utils/signalSummary';
+import { runAutopilotForSignal } from '@/utils/autopilot';
 
 interface SignalFeedProps {
   setActiveTab?: (tab: string) => void;
@@ -12,7 +15,7 @@ interface SignalFeedProps {
 }
 
 export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSelect }) => {
-  const dispatch = useDispatch();
+  const dispatch = useDispatch<AppDispatch>();
   const [selectedSignal, setSelectedSignal] = useState<SignalEvent | null>(null);
   const [isDispatched, setIsDispatched] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
@@ -35,34 +38,53 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
 
   const [autopilot, setAutopilot] = useState(false);
   const signals = useSelector((state: RootState) => state.signals.events);
-  const activeSignals = signals.filter(s => s.status !== 'acknowledged');
+  // Acknowledged, dismissed or decided signals (all stored in the backend) leave the live feed.
+  const activeSignals = signals.filter(s => s.status !== 'acknowledged' && s.status !== 'dismissed' && !s.decision);
 
-  // Autopilot execution engine
+  // Autopilot: while it is on, every open signal with a recommendation (the existing queue first, then
+  // each new one) is approved, and its permitted action created and executed, one at a time, through
+  // the same governed APIs a user would use. Handled signals stay in the feed for a few seconds with
+  // an "Auto-approved" badge, and the switch shows how many were approved in this session.
+  const AUTO_BADGE_MS = 8000;
+  const autopilotHandled = useRef<Set<string>>(new Set());
+  const autopilotBusy = useRef(false);
+  const [autopilotTick, setAutopilotTick] = useState(0);
+  const [autoApprovedCount, setAutoApprovedCount] = useState(0);
+  const [recentAuto, setRecentAuto] = useState<Record<string, SignalEvent>>({});
   useEffect(() => {
-    if (autopilot && activeSignals.length > 0) {
-      const latestSignal = activeSignals[0];
-      if (latestSignal && latestSignal.recommended_action) {
-        const alreadyDispatched = localStorage.getItem(`auto-${latestSignal.id}`);
-        if (!alreadyDispatched) {
-          localStorage.setItem(`auto-${latestSignal.id}`, 'true');
-          
-          // Post auto-dispatch log to DB
-          fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/audit/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              user_email: "autopilot@sbnsentinel.com",
-              action: `Approved Sentinel Action: ${latestSignal.recommended_action}`,
-              resource: `Signal: ${latestSignal.id} (${latestSignal.type})`,
-              ip_address: "127.0.0.1"
-            })
-          }).catch(e => console.error("Autopilot log dispatch error:", e));
-          
-          dispatch(incrementActionsTaken());
+    if (!autopilot || autopilotBusy.current) return;
+    const next = activeSignals.find(s => isActionable(s) && !autopilotHandled.current.has(s.id));
+    if (!next) return;
+    autopilotBusy.current = true;
+    autopilotHandled.current.add(next.id);
+    runAutopilotForSignal(next.id)
+      .then(result => {
+        if (!result.decision) return;
+        const decision = result.decision;
+        dispatch(markSignalDecided({ id: next.id, decision }));
+        if (result.decisionId) {
+          setAutoApprovedCount(c => c + 1);
+          setRecentAuto(r => ({ ...r, [next.id]: { ...next, decision } }));
+          setTimeout(() => setRecentAuto(r => {
+            const rest = { ...r };
+            delete rest[next.id];
+            return rest;
+          }), AUTO_BADGE_MS);
         }
-      }
-    }
-  }, [activeSignals, autopilot]);
+      })
+      .catch(err => console.error('Autopilot error:', err))
+      .finally(() => {
+        autopilotBusy.current = false;
+        // Card counts come from the backend, so they show the stored decisions.
+        dispatch(fetchSignalSummary());
+        setAutopilotTick(t => t + 1);
+      });
+  }, [activeSignals, autopilot, autopilotTick, dispatch]);
+
+  // Feed items, in the store's order (newest first): open signals plus signals Autopilot approved in
+  // the last few seconds (still in the store, now carrying their decision).
+  const feedSignals = signals.filter(s =>
+    Boolean(recentAuto[s.id]) || (s.status !== 'acknowledged' && s.status !== 'dismissed' && !s.decision));
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -91,28 +113,33 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
         </h3>
         
         <div className="flex items-center gap-2">
-          <span className={`text-[10px] font-extrabold uppercase tracking-wider ${autopilot ? 'text-[var(--color-surface-raised)] animate-pulse' : 'text-slate-300'}`}>
+          <span className={`text-[10px] font-extrabold uppercase tracking-wider ${autopilot ? 'text-[var(--color-accent)] animate-pulse' : 'text-slate-300'}`}>
             {autopilot ? '⚡ Autopilot' : 'Autopilot'}
+            {autoApprovedCount > 0 && <span className="normal-case tracking-normal font-bold"> · {autoApprovedCount} auto-approved</span>}
           </span>
-          <button 
+          <button
             onClick={() => setAutopilot(!autopilot)}
+            role="switch"
+            aria-checked={autopilot}
+            aria-label="Autopilot"
             className={`w-9 h-5 flex items-center rounded-full p-0.5 cursor-pointer transition-all duration-300 ${
-              autopilot ? 'bg-[var(--color-surface-raised)] justify-end' : 'bg-slate-300 justify-start'
+              autopilot ? 'bg-[var(--color-accent)] justify-end' : 'bg-slate-300 justify-start'
             }`}
           >
-            <span className="bg-white/5 w-4 h-4 rounded-full shadow-sm transition-all"></span>
+            <span className="bg-white w-4 h-4 rounded-full shadow-sm transition-all"></span>
           </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-0 pr-2 custom-scrollbar">
-        {activeSignals.length === 0 && (
+        {feedSignals.length === 0 && (
           <div className="flex items-center justify-center h-full text-[#9CA3AF] text-sm font-medium">
             Waiting for live signals...
           </div>
         )}
-        {activeSignals.map((signal) => {
+        {feedSignals.map((signal) => {
           const hasAction = !!signal.recommended_action;
+          const autoApproved = Boolean(recentAuto[signal.id]);
           const isApproved = localStorage.getItem(`auto-${signal.id}`) === 'true';
 
           return (
@@ -133,28 +160,23 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
                 </div>
                 
                 <div className="flex gap-2">
-                  <button 
-                    onClick={(e) => { 
-                      e.stopPropagation(); 
-                      
-                      // Log to MS-010 DMAE
-                      fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/audit/`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          user_email: "executive@sbnsentinel.com",
-                          action: "Acknowledged Alert",
-                          resource: `Signal: ${signal.id}`,
-                          ip_address: "127.0.0.1"
-                        })
-                      }).catch(err => console.error("Audit log failed", err));
-
-                      dispatch(acknowledgeSignal(signal.id)); 
+                  {autoApproved ? (
+                    <span className="text-[10px] font-bold text-emerald-300 px-2 py-1 bg-emerald-500/15 rounded border border-emerald-400/30 flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Auto-approved
+                    </span>
+                  ) : (
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      // Stored on the signal and in the audit log under the signed-in user.
+                      const ok = await recordSignalReview(signal.id, 'acknowledge');
+                      if (ok) dispatch(acknowledgeSignal(signal.id));
                     }}
                     className="text-[10px] font-bold text-white/50 hover:text-white px-2 py-1 bg-white/5 hover:bg-white/10 rounded border border-white/10 transition-colors"
                   >
                     Acknowledge
                   </button>
+                  )}
                   <button onClick={() => { if (onSignalSelect) onSignalSelect(signal.id); else setSelectedSignal(signal); }} className="text-[#2563EB] hover:text-white transition-colors cursor-pointer" title="View Details">
                     <ArrowRight className="w-4 h-4" />
                   </button>

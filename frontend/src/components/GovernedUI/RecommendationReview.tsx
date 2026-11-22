@@ -254,7 +254,7 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
                   {authority.allowed_decisions.map(type => (
                     <label 
                       key={type}
-                      className={`flex items-center p-4 border rounded-[12px] cursor-pointer transition-all ${
+                      className={`relative flex items-center p-4 border rounded-[12px] cursor-pointer transition-all ${
                         selectedDecision === type 
                           ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10' 
                           : 'border-white/10 bg-white/5 hover:bg-white/10'

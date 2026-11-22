@@ -94,6 +94,14 @@ class OperationalExecutionEngine(BaseService):
                     if org_clinic:
                         target_org_id = org_clinic.organization_id
                         target_clinic_id = org_clinic.id
+                    else:
+                        # Recommendations raised on a signal target that signal; its stored
+                        # organization and clinic are the authoritative ownership.
+                        from app.models.signal import SignalModel
+                        signal_row = db.query(SignalModel).filter(SignalModel.id == base_target).first()
+                        if signal_row and signal_row.org_id:
+                            target_org_id = signal_row.org_id
+                            target_clinic_id = signal_row.clinic_id
 
                 # Fail-Closed Invariant: target must be positively resolved
                 if not target_org_id:
@@ -243,6 +251,10 @@ class OperationalExecutionEngine(BaseService):
                 target_exists = True
             elif db.query(OrganizationClinicModel).filter(OrganizationClinicModel.id == base_target).first():
                 target_exists = True
+            else:
+                from app.models.signal import SignalModel
+                if db.query(SignalModel).filter(SignalModel.id == base_target).first():
+                    target_exists = True
 
             if not target_exists:
                 return {"eligible": False, "reason": "TARGET_NOT_FOUND_OR_UNSUPPORTED"}

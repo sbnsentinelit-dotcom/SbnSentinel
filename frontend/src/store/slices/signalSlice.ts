@@ -26,9 +26,16 @@ export interface SignalEvent {
   revenue_impact_status?: string;
   operational_dependency?: string;
   ai_insight?: string;
-  status?: 'active' | 'acknowledged' | 'expired' | 'superseded' | 'APPROVED' | 'REJECTED';
+  status?: 'active' | 'acknowledged' | 'dismissed' | 'expired' | 'superseded' | 'APPROVED' | 'REJECTED';
   decision_status?: string;
   correlation_id?: string;
+  /** Latest human decision recorded in the backend for this signal's recommendation, if any. */
+  decision?: {
+    decision_id: string;
+    recommendation_id: string;
+    decision_type: string;
+    decision_timestamp?: string | null;
+  } | null;
 }
 
 interface SignalState {
@@ -57,6 +64,18 @@ const initialState: SignalState = {
 
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
 
+const MAX_KEPT_EVENTS = 150;
+const NO_ACTION = new Set(['', 'None required.', 'Monitor progress.', 'NO_RECOMMENDATION']);
+const isOpenWithRecommendation = (e: SignalEvent) =>
+  !NO_ACTION.has(e.recommended_action || '') && !e.decision && e.status !== 'dismissed';
+
+export interface SignalSummary {
+  active_signals: number;
+  patient_flow: number;
+  critical_events: number;
+  actions_taken: number;
+}
+
 export const fetchHistoricalSignals = createAsyncThunk(
   'signals/fetchHistoricalSignals',
   async () => {
@@ -65,12 +84,30 @@ export const fetchHistoricalSignals = createAsyncThunk(
       if (!response.ok) {
         throw new Error('Failed to fetch signals');
       }
-      const data = await response.json();
-      return data as SignalEvent[];
+      const data = (await response.json()) as SignalEvent[];
+      // Card counts cover every signal in scope, not only the listed ones.
+      let summary: SignalSummary | null = null;
+      try {
+        const summaryRes = await fetchWithAuth('/api/v1/signals/summary');
+        if (summaryRes.ok) summary = await summaryRes.json();
+      } catch {
+        summary = null;
+      }
+      return { events: data, summary };
     } catch (error) {
       console.error("Error fetching signals:", error);
       throw error;
     }
+  }
+);
+
+/** Reloads only the card counts (cheap); used while Autopilot works through the queue. */
+export const fetchSignalSummary = createAsyncThunk(
+  'signals/fetchSignalSummary',
+  async () => {
+    const res = await fetchWithAuth('/api/v1/signals/summary');
+    if (!res.ok) throw new Error('Failed to fetch signal summary');
+    return (await res.json()) as SignalSummary;
   }
 );
 
@@ -83,8 +120,14 @@ const signalSlice = createSlice({
       // Prevent duplicates
       if (!state.events.find(e => e.id === signal.id)) {
         state.events.unshift(signal);
-        if (state.events.length > 50) {
-          state.events.pop(); // Keep only last 50
+        // Trim the oldest items that need no action; open signals with a recommendation stay.
+        while (state.events.length > MAX_KEPT_EVENTS) {
+          let idx = -1;
+          for (let i = state.events.length - 1; i >= 0; i--) {
+            if (!isOpenWithRecommendation(state.events[i])) { idx = i; break; }
+          }
+          if (idx === -1) break;
+          state.events.splice(idx, 1);
         }
         
         // Update stats based on incoming signal
@@ -111,24 +154,42 @@ const signalSlice = createSlice({
     incrementActionsTaken(state) {
       state.stats.actionsTaken += 1;
     },
+    /** Records a decision stored in the backend on the signal held in the store. */
+    markSignalDecided(state, action: PayloadAction<{ id: string; decision: NonNullable<SignalEvent['decision']> }>) {
+      const signal = state.events.find(e => e.id === action.payload.id);
+      if (signal) signal.decision = action.payload.decision;
+    },
     removeSignal(state, action: PayloadAction<string>) {
       state.events = state.events.filter(e => e.id !== action.payload);
       state.stats.activeSignals = Math.max(0, state.stats.activeSignals - 1);
     }
   },
   extraReducers: (builder) => {
+    builder.addCase(fetchSignalSummary.fulfilled, (state, action) => {
+      state.stats.activeSignals = action.payload.active_signals;
+      state.stats.patientFlow = action.payload.patient_flow;
+      state.stats.criticalEvents = action.payload.critical_events;
+      state.stats.actionsTaken = action.payload.actions_taken;
+    });
     builder.addCase(fetchHistoricalSignals.fulfilled, (state, action) => {
-      if (action.payload && action.payload.length > 0) {
-        state.events = [...action.payload];
-        
-        // Recalculate stats
-        state.stats.activeSignals = state.events.length;
+      // The backend list is authoritative: replace local state even when it is empty.
+      state.events = [...(action.payload?.events || [])];
+      const summary = action.payload?.summary;
+      if (summary) {
+        state.stats.activeSignals = summary.active_signals;
+        state.stats.patientFlow = summary.patient_flow;
+        state.stats.criticalEvents = summary.critical_events;
+        state.stats.actionsTaken = summary.actions_taken;
+      } else {
+        const open = state.events.filter(e => !e.decision && e.status !== 'dismissed');
+        state.stats.activeSignals = open.length;
         state.stats.patientFlow = state.events.filter(e => e.type === 'EHR' || e.type === 'Patient').length;
-        state.stats.criticalEvents = state.events.filter(e => e.risk_level === 'Critical' || e.risk_level === 'High').length;
+        state.stats.criticalEvents = open.filter(e => e.risk_level === 'Critical' || e.risk_level === 'High').length;
+        state.stats.actionsTaken = state.events.filter(e => e.decision).length;
       }
     });
   }
 });
 
-export const { addSignal, setConnectionStatus, acknowledgeSignal, incrementActionsTaken, removeSignal } = signalSlice.actions;
+export const { addSignal, setConnectionStatus, acknowledgeSignal, incrementActionsTaken, removeSignal, markSignalDecided } = signalSlice.actions;
 export default signalSlice.reducer;

@@ -84,6 +84,16 @@ class DecisionContextEngine(BaseService):
         has_missed_call = any(get_fact_value(e) == "MISSED_CALL" for e in evidence_items)
         has_pending_review = any(get_fact_value(e) == "PENDING_REVIEW" for e in evidence_items)
 
+        def get_fact_key(e):
+            return getattr(e, 'fact_key', None) if not isinstance(e, dict) else e.get('fact_key')
+
+        # Payer claim denial with a governed UAE adjustment code (typed remittance fact).
+        from app.services.uae_claims_governance import UAE_DENIAL_RULES, CLAIM_DENIAL_CONTEXT, denial_context
+        denial_code = next(
+            (get_fact_value(e) for e in evidence_items
+             if get_fact_key(e) == "denial_code" and get_fact_value(e) in UAE_DENIAL_RULES),
+            None)
+
         # Default Context
         context = {
             "primary_context": "Context Unknown",
@@ -122,7 +132,7 @@ class DecisionContextEngine(BaseService):
                 "event_type": event_type
             }
             # Skip normal classification
-            has_no_show = has_wait_time = has_booked = has_missed_call = has_pending_review = False
+            has_no_show = has_wait_time = has_booked = has_missed_call = has_pending_review = denial_code = None
 
         elif has_stale:
             context = {
@@ -133,9 +143,16 @@ class DecisionContextEngine(BaseService):
                 "event_type": event_type
             }
             # Skip normal classification
-            has_no_show = has_wait_time = has_booked = has_missed_call = has_pending_review = False
+            has_no_show = has_wait_time = has_booked = has_missed_call = has_pending_review = denial_code = None
 
-        if has_no_show:
+        if denial_code:
+            context = {
+                "primary_context": CLAIM_DENIAL_CONTEXT,
+                "secondary_context": denial_context(denial_code),
+                "reason": f"Payer remittance reports the claim denied with adjustment code {denial_code}.",
+                "evidence_package": evidence_package,
+                "event_type": event_type}
+        elif has_no_show:
             context = {
                 "primary_context": "Operational",
                 "secondary_context": "Provider Schedule Gap",

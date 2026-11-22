@@ -46,6 +46,21 @@ class RulesEngine(BaseService):
         self._handlers[("RULE-SCH-002", "V1")] = eval_sch_002_v1
         self._handlers[("RULE-SCH-003", "V1")] = eval_sch_003_v1
 
+        # UAE claim-denial rules: one per adjustment code, matched on the classified denial context.
+        from app.services.uae_claims_governance import (
+            UAE_DENIAL_RULES, UAE_RULE_VERSION, CLAIM_DENIAL_CONTEXT, denial_context, rule_id_for)
+
+        def make_uae_handler(code: str):
+            def eval_uae(inputs: Dict[str, Any]) -> str:
+                if (inputs.get("primary_context") == CLAIM_DENIAL_CONTEXT
+                        and inputs.get("secondary_context") == denial_context(code)):
+                    return "CONDITION_MET"
+                return "CONDITION_NOT_MET"
+            return eval_uae
+
+        for code in UAE_DENIAL_RULES:
+            self._handlers[(rule_id_for(code), UAE_RULE_VERSION)] = make_uae_handler(code)
+
     def validate_governance_readiness(self) -> Dict[str, Any]:
         """Validates that every ACTIVE + APPROVED executable RuleVersion has exactly one handler."""
         now = datetime.utcnow()

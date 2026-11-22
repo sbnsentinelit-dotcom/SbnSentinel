@@ -1,13 +1,17 @@
 import { useEffect } from 'react';
 import { useDispatch } from 'react-redux';
 import { addSignal, setConnectionStatus } from '@/store/slices/signalSlice';
+import { getBackendWsBaseUrl } from '@/utils/wsUrl';
 
 export const useSignalStream = () => {
   const dispatch = useDispatch();
 
   useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_BACKEND_WS_URL || "ws://localhost:8000";
-    const ws = new WebSocket(`${wsUrl}/api/v1/signals/ws`);
+    const wsUrl = getBackendWsBaseUrl();
+    // Browsers cannot set an Authorization header on a WebSocket; the session token goes in the query.
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (!wsUrl || !token) return;
+    const ws = new WebSocket(`${wsUrl}/api/v1/signals/ws?token=${encodeURIComponent(token)}`);
     
     ws.onopen = () => {
       dispatch(setConnectionStatus(true));

@@ -73,6 +73,21 @@ class RevenueIntelligenceEngine(BaseService):
                 revenue_confidence="UNAVAILABLE",
                 operational_dependency="Provider must sign the pending lab report in EHR."
             )
+        elif rule_id.startswith("RULE-UAE-"):  # Payer claim denial
+            # Exposure is the denied amount stated on the remittance; never estimated.
+            facts = {f.get("key"): f.get("value") for f in payload.get("financial_facts") or []}
+            exposure = None
+            try:
+                amount = float(facts.get("denied_amount"))
+                exposure = f"{facts.get('currency') or 'AED'} {amount:,.2f}"
+            except (TypeError, ValueError):
+                exposure = None
+            revenue = RevenueResult(
+                revenue_risk_category="Claim Denial Revenue Risk",
+                estimated_financial_exposure=exposure,
+                revenue_confidence="HIGH" if exposure else "UNAVAILABLE",
+                operational_dependency="Billing team must correct and resubmit or appeal the claim within the payer window."
+            )
         else:
             revenue = RevenueResult(
                 revenue_risk_category=None,

@@ -19,13 +19,20 @@ protected = [Depends(get_current_user)]
 api_router.include_router(reality_connectors.router,
                           prefix="/reality",
                           tags=["000_Reality_Connectors"],
+                          # DEMO: Organization Administrator added for the demo; review after the demo.
                           dependencies=[Depends(RoleChecker([UserRole.CLINIC_MANAGER.value,
+                                                             UserRole.ORGANIZATION_ADMINISTRATOR.value,
                                                              UserRole.SYSTEM_ADMINISTRATOR.value]))])
 api_router.include_router(
     signals.router,
     prefix="/signals",
     tags=["001_Signal_Layer"],
     dependencies=protected)
+# Live signal stream: authenticated inside the endpoint with the session token (query parameter).
+api_router.include_router(
+    signals.ws_router,
+    prefix="/signals",
+    tags=["001_Signal_Layer"])
 api_router.include_router(
     insurance.router,
     prefix="/insurance",

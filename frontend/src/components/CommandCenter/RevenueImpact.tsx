@@ -1,20 +1,54 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { DollarSign, TrendingUp, ChevronDown, ChevronRight, AlertCircle, CheckCircle } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store';
+import { fetchWithAuth } from '@/utils/fetchWithAuth';
 
 interface RevenueImpactProps {
   setActiveTab?: (tab: string) => void;
 }
 
+type DailyReceipt = { date: string; amount: number };
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const shortAmount = (v: number) => (v >= 1000 ? `${Math.round(v / 100) / 10}K` : `${Math.round(v)}`);
+
 export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) => {
   const stats = useSelector((state: RootState) => state.signals.stats);
-  
+  const [receipts, setReceipts] = useState<DailyReceipt[]>([]);
+  const [currency, setCurrency] = useState('AED');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/financial-reports/daily-receipts?days=7`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const body = await res.json();
+        if (!cancelled) { setReceipts(body?.days || []); setCurrency(body?.currency || 'AED'); }
+      })
+      .catch(() => { if (!cancelled) setReceipts([]); });
+    return () => { cancelled = true; };
+  }, []);
+
   // HC16 & CP-15 compliant: Never fabricate financial figures by multiplying action counts.
-  // Financial exposure requires verified source claims/remittance evidence.
-  const hasFinancialEvidence = false; // Governed attribution boundary
+  // The trend below is drawn only from payments received (stored receipts).
+  const weekTotal = receipts.reduce((sum, r) => sum + r.amount, 0);
+  const hasFinancialEvidence = weekTotal > 0;
   const resolvedActions = stats.actionsTaken || 0;
   const criticalCount = stats.criticalEvents || 0;
+
+  // Chart geometry kept from the original design: x 20..400, y 10 (top) .. 110 (bottom).
+  const maxAmount = Math.max(0, ...receipts.map((r) => r.amount));
+  const top = maxAmount > 0 ? maxAmount : 1;
+  const pointX = (i: number) => (receipts.length > 1 ? 20 + (i * 380) / (receipts.length - 1) : 20);
+  const pointY = (v: number) => Math.round((110 - (v / top) * 100) * 10) / 10;
+  const points = receipts.map((r, i) => ({ x: Math.round(pointX(i)), y: pointY(r.amount) }));
+  const linePath = points.length > 0
+    ? points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
+    : 'M20,110 L400,110';
+  const areaPath = `${linePath} L400,120 L20,120 Z`;
+  const last = points.at(-1) ?? { x: 400, y: 110 };
+  const lastAmount = receipts.at(-1)?.amount ?? 0;
 
   return (
     <div className="relative overflow-hidden bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[32px] p-6 text-white premium-shadow flex flex-col h-[480px] hover:border-white/30 transition-all duration-500 hover:shadow-[0_20px_50px_rgba(79,70,229,0.2)] group">
@@ -36,7 +70,7 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
           </div>
         </h3>
         <button 
-          onClick={() => setActiveTab && setActiveTab('revenue')}
+          onClick={() => setActiveTab && setActiveTab('revenue-reports')}
           className="text-xs font-bold text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1 cursor-pointer bg-white/5 hover:bg-white/10 px-3.5 py-2 rounded-[14px] border border-white/5 hover:border-white/30"
         >
           Detailed Report <ChevronRight className="w-3.5 h-3.5" />
@@ -49,7 +83,7 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
           <p className="text-[9px] text-slate-300 uppercase tracking-widest font-extrabold mb-2">Resolved Signals</p>
           <p className="text-xl font-black text-[var(--color-semantic-positive)] mb-1 drop-shadow-[0_0_10px_rgba(16,185,129,0.2)]">{resolvedActions}</p>
           <p className="text-[9px] font-bold text-slate-400 flex items-center gap-1">
-            {hasFinancialEvidence ? "+$0" : "Financial recovery requires remittance evidence"}
+            {hasFinancialEvidence ? `+${currency} ${shortAmount(weekTotal)} received this week` : "Financial recovery requires remittance evidence"}
           </p>
         </div>
 
@@ -94,29 +128,27 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
                 </filter>
               </defs>
               <g className="text-slate-500 text-[8px] font-mono">
-                 <text x="-5" y="10">15K</text>
-                 <text x="-5" y="60">10K</text>
-                 <text x="-5" y="110">5K</text>
-                 <text x="5" y="130">Mon</text>
-                 <text x="70" y="130">Tue</text>
-                 <text x="140" y="130">Wed</text>
-                 <text x="210" y="130">Thu</text>
-                 <text x="280" y="130">Fri</text>
-                 <text x="345" y="130">Sat</text>
-                 <text x="390" y="130">Sun</text>
+                 <text x="16" y="10" textAnchor="end">{currency} {shortAmount(maxAmount)}</text>
+                 <text x="16" y="60" textAnchor="end">{currency} {shortAmount(maxAmount / 2)}</text>
+                 <text x="16" y="110" textAnchor="end">{currency} 0</text>
+                 {receipts.map((r, i) => (
+                   <text key={r.date} x={[5, 70, 140, 210, 280, 345, 390].at(i) ?? pointX(i)} y="130">
+                     {WEEKDAYS.at(new Date(`${r.date}T00:00:00Z`).getUTCDay())}
+                   </text>
+                 ))}
                  <line x1="20" y1="10" x2="400" y2="10" stroke="#1E293B" strokeWidth="1" strokeDasharray="3 3" />
                  <line x1="20" y1="60" x2="400" y2="60" stroke="#1E293B" strokeWidth="1" strokeDasharray="3 3" />
                  <line x1="20" y1="110" x2="400" y2="110" stroke="#1E293B" strokeWidth="1" strokeDasharray="3 3" />
               </g>
               {/* Glowing trend curve */}
-              <path d="M20,60 C60,40 100,80 140,70 C180,60 220,90 260,80 C300,70 340,40 400,30 L400,120 L20,120 Z" fill="url(#colorRevenueDark)"/>
-              <path d="M20,60 C60,40 100,80 140,70 C180,60 220,90 260,80 C300,70 340,40 400,30" fill="none" stroke="var(--color-semantic-positive)" strokeWidth="3" filter="url(#chartGlow)" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M20,60 C60,40 100,80 140,70 C180,60 220,90 260,80 C300,70 340,40 400,30" fill="none" stroke="var(--color-semantic-positive)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              
-              <circle cx="260" cy="80" r="5" fill="var(--color-semantic-positive)" stroke="#FFFFFF" strokeWidth="2.5" className="animate-pulse" />
-              <g transform="translate(230, 42)">
+              <path d={areaPath} fill="url(#colorRevenueDark)"/>
+              <path d={linePath} fill="none" stroke="var(--color-semantic-positive)" strokeWidth="3" filter="url(#chartGlow)" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d={linePath} fill="none" stroke="var(--color-semantic-positive)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+
+              <circle cx={last.x} cy={last.y} r="5" fill="var(--color-semantic-positive)" stroke="#FFFFFF" strokeWidth="2.5" className="animate-pulse" />
+              <g transform={`translate(${Math.min(last.x - 30, 340)}, ${Math.max(last.y - 38, -14)})`}>
                  <rect width="60" height="24" rx="12" fill="#1E293B" stroke="var(--color-semantic-positive)" strokeWidth="1" />
-                 <text x="30" y="15" fill="var(--color-semantic-positive)" fontSize="9" fontWeight="black" textAnchor="middle">{hasFinancialEvidence ? '0.00' : 'Audit Lock'}</text>
+                 <text x="30" y="15" fill="var(--color-semantic-positive)" fontSize="9" fontWeight="black" textAnchor="middle">{hasFinancialEvidence ? `${currency} ${shortAmount(lastAmount)}` : 'Audit Lock'}</text>
                  <polygon points="30,24 26,28 34,28" fill="#1E293B" transform="rotate(180 30 26)" />
               </g>
            </svg>

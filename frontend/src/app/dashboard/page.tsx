@@ -1,5 +1,7 @@
 'use client';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
+import { trendFromDaily } from '@/utils/dailyTrend';
+import { uaeGreeting } from '@/utils/greeting';
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, Bell, Mail, Sun, LayoutDashboard, BrainCircuit, Users, Calendar, DollarSign, FileText, BarChart2, Settings, HelpCircle, LogOut, ChevronDown, CheckCircle2, Clock, AlertTriangle, ChevronRight, Plus, Moon, User, Activity, X, Cpu, Check, Menu, Shield, CreditCard, Database, Building2, ClipboardList, MessageSquare } from 'lucide-react';
@@ -43,6 +45,12 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isBooting, setIsBooting] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
+  // Greeting follows UAE time and is refreshed every minute so it changes while the page stays open.
+  const [greeting, setGreeting] = useState(() => uaeGreeting());
+  useEffect(() => {
+    const timer = setInterval(() => setGreeting(uaeGreeting()), 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
   const [activeContact, setActiveContact] = useState<string | null>(null);
   const [userRole, setUserRole] = useState('org_admin');
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -107,10 +115,28 @@ export default function Dashboard() {
   const dispatch = useDispatch<AppDispatch>();
   const stats = useSelector((state: RootState) => state.signals.stats);
   const signals = useSelector((state: RootState) => state.signals.events);
+  const isStreamConnected = useSelector((state: RootState) => state.signals.isConnected);
+  // Daily counts (last 7 days, today last) behind the stat-card trends and sparklines.
+  const [dailyStats, setDailyStats] = useState<Array<{ signals: number; patient_flow: number; critical: number; decisions: number }>>([]);
 
   useEffect(() => {
     dispatch(fetchHistoricalSignals());
   }, [dispatch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/signals/daily-stats?days=7`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const body = await res.json();
+        if (!cancelled) setDailyStats(body?.days || []);
+      })
+      .catch(() => { if (!cancelled) setDailyStats([]); });
+    return () => { cancelled = true; };
+  }, [signals.length, stats.actionsTaken]);
+
+  const cardTrend = (key: 'signals' | 'patient_flow' | 'critical' | 'decisions') =>
+    trendFromDaily(dailyStats.map((d) => d[key]));
 
   useSignalStream();
 
@@ -639,7 +665,7 @@ export default function Dashboard() {
                 {/* Hero */}
                 <div className="flex flex-col md:flex-row md:items-end justify-between mb-4 md:mb-2 gap-4">
                   <div>
-                    <p className="text-[#2E1055] font-semibold text-sm mb-1">Good Morning, Admin! 👋</p>
+                    <p className="text-white/80 font-semibold text-sm mb-1">{greeting}, Admin! 👋</p>
                     <h2 className="text-2xl md:text-3xl font-extrabold text-white mb-1">Multi-Provider Operations</h2>
                     <p className="text-sm text-white/70 font-medium hidden md:block">Real-time overview of clinic operations across all doctors and intelligence engine outputs.</p>
                   </div>
@@ -703,7 +729,7 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <p className="text-[10px] font-bold text-white/70 uppercase tracking-wider">Live System</p>
-                        <p className="text-sm font-bold text-[#10B981]">Connected</p>
+                        <p className="text-sm font-bold text-[#10B981]">{isStreamConnected ? 'Connected' : 'Disconnected'}</p>
                       </div>
                     </div>
                   </div>
@@ -711,10 +737,10 @@ export default function Dashboard() {
 
                 {/* Stats Row */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <StatCard title="Active Signals" value={stats.activeSignals.toLocaleString()} trend="12.5%" trendUp={true} color="blue" sparkData="M0,40 C20,30 40,50 60,20 C80,-10 100,20 120,5" icon={Activity} onClick={() => setActiveTab('intelligence')} />
-                  <StatCard title="Patient Flow" value={stats.patientFlow.toString()} trend="8.2%" trendUp={true} color="green" sparkData="M0,40 C20,45 40,20 60,30 C80,40 100,10 120,0" icon={Users} onClick={() => setActiveTab('patient-flow')} />
-                  <StatCard title="Critical Events" value={stats.criticalEvents.toString()} trend="50%" trendUp={false} color="red" sparkData="M0,10 C20,10 40,30 60,10 C80,-10 100,40 120,20" icon={AlertTriangle} onClick={() => setActiveTab('clinical-logs')} />
-                  <StatCard title="Actions Taken" value={stats.actionsTaken.toString()} trend="15.3%" trendUp={true} color="purple" sparkData="M0,30 C20,40 40,10 60,20 C80,30 100,-5 120,5" icon={CheckCircle2} onClick={() => setActiveTab('intelligence')} />
+                  <StatCard title="Active Signals" value={stats.activeSignals.toLocaleString()} {...cardTrend('signals')} color="blue" icon={Activity} onClick={() => setActiveTab('intelligence')} />
+                  <StatCard title="Patient Flow" value={stats.patientFlow.toString()} {...cardTrend('patient_flow')} color="green" icon={Users} onClick={() => setActiveTab('patient-flow')} />
+                  <StatCard title="Critical Events" value={stats.criticalEvents.toString()} {...cardTrend('critical')} color="red" icon={AlertTriangle} onClick={() => setActiveTab('clinical-logs')} />
+                  <StatCard title="Actions Taken" value={stats.actionsTaken.toString()} {...cardTrend('decisions')} color="purple" icon={CheckCircle2} onClick={() => setActiveTab('intelligence')} />
                 </div>
 
                 {/* Main Middle Row */}

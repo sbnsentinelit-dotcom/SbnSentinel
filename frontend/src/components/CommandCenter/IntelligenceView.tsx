@@ -2,40 +2,74 @@ import React, { useState, useEffect } from 'react';
 import { Activity, CheckCircle2, AlertTriangle, ArrowRight, UserCircle2, FileText, Zap, X, AlertOctagon, Info, AlertCircle } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '@/store';
-import { removeSignal, incrementActionsTaken, fetchHistoricalSignals } from '@/store/slices/signalSlice';
+import { removeSignal, fetchHistoricalSignals } from '@/store/slices/signalSlice';
 import { formatMoney } from '@/utils/currency';
+import { fetchWithAuth } from '@/utils/fetchWithAuth';
+import { formatExposureTotals, isActionable } from '@/utils/signalSummary';
+import { recordSignalReview } from '@/utils/signalReview';
+
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || '';
 
 interface IntelligenceViewProps {
+  /** Opens the governed review for a signal, where the decision and action are recorded. */
   onExecute?: (signalId: string) => void;
 }
 
 export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute }) => {
   const dispatch = useDispatch<any>();
+  // Readiness checks from /health/ready: passed / total. null = not loaded or unavailable.
+  const [health, setHealth] = useState<{ passed: number; total: number } | null>(null);
+  const [connectors, setConnectors] = useState<{ healthy: number; total: number } | null>(null);
 
   useEffect(() => {
     dispatch(fetchHistoricalSignals());
   }, [dispatch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithAuth(`${BACKEND}/api/v1/health/ready`)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        const checks: Record<string, boolean> = body?.checks || body?.detail?.checks || {};
+        const total = Object.keys(checks).length;
+        if (!cancelled && total > 0) setHealth({ passed: Object.values(checks).filter(Boolean).length, total });
+      })
+      .catch(() => { if (!cancelled) setHealth(null); });
+    fetchWithAuth(`${BACKEND}/api/v1/reality/health`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const list: Array<{ status?: string }> = await res.json();
+        if (!cancelled) setConnectors({ healthy: list.filter((c) => c.status === 'Connected').length, total: list.length });
+      })
+      .catch(() => { if (!cancelled) setConnectors(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const healthPct = health ? Math.round((health.passed / health.total) * 100) : null;
+  const healthText = healthPct === null
+    ? 'System Health: Unavailable'
+    : `System Health: ${healthPct}% (${healthPct === 100 ? 'Healthy' : 'Degraded'})`;
+
   const rawEvents = useSelector((state: RootState) => state.signals.events);
+  // Decided or dismissed signals (recorded in the backend) leave the queue.
   const actionableEvents = rawEvents
-    .filter(e => e.recommended_action && e.recommended_action !== "None required." && e.recommended_action !== "Monitor progress.")
+    .filter(isActionable)
     .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
   const [selectedEventIndex, setSelectedEventIndex] = useState<number>(0);
   const selectedEvent = actionableEvents.length > 0 && selectedEventIndex < actionableEvents.length ? actionableEvents[selectedEventIndex] : (actionableEvents.length > 0 ? actionableEvents[0] : null);
-  const handleDismiss = () => {
+  const handleDismiss = async () => {
     if (selectedEvent) {
-      dispatch(removeSignal(selectedEvent.id));
-      setSelectedEventIndex(0);
-    }
-  };
-  const handleApply = () => {
-    if (selectedEvent) {
-      if (onExecute) {
-        onExecute(selectedEvent.id);
-      } else {
-        dispatch(incrementActionsTaken());
+      const ok = await recordSignalReview(selectedEvent.id, 'dismiss');
+      if (ok) {
         dispatch(removeSignal(selectedEvent.id));
         setSelectedEventIndex(0);
       }
+    }
+  };
+  const handleApply = () => {
+    // Execute goes through the governed review, where the decision and action are stored.
+    if (selectedEvent && onExecute) {
+      onExecute(selectedEvent.id);
     }
   };
   const getRiskColor = (risk: string) => {
@@ -78,7 +112,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
           </div>
-          <span className="text-sm font-bold tracking-wide">System Health: 100% (Healthy)</span>
+          <span className="text-sm font-bold tracking-wide">{healthText}</span>
         </div>
       </div>
 
@@ -100,13 +134,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Total Financial Exposure</div>
             <div className="text-2xl font-black text-white">
-              {formatMoney(
-                actionableEvents.reduce((total, event) => {
-                  const amount = parseFloat((event.estimated_financial_exposure || '0').replace(/[^0-9.-]+/g,""));
-                  return total + (isNaN(amount) ? 0 : amount);
-                }, 0),
-                actionableEvents[0]?.currency
-              )}
+              {formatExposureTotals(actionableEvents.map((e) => e.estimated_financial_exposure))}
             </div>
           </div>
         </div>
@@ -116,7 +144,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           </div>
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Active Connectors</div>
-            <div className="text-2xl font-black text-white">5 / 5 Healthy</div>
+            <div className="text-2xl font-black text-white">{connectors ? `${connectors.healthy} / ${connectors.total} Healthy` : '– / – Healthy'}</div>
           </div>
         </div>
       </div>

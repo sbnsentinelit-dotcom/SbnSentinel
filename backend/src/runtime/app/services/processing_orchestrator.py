@@ -603,7 +603,12 @@ class ProcessingOrchestrator:
                     "context": {
                         "primary_context": event.decision_context.primary_context,
                         "secondary_context": event.decision_context.secondary_context
-                    } if event.decision_context else {}
+                    } if event.decision_context else {},
+                    # Typed financial facts from the source (e.g. the denied amount on a remittance).
+                    "financial_facts": [
+                        f for f in ((event.raw_payload or {}).get("facts") or [])
+                        if isinstance(f, dict) and f.get("entity") == "Claim"
+                    ]
                 }
             )
 
@@ -686,7 +691,11 @@ class ProcessingOrchestrator:
                     "priority": event.priority,
                     "correlation_id": event.correlation_id,
                     "org_id": target_org_id,
-                    "clinic_id": target_clinic_id
+                    "clinic_id": target_clinic_id,
+                    # Source identifiers carried from the event so the signal can be traced
+                    # back to the patient and claim it concerns.
+                    **{key: payload[key] for key in ("patient_name", "patient_id", "claim_id", "encounter_id", "payer", "denial_reason")
+                       if payload.get(key)},
                 },
                 risk_level=intel_result.get("risk_level") or (intel_model.priority if intel_model else "Information"),
                 problem=intel_result.get("problem", ""),

@@ -29,6 +29,15 @@ def dateutil_parse(val: Any) -> Optional[datetime]:
             return None
 
 
+def _naive_utc(val: Any) -> Optional[datetime]:
+    """Policy dates are compared with naive UTC times; stored values with a timezone are converted."""
+    dt = dateutil_parse(val)
+    if dt is not None and dt.tzinfo is not None:
+        from datetime import timezone
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 logger = logging.getLogger(__name__)
 
 # ======================================================
@@ -1289,10 +1298,10 @@ class GovernanceRegistry:
                 policy_id=policy_id, version=version
             ).one_or_none()
             if row:
-                eff_from = dateutil_parse(row.effective_from) if row.effective_from else None
-                eff_until = dateutil_parse(row.effective_until) if row.effective_until else None
-                app_ts = dateutil_parse(row.approval_timestamp) if row.approval_timestamp else None
-                cr_at = dateutil_parse(row.created_at) if row.created_at else datetime.utcnow()
+                eff_from = _naive_utc(row.effective_from) if row.effective_from else None
+                eff_until = _naive_utc(row.effective_until) if row.effective_until else None
+                app_ts = _naive_utc(row.approval_timestamp) if row.approval_timestamp else None
+                cr_at = _naive_utc(row.created_at) if row.created_at else datetime.utcnow()
                 ls = LifecycleState(row.lifecycle_state) if row.lifecycle_state in [e.value for e in LifecycleState] else LifecycleState.ACTIVE
                 return PolicyVersion(
                     policy_id=row.policy_id,
@@ -1595,6 +1604,21 @@ def initialize_registry_seeds():
     governance_registry.register_authority_config(
         AuthorityConfiguration(
             role="Clinic Manager",
+            allowed_decisions=[
+                DecisionType.APPROVED,
+                DecisionType.REJECTED,
+                DecisionType.OVERRIDDEN,
+                DecisionType.RETURNED_FOR_REVIEW],
+            can_override=True,
+            requires_reason_for=[
+                DecisionType.REJECTED,
+                DecisionType.OVERRIDDEN]))
+
+    # DEMO: Organization Administrator temporarily holds the same decision authority as
+    # Clinic Manager, so the demo account can record decisions. Review role permissions after the demo.
+    governance_registry.register_authority_config(
+        AuthorityConfiguration(
+            role="Organization Administrator",
             allowed_decisions=[
                 DecisionType.APPROVED,
                 DecisionType.REJECTED,

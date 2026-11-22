@@ -17,6 +17,46 @@ def _default_dates():
     return start, end
 
 
+@router.get("/daily-receipts")
+def get_daily_receipts(
+    days: int = Query(7, ge=1, le=31),
+    currency: str = Query("AED"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Payments received per day for the user's clinic over the last `days` days (today included).
+
+    Feeds the dashboard revenue trend. Only the caller's own clinic is used; System
+    Administrators without a clinic get every clinic.
+    """
+    from datetime import timedelta
+    from fastapi import HTTPException
+    from sqlalchemy import func
+    from app.models.financial_reporting import FinancialPaymentReceiptModel
+    from app.models.user import UserRole
+
+    clinic_id = getattr(current_user, "clinic_id", None)
+    if not clinic_id and current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
+        raise HTTPException(status_code=403, detail="Missing required clinic scope")
+
+    today = datetime.now(timezone.utc).date()
+    first_day = today - timedelta(days=days - 1)
+    day_col = func.date(FinancialPaymentReceiptModel.received_date)
+    q = db.query(day_col, func.sum(FinancialPaymentReceiptModel.amount)).filter(
+        FinancialPaymentReceiptModel.currency == currency,
+        FinancialPaymentReceiptModel.received_date >= datetime.combine(first_day, datetime.min.time()),
+        FinancialPaymentReceiptModel.received_date < datetime.combine(today + timedelta(days=1), datetime.min.time()),
+    )
+    if clinic_id:
+        q = q.filter(FinancialPaymentReceiptModel.clinic_id == clinic_id)
+    totals = {str(day): float(amount or 0.0) for day, amount in q.group_by(day_col).all()}
+    series = []
+    for offset in range(days):
+        day = first_day + timedelta(days=offset)
+        series.append({"date": day.isoformat(), "amount": round(totals.get(day.isoformat(), 0.0), 2)})
+    return {"currency": currency, "clinic_id": clinic_id, "days": series}
+
+
 @router.get("/summary")
 def get_owner_summary(
     clinic_id: Optional[str] = Query(None),
