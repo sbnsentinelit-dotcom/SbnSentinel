@@ -240,7 +240,11 @@ def get_all_encounters(
 @router.post("/seed-dubai/", status_code=status.HTTP_200_OK)
 def trigger_seed_dubai(
     db: Session = Depends(get_db),
-    current_user: User = Depends(RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value]))
+    current_user: User = Depends(RoleChecker([
+        UserRole.SYSTEM_ADMINISTRATOR.value,
+        UserRole.ORGANIZATION_ADMINISTRATOR.value,
+        UserRole.CLINIC_MANAGER.value
+    ]))
 ):
     """
     Explicit endpoint to seed or refresh the UAE Dubai clinic demo dataset (development/test only).

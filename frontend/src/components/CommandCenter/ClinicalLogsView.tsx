@@ -93,15 +93,26 @@ export const ClinicalLogsView: React.FC = () => {
     }
   };
 
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('show-sentinel-toast', { detail: { message, type } }));
+    }
+  };
+
   const handleManualSeed = async () => {
     try {
       setIsSeeding(true);
       const res = await fetchWithAuth('/api/v1/encounters/seed-dubai', { method: 'POST' });
       if (res.ok) {
         await fetchEncounters(1, '');
+        showToast('Successfully synchronized 789 UAE clinical encounters.');
+      } else {
+        const errData = await res.json().catch(() => null);
+        showToast(errData?.detail || 'Seeding failed. Check server permissions.', 'error');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      showToast(e?.message || 'Error triggering seed', 'error');
     } finally {
       setIsSeeding(false);
     }

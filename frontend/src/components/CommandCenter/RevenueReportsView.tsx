@@ -236,7 +236,7 @@ export const RevenueReportsView: React.FC = () => {
                   
                   <g transform="translate(730, 15)">
                      <rect width="80" height="30" rx="12" fill="rgba(255,255,255,0.1)" />
-                     <text x="40" y="20" fill="white" fontSize="12" fontWeight="bold" textAnchor="middle">${dailyRevenue.toLocaleString()}</text>
+                     <text x="40" y="20" fill="white" fontSize="12" fontWeight="bold" textAnchor="middle">{dailyRevenue != null ? formatMoney(dailyRevenue, backendSummary?.currency) : 'Unavailable'}</text>
                   </g>
                 </g>
              </svg>
