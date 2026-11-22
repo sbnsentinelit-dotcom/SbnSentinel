@@ -175,12 +175,13 @@ class FinancialReportingService:
 
             payer_groups: Dict[str, Dict[str, Any]] = {}
             for c in claims:
-                key = f"{c.payer_id}:{c.tpa_id or 'NO_TPA'}"
+                claim_curr = c.currency or effective_currency
+                key = f"{c.payer_id}:{c.tpa_id or 'NO_TPA'}:{claim_curr}"
                 if key not in payer_groups:
                     payer_groups[key] = {
                         "payer_id": c.payer_id,
                         "tpa_id": c.tpa_id or "Direct",
-                        "currency": c.currency or effective_currency,
+                        "currency": claim_curr,
                         "claim_count": 0,
                         "billed_total": 0.0,
                         "allowed_total": 0.0,
@@ -463,14 +464,33 @@ class FinancialReportingService:
                 if matched_receipts:
                     matched_remittance_ids.add(rem.remittance_id)
 
+                rem_currency = rem.currency or "AED"
+                receipt_currencies = {r.currency or "AED" for r in matched_receipts}
+                receipt_currency = list(receipt_currencies)[0] if len(receipt_currencies) == 1 else ("MIXED" if receipt_currencies else rem_currency)
+
+                currencies_match = bool(matched_receipts and len(receipt_currencies) == 1 and rem_currency in receipt_currencies)
+                amount_match = abs(rem.total_paid - receipt_amount) < 0.01
+
+                if not matched_receipts:
+                    status = "UNALLOCATED"
+                elif not currencies_match:
+                    status = "CURRENCY_MISMATCH"
+                elif amount_match:
+                    status = "MATCHED"
+                else:
+                    status = "DISCREPANCY"
+
                 reconciled_rows.append({
                     "remittance_id": rem.remittance_id,
                     "payment_reference": rem.payment_reference,
                     "payer_id": rem.payer_id,
                     "remittance_date": rem.remittance_date.isoformat(),
+                    "currency": rem_currency,
+                    "remittance_currency": rem_currency,
+                    "receipt_currency": receipt_currency,
                     "payer_advised_amount": round(rem.total_paid, 2),
                     "received_cash_amount": round(receipt_amount, 2),
-                    "reconciliation_status": "MATCHED" if abs(rem.total_paid - receipt_amount) < 0.01 else "DISCREPANCY",
+                    "reconciliation_status": status,
                     "bank_confirmed": is_bank_confirmed,
                 })
 
@@ -478,10 +498,16 @@ class FinancialReportingService:
             unallocated_receipts = [r for r in receipts if not r.remittance_id or r.remittance_id not in matched_remittance_ids]
             unallocated_amount = sum(r.amount for r in unallocated_receipts)
 
+            rep_currency = remittances[0].currency if remittances else (receipts[0].currency if receipts else None)
+            if not rep_currency:
+                from app.core.config import get_deployment_currency
+                rep_currency = get_deployment_currency()
+
             return {
                 "report_code": "FR06",
                 "report_name": "Payer Receipts and Reconciliation",
                 "clinic_id": clinic_id,
+                "currency": rep_currency,
                 "reconciled_items": reconciled_rows,
                 "unallocated_receipts_count": len(unallocated_receipts),
                 "unallocated_cash_total": round(unallocated_amount, 2),
@@ -498,27 +524,37 @@ class FinancialReportingService:
     def generate_ageing_report(
         self,
         clinic_id: str,
+        currency: Optional[str] = None,
         as_of_cutoff: Optional[datetime] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         session = db or SessionLocal()
         try:
             cutoff = as_of_cutoff or datetime.now(timezone.utc)
-            claims = session.query(FinancialClaimModel).filter(
+            claims_query = session.query(FinancialClaimModel).filter(
                 FinancialClaimModel.clinic_id == clinic_id,
                 FinancialClaimModel.status.in_(["submitted", "adjudicated", "partially_paid"]),
-            ).all()
+            )
+            if currency:
+                claims_query = claims_query.filter(FinancialClaimModel.currency == currency)
+            claims = claims_query.all()
 
-            buckets = {
-                "0_30_days": {"count": 0, "amount": 0.0},
-                "31_60_days": {"count": 0, "amount": 0.0},
-                "61_90_days": {"count": 0, "amount": 0.0},
-                "91_120_days": {"count": 0, "amount": 0.0},
-                "120_plus_days": {"count": 0, "amount": 0.0},
-            }
+            effective_currency = currency or (claims[0].currency if claims else None)
+            if not effective_currency:
+                from app.core.config import get_deployment_currency
+                effective_currency = get_deployment_currency()
 
+            currency_buckets: Dict[str, Dict[str, Dict[str, Any]]] = {}
             for c in claims:
-                # Age basis: service_date
+                c_curr = c.currency or effective_currency
+                if c_curr not in currency_buckets:
+                    currency_buckets[c_curr] = {
+                        "0_30_days": {"count": 0, "amount": 0.0},
+                        "31_60_days": {"count": 0, "amount": 0.0},
+                        "61_90_days": {"count": 0, "amount": 0.0},
+                        "91_120_days": {"count": 0, "amount": 0.0},
+                        "120_plus_days": {"count": 0, "amount": 0.0},
+                    }
                 claim_date = c.service_date.replace(tzinfo=timezone.utc) if c.service_date.tzinfo is None else c.service_date
                 age_days = (cutoff - claim_date).days
                 unpaid = max(0.0, (c.billed_amount or 0.0) - (c.paid_amount or 0.0))
@@ -534,20 +570,38 @@ class FinancialReportingService:
                 else:
                     b = "120_plus_days"
 
-                buckets[b]["count"] += 1
-                buckets[b]["amount"] += unpaid
+                currency_buckets[c_curr][b]["count"] += 1
+                currency_buckets[c_curr][b]["amount"] += unpaid
 
-            for b in buckets.values():
-                b["amount"] = round(b["amount"], 2)
+            if effective_currency not in currency_buckets:
+                currency_buckets[effective_currency] = {
+                    "0_30_days": {"count": 0, "amount": 0.0},
+                    "31_60_days": {"count": 0, "amount": 0.0},
+                    "61_90_days": {"count": 0, "amount": 0.0},
+                    "91_120_days": {"count": 0, "amount": 0.0},
+                    "120_plus_days": {"count": 0, "amount": 0.0},
+                }
+
+            primary_buckets = currency_buckets[effective_currency]
+            currency_totals: Dict[str, float] = {}
+            for curr_k, b_dict in currency_buckets.items():
+                curr_tot = 0.0
+                for b in b_dict.values():
+                    b["amount"] = round(b["amount"], 2)
+                    curr_tot += b["amount"]
+                currency_totals[curr_k] = round(curr_tot, 2)
 
             return {
                 "report_code": "FR07",
                 "report_name": "Outstanding Items and Ageing",
                 "clinic_id": clinic_id,
+                "currency": effective_currency,
+                "currency_totals": currency_totals,
+                "currency_buckets": currency_buckets,
                 "as_of_cutoff": cutoff.isoformat(),
                 "ageing_basis": "service_date",
-                "buckets": buckets,
-                "total_outstanding": round(sum(b["amount"] for b in buckets.values()), 2),
+                "buckets": primary_buckets,
+                "total_outstanding": currency_totals.get(effective_currency, 0.0),
             }
         finally:
             if not db:

@@ -5,7 +5,7 @@ import { RootState } from '@/store';
 import { removeSignal, fetchHistoricalSignals } from '@/store/slices/signalSlice';
 import { formatMoney } from '@/utils/currency';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import { formatExposureTotals, isActionable } from '@/utils/signalSummary';
+import { formatExposureTotals, isActionable, isPendingDecision } from '@/utils/signalSummary';
 import { recordSignalReview } from '@/utils/signalReview';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || '';
@@ -51,7 +51,8 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
     : `System Health: ${healthPct}% (${healthPct === 100 ? 'Healthy' : 'Degraded'})`;
 
   const rawEvents = useSelector((state: RootState) => state.signals.events);
-  // Decided or dismissed signals (recorded in the backend) leave the queue.
+  const pendingEventsCount = rawEvents.filter(isPendingDecision).length;
+  // Decided or dismissed signals (recorded in the backend) stay visible in queue with their recorded status.
   const actionableEvents = rawEvents
     .filter(isActionable)
     .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
@@ -156,7 +157,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
             <h3 className="text-lg font-bold text-white mb-6 flex items-center justify-between">
               Priority Queue
               <span className="bg-indigo-500/20 text-indigo-300 text-xs px-2.5 py-1 rounded-full font-bold">
-                {actionableEvents.length} Pending
+                {pendingEventsCount} Pending
               </span>
             </h3>
 
@@ -331,7 +332,11 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                 <button onClick={handleDismiss} className="px-6 py-3 rounded-2xl font-bold text-white/70 hover:bg-white/10 transition-colors flex items-center gap-2">
                   <X className="w-5 h-5" /> Dismiss
                 </button>
-                {(selectedEvent as any)?.decision_status === 'APPROVED' || (selectedEvent as any)?.status === 'APPROVED' || (selectedEvent as any)?.decision === 'APPROVED' || (selectedEvent as any)?.decision?.status === 'APPROVED' ? (
+                {(selectedEvent as any)?.decision_status === 'REJECTED' || (selectedEvent as any)?.status === 'REJECTED' || (selectedEvent as any)?.decision === 'REJECTED' || (selectedEvent as any)?.decision?.status === 'REJECTED' ? (
+                  <span className="px-6 py-3 rounded-2xl font-bold text-red-400 bg-red-500/20 border border-red-500/30 flex items-center gap-2">
+                    <X className="w-5 h-5" /> Decision Recorded – REJECTED
+                  </span>
+                ) : (selectedEvent as any)?.decision_status === 'APPROVED' || (selectedEvent as any)?.status === 'APPROVED' || (selectedEvent as any)?.decision === 'APPROVED' || (selectedEvent as any)?.decision?.status === 'APPROVED' ? (
                   <span className="px-6 py-3 rounded-2xl font-bold text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5" /> Decision Recorded – APPROVED
                   </span>

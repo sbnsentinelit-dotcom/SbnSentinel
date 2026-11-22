@@ -360,18 +360,13 @@ def get_encounter_journey(
 
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
         user_clinic = getattr(current_user, 'clinic_id', None)
-        if not user_clinic or (enc.clinic_id and enc.clinic_id != user_clinic):
+        if not user_clinic or not enc.clinic_id or enc.clinic_id != user_clinic:
             raise HTTPException(status_code=403, detail="Cannot access encounter belonging to another clinic facility")
 
     timestamps = dict(enc.stage_timestamps or {})
     current_stage = enc.journey_stage or "Check In"
-    if not timestamps and enc.date:
-        timestamps["Check In"] = enc.date
 
-    patient_id_val = str(enc.patient_id or enc.id or "000000")
-    mrn_val = getattr(enc, "mrn", None) or (
-        f"MRN-{patient_id_val[-6:]}" if len(patient_id_val) >= 6 else f"MRN-{patient_id_val}"
-    )
+    mrn_val = getattr(enc, "mrn", None) or "Unknown"
 
     return {
         "encounter_id": enc.id,
@@ -379,7 +374,7 @@ def get_encounter_journey(
         "patient_name": enc.patient_name or "Unknown Patient",
         "mrn": mrn_val,
         "provider_name": enc.provider_name or "Unknown Provider",
-        "department": enc.department or "General Practice",
+        "department": enc.department or "Unknown",
         "insurance": enc.payer_network or "Unknown",
         "current_stage": current_stage,
         "stage_timestamps": timestamps,
@@ -411,13 +406,11 @@ def update_encounter(
 
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
         user_clinic = getattr(current_user, 'clinic_id', None)
-        if not user_clinic or (enc.clinic_id and enc.clinic_id != user_clinic):
+        if not user_clinic or not enc.clinic_id or enc.clinic_id != user_clinic:
             raise HTTPException(status_code=403, detail="Cannot modify encounter belonging to another clinic facility")
 
     now_iso = datetime.utcnow().isoformat()
     timestamps = dict(enc.stage_timestamps or {})
-    if not timestamps and enc.journey_stage:
-        timestamps[enc.journey_stage or "Check In"] = now_iso
 
     new_stage = encounter_in.journey_stage
     if not new_stage and encounter_in.status:

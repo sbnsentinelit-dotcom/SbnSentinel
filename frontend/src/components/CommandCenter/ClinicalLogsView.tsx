@@ -866,18 +866,18 @@ export const ClinicalLogsView: React.FC = () => {
                             </div>
                             <div className="text-right">
                               <p className="text-[10px] font-extrabold text-white/50 uppercase tracking-wider mb-0.5">Charge amount</p>
-                              <p className="text-xl font-extrabold text-white">{activeEncounter?.amount ? formatMoney(activeEncounter.amount, activeEncounter.currency) : 'Unavailable'}</p>
+                              <p className="text-xl font-extrabold text-white">{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</p>
                             </div>
                           </div>
 
                           <div className="space-y-2.5">
                             <div className="flex justify-between text-xs font-semibold">
                               <span className="text-white/60">{activeEncounter?.cpt_code ? `${activeEncounter.cpt_code} (Source Procedure)` : 'Source Code Pending'}</span>
-                              <span className="text-white">{activeEncounter?.amount ? formatMoney(activeEncounter.amount, activeEncounter.currency) : 'N/A'}</span>
+                              <span className="text-white">{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</span>
                             </div>
                             <div className="flex justify-between text-xs font-semibold">
                               <span className="text-white/60">Patient Copay / Responsibility</span>
-                              <span className="text-white">{activeEncounter?.copay !== null && activeEncounter?.copay !== undefined ? formatMoney(activeEncounter.copay, activeEncounter.currency) : 'N/A'}</span>
+                              <span className="text-white">{formatMoney(activeEncounter?.copay, activeEncounter?.currency)}</span>
                             </div>
                           </div>
 
@@ -1109,11 +1109,11 @@ export const ClinicalLogsView: React.FC = () => {
             <tbody>
               <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
                 <td style={{ padding: '8px 0' }}>{activeEncounter?.cpt_code ? `${activeEncounter.cpt_code} - ${activeEncounter.reason_for_visit || 'Clinical Consultation'}` : 'Not Coded'}</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'Unavailable'}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</td>
               </tr>
               <tr style={{ fontWeight: 'bold', fontSize: '13px' }}>
                 <td style={{ padding: '12px 0' }}>TOTAL ENCOUNTER CHARGES</td>
-                <td style={{ padding: '12px 0', textAlign: 'right' }}>{activeEncounter?.amount ? `$${activeEncounter.amount.toFixed(2)}` : 'Unavailable'}</td>
+                <td style={{ padding: '12px 0', textAlign: 'right' }}>{formatMoney(activeEncounter?.amount, activeEncounter?.currency)}</td>
               </tr>
             </tbody>
           </table>
@@ -1124,7 +1124,7 @@ export const ClinicalLogsView: React.FC = () => {
               <p style={{ fontWeight: 'bold', margin: '0 0 6px 0', textTransform: 'uppercase' }}>Insurance Check Info</p>
               <p style={{ margin: '0 0 3px 0' }}><strong>Carrier:</strong> {selectedPatientInsurance.provider_name}</p>
               <p style={{ margin: '0 0 3px 0' }}><strong>Policy Member ID:</strong> {selectedPatientInsurance.member_id}</p>
-              <p style={{ margin: '0 0 3px 0' }}><strong>Primary Copay Paid:</strong> ${selectedPatientInsurance.copay_primary?.toFixed(2)}</p>
+              <p style={{ margin: '0 0 3px 0' }}><strong>Primary Copay Paid:</strong> {formatMoney(selectedPatientInsurance.copay_primary, selectedPatientInsurance?.currency)}</p>
               <p style={{ margin: '0' }}><strong>Eligibility Status:</strong> Active Eligibility Check Verified</p>
             </div>
           )}

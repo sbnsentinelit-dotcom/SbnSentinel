@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
 import { Users, UserCheck, Clock, AlertCircle, Search, Filter, Download, Calendar, Activity, ChevronLeft, ChevronRight, LayoutGrid, Stethoscope, Check, CreditCard, ShieldCheck, ShieldAlert, Camera, RefreshCw, Scan, Sparkles, Phone, X, FileText } from 'lucide-react';
 import { useSelector } from 'react-redux';
@@ -39,6 +39,11 @@ export const PatientFlowView: React.FC = () => {
   // Live Database Encounters State
   const [encounters, setEncounters] = useState<any[]>([]);
   const [selectedPatientEncounter, setSelectedPatientEncounter] = useState<any | null>(null);
+  const selectedPatientEncounterRef = useRef(selectedPatientEncounter);
+  useEffect(() => {
+    selectedPatientEncounterRef.current = selectedPatientEncounter;
+  }, [selectedPatientEncounter]);
+
   const [journeyData, setJourneyData] = useState<any | null>(null);
   const [isLoadingEncounters, setIsLoadingEncounters] = useState(true);
 
@@ -52,6 +57,8 @@ export const PatientFlowView: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     const encId = selectedPatientEncounter?.id;
+    // Reset journeyData immediately upon switch so unkeyed stale cache never appears under new patient's name
+    setJourneyData(null);
     if (encId) {
       fetchWithAuth(`/api/v1/encounters/${encId}/journey`)
         .then(res => res && res.ok ? res.json() : null)
@@ -63,8 +70,6 @@ export const PatientFlowView: React.FC = () => {
         .catch(err => {
           if (!cancelled) console.error("Failed to fetch journey:", err);
         });
-    } else {
-      setJourneyData(null);
     }
     return () => {
       cancelled = true;
@@ -1115,21 +1120,7 @@ export const PatientFlowView: React.FC = () => {
 
           {/* Top Stats */}
       {(() => {
-        // True zero wait time preservation: do not drop 0, parse all valid numbers
-        const validWaitTimes = encounters.map(e => {
-          const m = String(e.wait_time ?? '').match(/(\d+)/);
-          return m ? parseInt(m[1], 10) : null;
-        }).filter((w): w is number => w !== null);
-
-        const avgWaitMinutes = validWaitTimes.length > 0
-          ? Math.round(validWaitTimes.reduce((a, b) => a + b, 0) / validWaitTimes.length)
-          : 0;
-
-        const checkedInCount = encounters.filter(e => e.status === 'Waiting').length;
-        const inConsultationCount = encounters.filter(e => e.status === 'In Room').length;
-        const delayedCount = encounters.filter(e => e.status === 'Delayed').length;
-
-        // Group encounters by date to compute trends comparing current clinic day against prior clinic day
+        // Group encounters by calendar day (B-74)
         const dateGroups: Record<string, any[]> = {};
         for (const enc of encounters) {
           const rawDate = enc.date || (enc.created_at ? enc.created_at.slice(0, 10) : 'current');
@@ -1138,23 +1129,41 @@ export const PatientFlowView: React.FC = () => {
           dateGroups[dKey].push(enc);
         }
         const sortedDates = Object.keys(dateGroups).sort();
-        const currentDayEncs = sortedDates.length > 0 ? dateGroups[sortedDates[sortedDates.length - 1]] : encounters;
+        const currentDayEncs = sortedDates.length > 0 ? dateGroups[sortedDates[sortedDates.length - 1]] : [];
         const priorDayEncs = sortedDates.length > 1 ? dateGroups[sortedDates[sortedDates.length - 2]] : [];
 
+        // Current-day only metrics for top cards (B-74: Today's cards only count today's patients)
+        const checkedInCount = currentDayEncs.filter(e => e.status === 'Waiting').length;
+        const inConsultationCount = currentDayEncs.filter(e => e.status === 'In Room').length;
+        const delayedCount = currentDayEncs.filter(e => e.status === 'Delayed').length;
+
+        const currentWaitTimes = currentDayEncs.map(e => {
+          if (e.wait_time === null || e.wait_time === undefined || e.wait_time === '') return null;
+          const m = String(e.wait_time).match(/(\d+)/);
+          return m ? parseInt(m[1], 10) : null;
+        }).filter((w): w is number => w !== null);
+
+        const currentAvgWait = currentWaitTimes.length > 0
+          ? Math.round(currentWaitTimes.reduce((a, b) => a + b, 0) / currentWaitTimes.length)
+          : null;
+
+        // Prior-day metrics for trend comparison
         const priorCheckedIn = priorDayEncs.filter(e => e.status === 'Waiting').length;
         const priorInConsultation = priorDayEncs.filter(e => e.status === 'In Room').length;
         const priorDelayed = priorDayEncs.filter(e => e.status === 'Delayed').length;
         const priorWaitTimes = priorDayEncs.map(e => {
-          const m = String(e.wait_time ?? '').match(/(\d+)/);
+          if (e.wait_time === null || e.wait_time === undefined || e.wait_time === '') return null;
+          const m = String(e.wait_time).match(/(\d+)/);
           return m ? parseInt(m[1], 10) : null;
         }).filter((w): w is number => w !== null);
+
         const priorAvgWait = priorWaitTimes.length > 0
           ? Math.round(priorWaitTimes.reduce((a, b) => a + b, 0) / priorWaitTimes.length)
-          : avgWaitMinutes;
+          : null;
 
-        const calcTrend = (curr: number, prev: number, isWait = false) => {
-          if (sortedDates.length <= 1) {
-            return isWait ? '0m' : '0%';
+        const calcTrend = (curr: number, prev: number | null, isWait = false) => {
+          if (priorDayEncs.length === 0 || prev === null) {
+            return 'Unavailable';
           }
           const diff = curr - prev;
           if (isWait) {
@@ -1167,17 +1176,18 @@ export const PatientFlowView: React.FC = () => {
           return pct >= 0 ? `+${pct}%` : `${pct}%`;
         };
 
-        const checkedInTrend = calcTrend(checkedInCount, priorCheckedIn);
-        const inConsultationTrend = calcTrend(inConsultationCount, priorInConsultation);
-        const avgWaitTrend = calcTrend(avgWaitMinutes, priorAvgWait, true);
-        const delayedTrend = calcTrend(delayedCount, priorDelayed);
+        const checkedInTrend = calcTrend(checkedInCount, priorDayEncs.length > 0 ? priorCheckedIn : null);
+        const inConsultationTrend = calcTrend(inConsultationCount, priorDayEncs.length > 0 ? priorInConsultation : null);
+        const avgWaitTrend = currentAvgWait !== null && priorAvgWait !== null ? calcTrend(currentAvgWait, priorAvgWait, true) : 'Unavailable';
+        const delayedTrend = calcTrend(delayedCount, priorDayEncs.length > 0 ? priorDelayed : null);
+        const waitDisplay = currentAvgWait !== null ? `${currentAvgWait}m` : (currentDayEncs.length === 0 ? '0m' : 'Unavailable');
 
         return (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             {[
               { title: 'Checked In', value: checkedInCount, trend: checkedInTrend, icon: UserCheck, color: 'text-[var(--color-accent)]', bg: 'bg-blue-500/20', line: 'var(--color-accent)' },
               { title: 'In Consultation', value: inConsultationCount, trend: inConsultationTrend, icon: Stethoscope, color: 'text-[var(--color-semantic-positive)]', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-              { title: 'Avg Wait Time', value: `${avgWaitMinutes}m`, trend: avgWaitTrend, icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
+              { title: 'Avg Wait Time', value: waitDisplay, trend: avgWaitTrend, icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
               { title: 'Delayed', value: delayedCount, trend: delayedTrend, icon: AlertCircle, color: 'text-[var(--color-semantic-critical)]', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
             ].map((stat, i) => (
               <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover flex justify-between items-center text-white transition-all duration-300">
@@ -1185,7 +1195,7 @@ export const PatientFlowView: React.FC = () => {
                   <p className="text-[11px] text-white/70 uppercase font-extrabold tracking-widest mb-1">{stat.title}</p>
                   <div className="flex items-end gap-3">
                     <p className="text-[28px] font-extrabold text-white leading-none transition-all">{stat.value}</p>
-                    <span className={`text-[11px] font-bold mb-1 transition-colors ${stat.trend.startsWith('+') ? 'text-[var(--color-semantic-positive)]' : 'text-[var(--color-semantic-critical)]'}`}>{stat.trend}</span>
+                    <span className={`text-[11px] font-bold mb-1 transition-colors ${stat.trend === 'Unavailable' ? 'text-white/40' : stat.trend.startsWith('+') ? 'text-[var(--color-semantic-positive)]' : 'text-[var(--color-semantic-critical)]'}`}>{stat.trend}</span>
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-3">
@@ -1207,12 +1217,23 @@ export const PatientFlowView: React.FC = () => {
       {/* Patient Journey Timeline */}
       {(() => {
         const activeEncounter = selectedPatientEncounter || (encounters.length > 0 ? encounters[0] : null);
+        const targetEncId = activeEncounter?.id;
+        // Key journey data strictly to the active encounter (B-72: prevent cached journey of A appearing under B)
+        const verifiedJourney = (journeyData && journeyData.encounter_id === targetEncId) ? journeyData : null;
         const stageList = ['Check In', 'Waiting', 'Consultation', 'Lab', 'Billing', 'Completed'];
-        const currentStageName = journeyData?.current_stage || activeEncounter?.journey_stage || (activeEncounter?.status === 'In Room' ? 'Consultation' : activeEncounter?.status === 'Completed' ? 'Completed' : 'Waiting');
+        const currentStageName = verifiedJourney?.current_stage || activeEncounter?.journey_stage || (activeEncounter?.status === 'In Room' ? 'Consultation' : activeEncounter?.status === 'Completed' ? 'Completed' : 'Waiting');
         const activeStageIndex = stageList.indexOf(currentStageName) !== -1 ? stageList.indexOf(currentStageName) : 1;
 
+        const formatStageTs = (ts?: string | null) => {
+          if (!ts) return null;
+          const s = String(ts).trim();
+          if (s.includes('T')) return s.split('T')[1].slice(0, 5);
+          if (s.includes(':')) return s.slice(0, 5);
+          return s; // If date-only, show full string without slicing into "2026-"
+        };
+
         const handleTimelineStageClick = async (targetStage: string) => {
-          if (!activeEncounter) return;
+          if (!activeEncounter || !targetEncId) return;
           try {
             const statusMap: Record<string, string> = {
               'Check In': 'Waiting',
@@ -1223,25 +1244,27 @@ export const PatientFlowView: React.FC = () => {
               'Completed': 'Completed',
             };
             const newStatus = statusMap[targetStage] || 'Waiting';
-            const res = await fetchWithAuth(`/api/v1/encounters/${activeEncounter.id}`, {
+            const res = await fetchWithAuth(`/api/v1/encounters/${targetEncId}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ journey_stage: targetStage, status: newStatus })
             });
             if (res && res.ok) {
               const updated = await res.json();
-              setSelectedPatientEncounter(updated);
               fetchEncounters();
-              // Immediately refresh journey data after stage update clicks
-              try {
-                const jRes = await fetchWithAuth(`/api/v1/encounters/${activeEncounter.id}/journey`);
-                if (jRes && jRes.ok) {
-                  const jData = await jRes.json();
-                  if (jData && jData.encounter_id === activeEncounter.id) {
-                    setJourneyData(jData);
+              // Guard: Only update visible selection if reviewer is STILL on this encounter! (B-72)
+              if (selectedPatientEncounterRef.current?.id === targetEncId) {
+                setSelectedPatientEncounter(updated);
+                try {
+                  const jRes = await fetchWithAuth(`/api/v1/encounters/${targetEncId}/journey`);
+                  if (jRes && jRes.ok) {
+                    const jData = await jRes.json();
+                    if (selectedPatientEncounterRef.current?.id === targetEncId && jData && jData.encounter_id === targetEncId) {
+                      setJourneyData(jData);
+                    }
                   }
-                }
-              } catch (jErr) {}
+                } catch (jErr) {}
+              }
             }
           } catch (err) {
             console.error('Failed to update journey stage:', err);
@@ -1256,7 +1279,7 @@ export const PatientFlowView: React.FC = () => {
                   Patient Journey: <span className="text-blue-400 font-extrabold">{activeEncounter?.patient_name || 'Select a Patient'}</span>
                 </h3>
                 <p className="text-xs text-white/50">
-                  {activeEncounter ? `MRN: ${activeEncounter.mrn || 'MRN-' + activeEncounter.id} • Provider: ${activeEncounter.provider_name} • Department: ${activeEncounter.department || 'General Practice'} • Payer: ${activeEncounter.payer_network || journeyData?.insurance || 'Unknown'}` : 'Click any queue row below to inspect real patient flow'}
+                  {activeEncounter ? `MRN: ${activeEncounter.mrn || 'Unknown'} • Provider: ${activeEncounter.provider_name || 'Unknown'} • Department: ${activeEncounter.department || 'Unknown'} • Payer: ${activeEncounter.payer_network || verifiedJourney?.insurance || 'Unknown'}` : 'Click any queue row below to inspect real patient flow'}
                 </p>
               </div>
               {activeEncounter && (
@@ -1270,10 +1293,14 @@ export const PatientFlowView: React.FC = () => {
               <div className="absolute left-8 right-1/3 top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-[var(--color-semantic-positive)] to-[var(--color-accent)] -z-10 rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, activeStageIndex * 20)}%` }}></div>
 
               {stageList.map((stageName, i) => {
+                const stageTs = verifiedJourney?.stage_timestamps?.[stageName];
                 let status = 'pending';
-                if (i === activeStageIndex) status = 'current';
-                else if (i < activeStageIndex) status = 'done';
-                const stageTs = journeyData?.stage_timestamps?.[stageName];
+                if (stageName === currentStageName) {
+                  status = 'current';
+                } else if (stageTs) {
+                  // Only marked done if a recorded timestamp entry actually exists! (B-71: skipped stages stay pending)
+                  status = 'done';
+                }
 
                 return (
                   <div key={i} onClick={() => handleTimelineStageClick(stageName)} className="flex flex-col items-center gap-3 bg-transparent px-2 relative group cursor-pointer">
@@ -1288,7 +1315,7 @@ export const PatientFlowView: React.FC = () => {
                     <span className={`text-[11px] font-extrabold uppercase tracking-wider transition-colors ${status === 'pending' ? 'text-white/50 group-hover:text-white/70' : 'text-white'}`}>{stageName}</span>
                     {stageTs && (
                       <span className="text-[10px] text-white/50 font-mono">
-                        {String(stageTs).includes('T') ? String(stageTs).split('T')[1].slice(0, 5) : String(stageTs).slice(0, 5)}
+                        {formatStageTs(stageTs)}
                       </span>
                     )}
                   </div>

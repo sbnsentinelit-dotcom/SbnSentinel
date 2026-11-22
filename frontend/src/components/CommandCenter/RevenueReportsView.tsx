@@ -66,8 +66,8 @@ export const RevenueReportsView: React.FC = () => {
     return { payer, cpt, amount };
   };
 
-  // UAE Clinic Billing Calculations
-  const activeCurrency = backendSummary?.currency || 'AED';
+  // Clinic Billing Calculations & Regional Currency
+  const activeCurrency = backendSummary?.currency || (encounters.find(e => e.currency)?.currency) || (process.env.NEXT_PUBLIC_DEPLOYMENT_REGION?.toUpperCase() === 'UAE' ? 'AED' : 'USD');
   const isUSD = activeCurrency.toUpperCase() === 'USD';
   const currLabel = isUSD ? '$' : 'AED ';
   const dailyRevenue = summaryStats?.total_charges ?? backendSummary?.metrics?.total_charges ?? null;

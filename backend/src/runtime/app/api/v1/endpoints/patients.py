@@ -48,12 +48,16 @@ def _convert_excel_date(val: Any) -> Optional[str]:
 
 def _resolve_gender(first_name: Optional[str], raw_gender: Optional[str]) -> str:
     """
-    Authoritative source gender preservation:
-    1. If source raw_gender is provided and non-empty, preserve it.
-    2. Fallback to name list matching only when source gender is missing/null/empty.
-    3. Return 'Unknown' when ambiguous or unresolved.
+    Authoritative source gender preservation (B-76):
+    1. If source raw_gender is provided and non-empty:
+       - 'M' / 'MALE' -> 'M'
+       - 'F' / 'FEMALE' -> 'F'
+       - 'OTHER' / 'UNKNOWN' / 'U' -> 'Unknown'
+       - other valid string -> preserve it.
+    2. If source raw_gender is missing/null/empty:
+       - Return 'Unknown'. Do NOT infer from first name.
     """
-    if raw_gender is not None:
+    if raw_gender is not None and str(raw_gender).strip():
         rg = str(raw_gender).strip().upper()
         if rg in ("M", "MALE"):
             return "M"
@@ -61,15 +65,7 @@ def _resolve_gender(first_name: Optional[str], raw_gender: Optional[str]) -> str
             return "F"
         if rg in ("U", "UNKNOWN", "OTHER"):
             return "Unknown"
-        if rg:
-            return rg
-
-    if first_name and str(first_name).strip():
-        fn_clean = str(first_name).strip().lower()
-        if fn_clean in FEMALE_NAMES:
-            return "F"
-        if fn_clean in MALE_NAMES:
-            return "M"
+        return rg
 
     return "Unknown"
 
@@ -133,8 +129,7 @@ def _get_all_raw_patients() -> List[Dict[str, Any]]:
         mrn = f"MRN-{i:06d}"
         mem_id = f"TEST{10000000 + i * 173 % 89999999}"
         dob = (base_dob + timedelta(days=i * 53)).strftime("%Y-%m-%d")
-        gen_res = _resolve_gender(f, None)
-        gender = gen_res if gen_res != "Unknown" else ("F" if i % 2 == 0 else "M")
+        gender = "F" if i % 2 == 0 else "M"
         mobile = f"+97150{i * 137 % 9000000 + 1000000:07d}"
         email = f"{f.lower()}.{last_n.lower().replace('-', '').replace(' ', '')}@example.test"
         p_start = f"2026-{(i % 9) + 1:02d}-{(i * 3 % 25) + 1:02d}"

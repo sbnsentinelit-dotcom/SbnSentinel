@@ -90,6 +90,7 @@ def get_payer_summary(
     clinic_id: Optional[str] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    currency: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -104,6 +105,7 @@ def get_payer_summary(
         clinic_id=target_clinic,
         period_start=s_date,
         period_end=e_date,
+        currency=currency,
         db=db,
     )
 

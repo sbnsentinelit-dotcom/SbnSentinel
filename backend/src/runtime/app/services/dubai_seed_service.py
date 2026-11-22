@@ -173,13 +173,13 @@ def seed_dubai_data(db: Session):
         enc_status = "Completed" if i % 10 != 0 else "In Room"
         enc_stage = "Completed" if enc_status == "Completed" else "Consultation"
         enc_timestamps = {
-            "Check In": enc_date,
-            "Waiting": enc_date,
-            "Consultation": enc_date
+            "Check In": f"{enc_date}T08:30:00Z",
+            "Waiting": f"{enc_date}T08:45:00Z",
+            "Consultation": f"{enc_date}T09:00:00Z"
         }
         if enc_status == "Completed":
-            enc_timestamps["Billing"] = enc_date
-            enc_timestamps["Completed"] = enc_date
+            enc_timestamps["Billing"] = f"{enc_date}T09:30:00Z"
+            enc_timestamps["Completed"] = f"{enc_date}T09:45:00Z"
 
         if enc_id not in existing_enc_ids:
             encounter = EncounterModel(

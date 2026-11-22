@@ -2,10 +2,17 @@ import type { SignalEvent } from '@/store/slices/signalSlice';
 
 const NOT_ACTIONABLE = new Set(['None required.', 'Monitor progress.', 'NO_RECOMMENDATION']);
 
-/** A signal stays in the queue until a human decision is recorded for it or it is dismissed. */
+/** A signal stays visible in the queue if it has a recommended action and is not dismissed. */
 export function isActionable(e: SignalEvent): boolean {
   return Boolean(e.recommended_action) && !NOT_ACTIONABLE.has(e.recommended_action as string)
     && e.status !== 'dismissed';
+}
+
+/** A signal is pending human review if no decision (APPROVED / REJECTED) has been recorded yet. */
+export function isPendingDecision(e: SignalEvent): boolean {
+  const dec = (e as any).decision_status || (e as any).decision?.status || (e as any).decision || e.status;
+  const isDecided = dec === 'APPROVED' || dec === 'REJECTED' || dec === 'dismissed' || Boolean(e.decision);
+  return isActionable(e) && !isDecided;
 }
 
 /**

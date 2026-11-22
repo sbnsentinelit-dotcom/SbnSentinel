@@ -29,15 +29,7 @@ export const formatMoney = (
   });
 
   if (!currency) {
-    if (typeof amount === 'string') {
-      if (amount.includes('$') || amount.toUpperCase().includes('USD')) {
-        return `$${formattedNum}`;
-      }
-      if (amount.toUpperCase().includes('AED')) {
-        return `AED ${formattedNum}`;
-      }
-    }
-    // Never guess currency when omitted
+    // When currency parameter is absent, never guess or infer currency
     return formattedNum;
   }
 

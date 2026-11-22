@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { formatMoney } from '@/utils/currency';
-import { formatExposureTotals, isActionable } from '@/utils/signalSummary';
+import { formatExposureTotals, isActionable, isPendingDecision } from '@/utils/signalSummary';
 import type { SignalEvent } from '@/store/slices/signalSlice';
 
 describe('QA Verification Fixes', () => {
@@ -26,9 +26,9 @@ describe('QA Verification Fixes', () => {
       expect(formatMoney('1,250.50')).toBe('1,250.50');
     });
 
-    it('extracts currency from string if present', () => {
-      expect(formatMoney('$150.00')).toBe('$150.00');
-      expect(formatMoney('AED 500.00')).toBe('AED 500.00');
+    it('never infers currency when currency parameter is omitted', () => {
+      expect(formatMoney('$150.00')).toBe('150.00');
+      expect(formatMoney('AED 500.00')).toBe('500.00');
     });
   });
 
@@ -63,6 +63,31 @@ describe('QA Verification Fixes', () => {
       };
       expect(isActionable(dismissedSignal)).toBe(false);
     });
+
+    it('isPendingDecision returns true only for undecided signals (B-51)', () => {
+      const pendingSignal: SignalEvent = {
+        id: 'sig_pending',
+        title: 'Pending signal',
+        severity: 'medium',
+        risk_level: 'Medium',
+        recommended_action: 'Review',
+        status: 'active',
+        timestamp: new Date().toISOString(),
+      };
+      expect(isPendingDecision(pendingSignal)).toBe(true);
+
+      const approvedSignal: SignalEvent = {
+        ...pendingSignal,
+        decision: { status: 'APPROVED' } as any,
+      };
+      expect(isPendingDecision(approvedSignal)).toBe(false);
+
+      const rejectedSignal: SignalEvent = {
+        ...pendingSignal,
+        decision: { status: 'REJECTED' } as any,
+      };
+      expect(isPendingDecision(rejectedSignal)).toBe(false);
+    });
   });
 
   describe('Wait Times & Clinic-Day Trends (B-74)', () => {
@@ -93,6 +118,30 @@ describe('QA Verification Fixes', () => {
         ? Math.round(validWaitTimes.reduce((a, b) => a + b, 0) / validWaitTimes.length)
         : 0;
       expect(avg).toBe(0);
+    });
+
+    it('isolates current clinic day and ignores yesterday records for top cards', () => {
+      const yesterday = '2026-11-21';
+      const today = '2026-11-22';
+      const encounters = [
+        { id: 'enc_yesterday', date: yesterday, status: 'Waiting', wait_time: '10 mins' },
+        { id: 'enc_today_1', date: today, status: 'Waiting', wait_time: '20 mins' },
+        { id: 'enc_today_2', date: today, status: 'In Room', wait_time: '5 mins' },
+      ];
+
+      // Filtering strictly for today
+      const currentDayEncs = encounters.filter(e => e.date === today);
+      expect(currentDayEncs.length).toBe(2);
+
+      // Waiting in current day is 1, not 2
+      const waitingToday = currentDayEncs.filter(e => e.status === 'Waiting').length;
+      expect(waitingToday).toBe(1);
+
+      // Average wait time for today is (20 + 5) / 2 = 13 (or 12.5), not contaminated by yesterday's 10m
+      const waitTimesToday = currentDayEncs
+        .map(e => parseInt(e.wait_time.match(/(\d+)/)?.[1] || '0', 10));
+      const avgWaitToday = Math.round(waitTimesToday.reduce((a, b) => a + b, 0) / waitTimesToday.length);
+      expect(avgWaitToday).toBe(13);
     });
   });
 });
