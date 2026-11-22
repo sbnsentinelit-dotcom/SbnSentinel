@@ -1,6 +1,14 @@
+import sys
+import os
+
+# Add runtime directory to sys.path so the module can be run directly or via pytest
+runtime_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "runtime"))
+if runtime_path not in sys.path:
+    sys.path.insert(0, runtime_path)
+
 import pytest
 from datetime import datetime, timezone, timedelta
-from app.core.config import get_deployment_currency, settings
+from app.core.config import get_deployment_currency
 from app.api.v1.endpoints.patients import _resolve_gender
 from app.services.financial_reporting_service import financial_reporting_service
 from app.models.financial_reporting import FinancialClaimModel
@@ -88,3 +96,10 @@ def test_financial_reporting_isolated_by_currency():
     with SessionLocal() as db:
         db.query(FinancialClaimModel).filter(FinancialClaimModel.clinic_id == clinic).delete()
         db.commit()
+
+
+if __name__ == "__main__":
+    test_currency_mapping_no_db_sniffing()
+    test_gender_authoritative_source_preservation()
+    test_financial_reporting_isolated_by_currency()
+    print("All QA verification fix tests passed successfully!")
