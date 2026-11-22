@@ -58,6 +58,24 @@ def ensure_schema_compatibility():
     except Exception:
         pass
 
+    # Ensure encounters table has new journey columns
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            is_sqlite = engine.url.drivername.startswith("sqlite")
+            if is_sqlite:
+                cols = [r[1] for r in conn.execute(text("PRAGMA table_info(encounters)")).fetchall()]
+                if "journey_stage" not in cols:
+                    conn.execute(text("ALTER TABLE encounters ADD COLUMN journey_stage VARCHAR DEFAULT 'Check In'"))
+                if "stage_timestamps" not in cols:
+                    conn.execute(text("ALTER TABLE encounters ADD COLUMN stage_timestamps JSON"))
+            else:
+                conn.execute(text("ALTER TABLE encounters ADD COLUMN IF NOT EXISTS journey_stage VARCHAR DEFAULT 'Check In'"))
+                conn.execute(text("ALTER TABLE encounters ADD COLUMN IF NOT EXISTS stage_timestamps JSON"))
+            conn.commit()
+    except Exception:
+        pass
+
 
 ensure_schema_compatibility()
 
