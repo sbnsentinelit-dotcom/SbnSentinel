@@ -9,6 +9,7 @@ from app.services.simulation_engine import simulation_engine
 from app.db.database import get_db
 from app.models.signal import SignalModel
 from app.models.governance_storage import RecommendationModel, HumanDecisionModel
+from app.services.risk_level_evaluator import current_evaluation, current_level
 
 router = APIRouter()
 
@@ -89,7 +90,8 @@ def get_signal_summary(db: Session = Depends(get_db),
     return {
         "active_signals": len(open_signals),
         "patient_flow": sum(1 for s in signals if s.type in ("EHR", "Patient")),
-        "critical_events": sum(1 for s in open_signals if s.risk_level in ("Critical", "High")),
+        "critical_events": sum(1 for s in open_signals
+                               if current_level(s.risk_level, s.metadata_data) in ("Critical", "High")),
         "actions_taken": sum(1 for s in signals if decisions.get(_journey_id(s)) is not None),
     }
 
@@ -126,6 +128,8 @@ def get_historical_signals(db: Session = Depends(get_db),
         raw_exp = s.estimated_financial_exposure or ""
         m = re.search(r'([0-9]+(?:\.[0-9]+)?)', raw_exp)
         exp_amount = float(m.group(1)) if m else None
+        # Re-evaluated now from the stored source inputs: level, time left, problem, reason and action.
+        risk = current_evaluation(meta)
 
         result.append({
             "decision": dec,
@@ -135,12 +139,13 @@ def get_historical_signals(db: Session = Depends(get_db),
             "message": s.message,
             "timestamp": s.timestamp.isoformat() if s.timestamp else None,
             "metadata": s.metadata_data,
-            "risk_level": s.risk_level,
-            "problem": s.problem,
-            "reason": s.reason,
+            "risk_level": risk["level"] if risk else current_level(s.risk_level, meta),
+            "risk_evaluation": risk,
+            "problem": risk["problem"] if risk else s.problem,
+            "reason": risk["reason"] if risk else s.reason,
             "business_impact": s.business_impact,
-            "recommended_action": s.recommended_action,
-            "expected_outcome": s.expected_outcome,
+            "recommended_action": risk["recommended_action"] if risk else s.recommended_action,
+            "expected_outcome": risk["expected_outcome"] if risk else s.expected_outcome,
             "primary_context": s.primary_context,
             "secondary_context": s.secondary_context,
             "context_confidence": s.context_confidence,
@@ -184,7 +189,7 @@ def get_daily_signal_stats(days: int = 7, db: Session = Depends(get_db),
         buckets[key]["signals"] += 1
         if s.type in ("EHR", "Patient"):
             buckets[key]["patient_flow"] += 1
-        if s.risk_level in ("Critical", "High"):
+        if current_level(s.risk_level, s.metadata_data) in ("Critical", "High"):
             buckets[key]["critical"] += 1
 
     journeys = {j for j in (_journey_id(s) for s in scoped.all()) if j}
@@ -237,6 +242,21 @@ def acknowledge_signal(signal_id: str, db: Session = Depends(get_db),
 def dismiss_signal(signal_id: str, db: Session = Depends(get_db),
                    current_user=Depends(RoleChecker(_REVIEW_ROLES))):
     return _record_review_state(db, current_user, signal_id, "dismissed", "Dismissed")
+
+
+@router.post("/{signal_id}/evidence-retrieval")
+def retrieve_signal_evidence(signal_id: str, db: Session = Depends(get_db),
+                             current_user=Depends(RoleChecker(_REVIEW_ROLES))):
+    """Collects the evidence the payer needs for this signal's denied claim from the connected
+    systems (EHR first, then the other sources) and stores the result on the signal. Anything that
+    cannot be found raises a bell notification."""
+    from app.services.evidence_retrieval import retrieve_claim_evidence
+    signal = _scoped_signal_query(db, current_user).filter(SignalModel.id == signal_id).first()
+    if signal is None:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    retrieval = retrieve_claim_evidence(db, signal, requested_by=current_user.email)
+    return {"signal_id": signal_id, "retrieval": retrieval,
+            "risk_evaluation": current_evaluation(signal.metadata_data or {})}
 
 
 @router.on_event("startup")

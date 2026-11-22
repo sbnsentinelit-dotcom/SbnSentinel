@@ -19,7 +19,9 @@ UAE_CLAIMS_SOURCE = "DHPO eClaimLink"
 CLAIM_DENIAL_CONTEXT = "Financial Integrity"
 UAE_POLICY_EFFECTIVE_FROM = datetime(2026, 1, 1)
 
-# code -> (title, risk level, recommendation, business impact, expected outcome)
+# code -> (title, baseline level, recommendation, business impact, expected outcome)
+# The baseline level is only the mapping default. The level a signal shows is evaluated from the
+# payer remittance data (amount, deadline, correction time) by services/risk_level_evaluator.py.
 UAE_DENIAL_RULES: Dict[str, tuple] = {
     "CO4": ("Procedure Modifier Conflict (Unbundling)", "Critical",
             "Append Modifier 25 to separate distinct professional services prior to submission.",
@@ -29,7 +31,7 @@ UAE_DENIAL_RULES: Dict[str, tuple] = {
              "Attach pre-authorization approval code or request retrospective urgent review.",
              "High risk of immediate claim bounce under DHA / DHPO technical rejection rule TR-04.",
              "Claim resubmitted with a valid prior authorization reference."),
-    "CO16": ("Missing Supporting Clinical Documentation", "Medium",
+    "CO16": ("Missing Supporting Clinical Documentation", "Moderate",
              "Upload signed operative clinical notes directly via DHA unified portal integration.",
              "Payment delayed past 45-day payment cycle.",
              "Documentation supplied and claim released for payment."),
@@ -37,10 +39,21 @@ UAE_DENIAL_RULES: Dict[str, tuple] = {
              "Dispatch automated electronic dispute pack with proof of original timely submission.",
              "Unrecoverable bad debt write-off if the appeal is not lodged.",
              "Appeal lodged before the statutory dispute cutoff."),
-    "CO50": ("Medical Necessity Discrepancy", "Medium",
+    "CO50": ("Medical Necessity Discrepancy", "Moderate",
              "Update primary ICD-10 diagnostic coding to reflect clinical findings before billing.",
              "Risk of adjudication hold and demand for full medical records review.",
              "Diagnosis coding corrected and medical necessity established."),
+}
+
+
+# Evidence a payer asks for to accept a resubmission, per denial code. In live use this comes with the
+# payer remittance (DHPO eClaimLink); the demo uses these synthetic requirements.
+SYNTHETIC_REQUIRED_EVIDENCE: Dict[str, list] = {
+    "CO4": ["Corrected claim with modifier 25", "Procedure note"],
+    "CO15": ["Prior authorization approval code"],
+    "CO16": ["Signed operative note", "Pathology report"],
+    "CO29": ["Proof of original timely submission (DHPO receipt)"],
+    "CO50": ["Updated ICD-10 diagnosis", "Clinical rationale note"],
 }
 
 
@@ -125,7 +138,10 @@ def register_uae_claims_governance() -> None:
                 approved_by="DHA Health Funding Department",
             ))
         mapping_id = f"MAP-UAE-{code}"
-        if not governance_registry.get_recommendation_mapping_by_version(mapping_id, UAE_RULE_VERSION):
+        existing_mapping = governance_registry.get_recommendation_mapping_by_version(mapping_id, UAE_RULE_VERSION)
+        # Resubmitting the corrected claim with its evidence is a permitted action; older rows only
+        # allowed a follow-up task and are updated here.
+        if not existing_mapping or "RESUBMIT_CLAIM" not in (existing_mapping.allowed_action_types or []):
             governance_registry.register_recommendation_mapping(RecommendationMapping(
                 mapping_id=mapping_id,
                 version=UAE_RULE_VERSION,
@@ -139,5 +155,5 @@ def register_uae_claims_governance() -> None:
                 problem_template=f"[{code}] {title}",
                 lifecycle_state=LifecycleState.ACTIVE,
                 effective_from=UAE_POLICY_EFFECTIVE_FROM,
-                allowed_action_types=["CREATE_FOLLOWUP_TASK"],
+                allowed_action_types=["RESUBMIT_CLAIM", "CREATE_FOLLOWUP_TASK"],
             ))

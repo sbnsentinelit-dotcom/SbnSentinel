@@ -15,6 +15,23 @@ export function isPendingDecision(e: SignalEvent): boolean {
   return isActionable(e) && !isDecided;
 }
 
+const LEVEL_RANK: Record<string, number> = { Critical: 0, High: 1, Moderate: 2 };
+
+/**
+ * Priority queue order: Critical, then High, then Moderate (then anything else); inside a level the
+ * nearest deadline first, then the higher priority score.
+ */
+export function byRiskPriority(a: SignalEvent, b: SignalEvent): number {
+  const rank = (e: SignalEvent) => LEVEL_RANK[e.risk_level ?? ''] ?? 3;
+  if (rank(a) !== rank(b)) return rank(a) - rank(b);
+  const due = (e: SignalEvent) => {
+    const d = e.risk_evaluation?.deadline ? Date.parse(e.risk_evaluation.deadline) : NaN;
+    return Number.isNaN(d) ? Number.POSITIVE_INFINITY : d;
+  };
+  if (due(a) !== due(b)) return due(a) - due(b);
+  return (b.priority_score || 0) - (a.priority_score || 0);
+}
+
 /**
  * Sums exposure strings such as "AED 640.00" per currency and formats them, e.g. "AED 4,970.00".
  * Values without a recognisable amount (for example "UNAVAILABLE") are left out; a value with a

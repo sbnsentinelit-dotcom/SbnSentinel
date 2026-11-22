@@ -674,6 +674,13 @@ class ProcessingOrchestrator:
 
             intel_result = getattr(event, "intelligence_result", {})
 
+            # Risk level: evaluated from the source data the event carries (payer remittance, EHR),
+            # not taken from a fixed label per rule. See services/risk_level_evaluator.py.
+            from app.services.risk_level_evaluator import evaluate as evaluate_risk, kind_for_rule
+            risk_kind = kind_for_rule(intel_result.get("rule_id")) if intel_result else None
+            risk_inputs = (payload.get("risk_inputs") or {}) if risk_kind else {}
+            risk_eval = evaluate_risk(risk_kind, risk_inputs) if risk_kind else None
+
             target_org_id = getattr(event, "org_id", None) or (payload.get("org_id") or payload.get("organization_id") if payload else None)
             target_clinic_id = getattr(event, "clinic_id", None) or (payload.get("clinic_id") if payload else None)
             if not target_org_id and event.raw_payload:
@@ -696,13 +703,19 @@ class ProcessingOrchestrator:
                     # back to the patient and claim it concerns.
                     **{key: payload[key] for key in ("patient_name", "patient_id", "claim_id", "encounter_id", "payer", "denial_reason")
                        if payload.get(key)},
+                    **({"risk_kind": risk_kind, "risk_inputs": risk_inputs, "risk_evaluation": risk_eval.to_dict()}
+                       if risk_eval else {}),
                 },
-                risk_level=intel_result.get("risk_level") or (intel_model.priority if intel_model else "Information"),
-                problem=intel_result.get("problem", ""),
-                reason=intel_result.get("reason", ""),
+                risk_level=(risk_eval.level if risk_eval else None) or intel_result.get("risk_level")
+                or (intel_model.priority if intel_model else "Information"),
+                # With source data, problem, reason and action describe this case (payer / EHR data).
+                problem=(risk_eval.problem if risk_eval else None) or intel_result.get("problem", ""),
+                reason=(risk_eval.reason if risk_eval else None) or intel_result.get("reason", ""),
                 business_impact=intel_result.get("business_impact") or (intel_model.operational_impact if intel_model else ""),
-                recommended_action=intel_result.get("action") or (intel_model.recommendation if intel_model else ""),
-                expected_outcome=intel_result.get("expected_outcome", ""),
+                recommended_action=(risk_eval.recommended_action if risk_eval else None)
+                or intel_result.get("action") or (intel_model.recommendation if intel_model else ""),
+                expected_outcome=(risk_eval.expected_outcome if risk_eval else None)
+                or intel_result.get("expected_outcome", ""),
                 explainability_log=intel_result.get("explainability_log", ""),
                 priority_score=intel_result.get("priority_score", None),
                 primary_context=context_model.primary_context if context_model else "",

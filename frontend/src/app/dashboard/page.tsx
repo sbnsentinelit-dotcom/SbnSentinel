@@ -491,7 +491,9 @@ export default function Dashboard() {
                         {signals.length === 0 ? (
                           <div className="p-6 text-center text-xs text-white/50">No backend signals detected.</div>
                         ) : (
-                          signals.slice(0, 10).map((n: any, i: number) => (
+                          // Notifications (e.g. evidence not found) stay on top of the bell list.
+                          [...signals.filter((s: any) => s.metadata?.notification), ...signals.filter((s: any) => !s.metadata?.notification)]
+                            .slice(0, 10).map((n: any, i: number) => (
                             <button type="button" key={n.id || i} onClick={() => { setReturnTab(activeTab); setActiveSignalId(n.id); setActiveTab('signals-detail'); setIsNotifOpen(false); }} className="w-full text-left p-3 border-b border-white/10 hover:bg-white/10 cursor-pointer transition-colors flex gap-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-400">
                               <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${n.risk_level === 'Critical' || n.risk_level === 'High' ? 'bg-[#EF4444]' : n.risk_level === 'Moderate' ? 'bg-[#F59E0B]' : 'bg-[#10B981]'}`}></div>
                               <div className="min-w-0 flex-1">

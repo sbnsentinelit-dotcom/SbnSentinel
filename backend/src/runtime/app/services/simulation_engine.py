@@ -18,6 +18,64 @@ ACTIONABLE_INTERVAL = (30, 40)
 ROUTINE_INTERVAL = (5, 10)
 
 
+def _spread(key: str, choices):
+    """Deterministic choice per key, so a claim always gets the same synthetic payer data."""
+    import hashlib
+    return choices[int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(choices)]
+
+
+# Days until the payer resubmission deadline, as a payer / clearinghouse would report it.
+# None = the payer has not sent a deadline yet (evidence incomplete).
+_DEADLINE_DAYS = (0.5, 1.5, 3, 5, 6, 10, 18, 30, None, -1)
+
+
+def synthetic_claim_risk_inputs(claim, code, denied_amount, currency, now=None):
+    """Remittance data a connected payer / clearinghouse sends with a claim denial, plus the evidence
+    the EHR already holds (synthetic here)."""
+    from datetime import timedelta
+    from app.services.uae_claims_governance import SYNTHETIC_REQUIRED_EVIDENCE
+    now = now or datetime.utcnow()
+    days = _spread(claim.claim_id, _DEADLINE_DAYS)
+    remittance = getattr(claim, "adjudication_date", None) or now
+    required = list(SYNTHETIC_REQUIRED_EVIDENCE.get(code, []))
+    # Most evidence is already in the EHR; for about one claim in three the last item is not.
+    available = required if _spread(claim.claim_id + "-ehr", (True, True, False)) else required[:-1]
+    return {
+        "source": "Payer remittance + EHR (synthetic)",
+        "claim_id": claim.claim_id,
+        "payer": claim.payer_id,
+        "denial_reason": claim.rejection_reason,
+        "required_evidence": required,
+        "evidence_available": available,
+        "denial_code": code,
+        "denied_amount": f"{denied_amount:.2f}",
+        "currency": currency,
+        "remittance_date": remittance.isoformat() + "Z",
+        "resubmission_deadline": (now + timedelta(days=days)).isoformat() + "Z" if days is not None else None,
+    }
+
+
+def synthetic_ehr_risk_inputs(status, rng=random):
+    """Appointment data a connected EHR sends with a no-show or a long wait (synthetic here)."""
+    if status == "NO_SHOW":
+        return {
+            "source": "EHR appointment (synthetic)",
+            "appointment_at": datetime.utcnow().isoformat() + "Z",
+            "visit_priority": rng.choice(["Routine", "Routine", "Routine", "Follow-up", "Follow-up", "Urgent"]),
+            "prior_no_shows_90d": rng.choice([0, 0, 1, 1, 2, 3]),
+            "visit_value": f"{rng.choice([180, 250, 320, 450, 600, 850]):.2f}",
+            "currency": "AED",
+        }
+    if status == "WAIT_TIME_EXCEEDED":
+        return {
+            "source": "EHR front desk (synthetic)",
+            "wait_minutes": rng.choice([32, 38, 41, 45, 52, 58, 64]),
+            "patient_priority": rng.choice(["Normal", "Normal", "Normal", "Urgent"]),
+            "room_available": rng.choice([True, True, False]),
+        }
+    return None
+
+
 class SimulationEngine:
     def __init__(self):
         self.running = False
@@ -36,7 +94,7 @@ class SimulationEngine:
             {"source": "Twilio", "type": "Phone", "msg_template": "Missed call from {patient} (+1-555-0198).", "weight": 6},
             {"source": "Outlook", "type": "Email", "msg_template": "Email received from Lab Corp regarding {patient} results.",
              "weight": 6},
-            {"source": "Practice Fusion", "type": "EHR", "msg_template": "Patient {patient} wait time has reached 45 minutes.",
+            {"source": "Practice Fusion", "type": "EHR", "msg_template": "Patient {patient} wait time has reached {wait} minutes.",
              "status": "WAIT_TIME_EXCEEDED", "weight": 1, "actionable": True},
             {"claim_denial": True, "weight": 1, "actionable": True},
         ]
@@ -93,7 +151,8 @@ class SimulationEngine:
             {"entity": "Claim", "key": "currency", "value": currency, "source": UAE_CLAIMS_SOURCE},
         ]
         extra = {"claim_id": claim.claim_id, "payer": claim.payer_id, "patient_id": claim.patient_id,
-                 "denial_reason": claim.rejection_reason}
+                 "denial_reason": claim.rejection_reason,
+                 "risk_inputs": synthetic_claim_risk_inputs(claim, code, denied_amount, currency)}
         return UAE_CLAIMS_SOURCE, "Claim", message, patient, facts, extra
 
     async def _ingest(self, source, event_type, message_str, patient, facts=None, extra=None):
@@ -145,6 +204,9 @@ class SimulationEngine:
                 RevenueIntelligenceModel.event_id == event_model.id).first()
             context = db.query(DecisionContextModel).filter(
                 DecisionContextModel.event_id == event_model.id).first()
+            from app.models.signal import SignalModel
+            from app.services.risk_level_evaluator import current_evaluation
+            stored_signal = db.query(SignalModel).filter(SignalModel.id == event_model.id).first()
 
             event = SignalEvent(
                 id=event_model.id,
@@ -152,14 +214,18 @@ class SimulationEngine:
                 type=event_type,
                 message=message_str,
                 timestamp=datetime.now(timezone.utc).isoformat(),
-                metadata={"patient_name": patient, "pipeline_event_id": event_model.id,
-                          "org_id": DEMO_ORG_ID, "clinic_id": DEMO_CLINIC_ID, **(extra or {})},
-                risk_level=intel.priority if intel else "Information",
-                problem="",
-                reason="",
+                metadata=(stored_signal.metadata_data if stored_signal and stored_signal.metadata_data else
+                          {"patient_name": patient, "pipeline_event_id": event_model.id,
+                           "org_id": DEMO_ORG_ID, "clinic_id": DEMO_CLINIC_ID, **(extra or {})}),
+                risk_level=(stored_signal.risk_level if stored_signal else None)
+                or (intel.priority if intel else "Information"),
+                risk_evaluation=current_evaluation(stored_signal.metadata_data) if stored_signal else None,
+                problem=(stored_signal.problem if stored_signal else None) or "",
+                reason=(stored_signal.reason if stored_signal else None) or "",
                 business_impact=intel.operational_impact if intel else "",
-                recommended_action=intel.recommendation if intel else "",
-                expected_outcome="",
+                recommended_action=(stored_signal.recommended_action if stored_signal else None)
+                or (intel.recommendation if intel else ""),
+                expected_outcome=(stored_signal.expected_outcome if stored_signal else None) or "",
                 primary_context=context.primary_context if context else "",
                 secondary_context=context.secondary_context if context else "",
                 context_confidence=(context.sufficiency_status or "") if context else "",
@@ -221,8 +287,11 @@ class SimulationEngine:
             patient = random.choice(self.patients)
             facts = ([{"entity": "Appointment", "key": "status", "value": event_template["status"],
                        "source": event_template["source"]}] if event_template.get("status") else None)
-            await self._ingest(event_template["source"], event_template["type"],
-                               event_template["msg_template"].format(patient=patient), patient, facts)
+            risk_inputs = synthetic_ehr_risk_inputs(event_template.get("status"))
+            message = event_template["msg_template"].format(
+                patient=patient, wait=(risk_inputs or {}).get("wait_minutes", ""))
+            await self._ingest(event_template["source"], event_template["type"], message, patient, facts,
+                               {"risk_inputs": risk_inputs} if risk_inputs else None)
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"[SimEngine] Pipeline error: {e}")

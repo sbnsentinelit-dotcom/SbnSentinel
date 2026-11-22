@@ -15,7 +15,6 @@ class RecommendationGenerationEngine:
         self.db = db_session
         # Sub-engines would be initialized here:
         # self.rule_matcher = RuleMatcher(db_session)
-        # self.priority_engine = PriorityEngine(db_session)
         # self.recommendation_validator = RecommendationValidator(db_session)
         # self.recommendation_builder = RecommendationBuilder(db_session)
 

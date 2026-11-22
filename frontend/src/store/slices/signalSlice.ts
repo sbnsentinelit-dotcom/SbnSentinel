@@ -29,6 +29,16 @@ export interface SignalEvent {
   status?: 'active' | 'acknowledged' | 'dismissed' | 'expired' | 'superseded' | 'APPROVED' | 'REJECTED';
   decision_status?: string;
   correlation_id?: string;
+  /** Risk level evaluation from the source data (level, reason, deadline, autopilot eligibility). */
+  risk_evaluation?: {
+    level: string;
+    reason?: string;
+    deadline?: string | null;
+    time_left?: string | null;
+    autopilot_eligible?: boolean;
+    autopilot_action?: 'resubmit_claim' | 'permitted_action' | null;
+    [key: string]: unknown;
+  } | null;
   /** Latest human decision recorded in the backend for this signal's recommendation, if any. */
   decision?: {
     decision_id: string;

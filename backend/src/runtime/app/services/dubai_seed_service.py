@@ -241,6 +241,15 @@ def seed_dubai_data(db: Session):
             paid = 0.0
             d_code, d_reason = None, None
 
+        # A denied claim usually covers the visit plus procedures or tests billed with it, so the
+        # synthetic denied claims carry 1-3 extra service lines (the claim total is their sum).
+        visit_amount = billed
+        extra_lines = []
+        if status == "denied":
+            for k in range((i % 3) + 1):
+                extra_lines.append(CPT_CATALOG[(i * (k + 3) + k) % len(CPT_CATALOG)])
+            billed = round(visit_amount + sum(amount for _, _, amount in extra_lines), 2)
+
         serv_date = datetime.strptime(enc["date"], "%Y-%m-%d")
 
         claim = FinancialClaimModel(
@@ -270,7 +279,7 @@ def seed_dubai_data(db: Session):
             code_system="CPT",
             code_version="2026",
             units=1,
-            billed_amount=billed,
+            billed_amount=visit_amount,
             allowed_amount=allowed,
             paid_amount=paid,
             line_status=status,
@@ -278,6 +287,21 @@ def seed_dubai_data(db: Session):
             denial_reason=d_reason,
         )
         lines_to_add.append(line)
+        for k, (extra_code, _extra_desc, extra_amount) in enumerate(extra_lines, start=1):
+            lines_to_add.append(FinancialClaimLineModel(
+                line_id=f"LINE-{clm_id}-{k}",
+                claim_id=clm_id,
+                procedure_code=extra_code,
+                code_system="CPT",
+                code_version="2026",
+                units=1,
+                billed_amount=extra_amount,
+                allowed_amount=0.0,
+                paid_amount=0.0,
+                line_status=status,
+                denial_code=d_code,
+                denial_reason=d_reason,
+            ))
         existing_claims.add(clm_id)
 
     # Commit claims first to satisfy FK constraints in PostgreSQL
@@ -363,7 +387,7 @@ def seed_dubai_data(db: Session):
          "Automated payer claim denial under NCCI / UAE Insurance bundling rules.",
          "Append Modifier 25 to separate distinct professional services prior to submission.",
          95),
-        ("CO50", "MEDICAL_NECESSITY", "Medium", 220.0,
+        ("CO50", "MEDICAL_NECESSITY", "Moderate", 220.0,
          "Medical Necessity Discrepancy",
          "Radiology Chest X-Ray (71046) mapped to non-specific diagnosis code without secondary clinical rationale.",
          "Risk of adjudication hold and demand for full medical records review.",
@@ -375,7 +399,7 @@ def seed_dubai_data(db: Session):
          "Unrecoverable bad debt write-off if appeal is not lodged.",
          "Dispatch automated electronic dispute pack with proof of original timely submission.",
          99),
-        ("CO16", "DOCUMENTATION_INSUFFICIENCY", "Medium", 280.0,
+        ("CO16", "DOCUMENTATION_INSUFFICIENCY", "Moderate", 280.0,
          "Missing Supporting Clinical Documentation",
          "Sukoon Insurance request for operative note and pathology report for dermatological lesion removal.",
          "Payment delayed past 45-day payment cycle.",
@@ -383,7 +407,29 @@ def seed_dubai_data(db: Session):
          82),
     ]
 
-    for idx, (code, sig_type, risk, exposure, title, prob, impact, action, score) in enumerate(uae_governance_rules):
+    # Payer resubmission deadline (days from now) as the payer / clearinghouse would report it for each
+    # seeded denial; None = not received yet. The risk level is evaluated from this data, not fixed per code.
+    seed_deadline_days = {"CO15": 6, "CO4": 1.5, "CO50": 10, "CO29": 4, "CO16": None}
+    from app.services.risk_level_evaluator import CLAIM_DENIAL, evaluate as evaluate_risk
+    for idx, (code, sig_type, _baseline, exposure, title, prob, impact, action, score) in enumerate(uae_governance_rules):
+        days = seed_deadline_days.get(code)
+        seed_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        from app.services.uae_claims_governance import SYNTHETIC_REQUIRED_EVIDENCE
+        risk_inputs = {
+            "source": "Payer remittance + EHR (synthetic)",
+            "claim_id": f"CLM2026-DXB-{idx + 1:04d}",
+            "payer": PAYERS[idx % len(PAYERS)],
+            "denial_reason": prob,
+            "required_evidence": list(SYNTHETIC_REQUIRED_EVIDENCE.get(code, [])),
+            "evidence_available": list(SYNTHETIC_REQUIRED_EVIDENCE.get(code, [])),
+            "denial_code": code,
+            "denied_amount": f"{exposure:.2f}",
+            "currency": curr,
+            "remittance_date": (seed_now - timedelta(days=3)).isoformat() + "Z",
+            "resubmission_deadline": (seed_now + timedelta(days=days)).isoformat() + "Z" if days is not None else None,
+        }
+        risk_eval = evaluate_risk(CLAIM_DENIAL, risk_inputs, seed_now)
+        risk = risk_eval.level
         sig_id = f"SIG-DXB-2026-{idx + 1:02d}"
         eval_id = f"EVAL-{sig_id}"
         rec_id = f"REC-{sig_id}"
@@ -437,7 +483,10 @@ def seed_dubai_data(db: Session):
             "decision_context_id": ctx_id,
             "exposure_amount": exposure,
             "currency": curr,
-            "exposure_aed": exposure if curr == "AED" else None
+            "exposure_aed": exposure if curr == "AED" else None,
+            "risk_kind": CLAIM_DENIAL,
+            "risk_inputs": risk_inputs,
+            "risk_evaluation": risk_eval.to_dict(),
         }
 
         if sig_id in existing_signals:
@@ -456,10 +505,10 @@ def seed_dubai_data(db: Session):
             org_id="ORG-UAE-01",
             clinic_id=clinic_id,
             risk_level=risk,
-            problem=prob,
-            reason=f"Detected by Sentinel Automated Pre-Submission Scrubber matching UAE {code} rules.",
+            problem=risk_eval.problem,
+            reason=risk_eval.reason,
             business_impact=impact,
-            recommended_action=action,
+            recommended_action=risk_eval.recommended_action,
             expected_outcome="100% claim preservation and zero revenue leakage.",
             primary_context="Financial Integrity",
             secondary_context="UAE Insurance Adjudication",

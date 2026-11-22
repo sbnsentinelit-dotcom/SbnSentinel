@@ -97,6 +97,13 @@ jobs:
       run: |
         pytest tests/integration/test_d9_universal_api.py tests/integration/test_d9_pf_api.py -v
 
+    - name: Risk Level Verification
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/unit/test_risk_level_evaluator.py tests/integration/test_risk_level_integration.py -v
+
     - name: Round 2 Acceptance Verification
       env:
         SECRET_KEY: "test-secret-key-for-ci"
