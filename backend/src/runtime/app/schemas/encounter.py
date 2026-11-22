@@ -65,6 +65,7 @@ class EncounterResponse(BaseModel):
     cpt_code: Optional[str] = "99203"
     billing_amount: Optional[float] = 250.0
     denial_reason: Optional[str] = None
+    currency: Optional[str] = "AED"
 
     class Config:
         from_attributes = True

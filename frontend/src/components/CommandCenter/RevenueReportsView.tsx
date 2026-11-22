@@ -67,6 +67,9 @@ export const RevenueReportsView: React.FC = () => {
   };
 
   // UAE Clinic Billing Calculations
+  const activeCurrency = backendSummary?.currency || 'AED';
+  const isUSD = activeCurrency.toUpperCase() === 'USD';
+  const currLabel = isUSD ? '$' : 'AED ';
   const dailyRevenue = summaryStats?.total_charges ?? backendSummary?.metrics?.total_charges ?? null;
   const savedRevenue = summaryStats?.total_paid ?? backendSummary?.metrics?.confirmed_bank_receipts ?? null;
   const pendingClaims = summaryStats?.pending_count ?? (encounters.length > 0 ? encounters.filter(e => e.billing_status === 'Pending' || e.billing_status === 'Billed' || e.billing_status === 'Submitted').length : null);
@@ -213,10 +216,10 @@ export const RevenueReportsView: React.FC = () => {
                   </linearGradient>
                 </defs>
                 <g className="text-white/50 text-[10px] font-mono font-bold" fill="currentColor">
-                   <text x="-40" y="20">$80K</text>
-                   <text x="-40" y="100">$60K</text>
-                   <text x="-40" y="180">$40K</text>
-                   <text x="-40" y="260">$20K</text>
+                   <text x="-55" y="20">{currLabel}80K</text>
+                   <text x="-55" y="100">{currLabel}60K</text>
+                   <text x="-55" y="180">{currLabel}40K</text>
+                   <text x="-55" y="260">{currLabel}20K</text>
                    
                    <text x="20" y="290">Week 1</text>
                    <text x="250" y="290">Week 2</text>
@@ -234,9 +237,9 @@ export const RevenueReportsView: React.FC = () => {
                   <path d="M20,180 C150,80 300,240 450,140 C600,40 700,100 800,60" fill="none" stroke="var(--color-surface-raised)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>
                   <circle cx="800" cy="60" r="6" fill="var(--color-surface-raised)" stroke="white" strokeWidth="3" className="animate-pulse" />
                   
-                  <g transform="translate(730, 15)">
-                     <rect width="80" height="30" rx="12" fill="rgba(255,255,255,0.1)" />
-                     <text x="40" y="20" fill="white" fontSize="12" fontWeight="bold" textAnchor="middle">{dailyRevenue != null ? formatMoney(dailyRevenue, backendSummary?.currency) : 'Unavailable'}</text>
+                  <g transform="translate(660, 15)">
+                     <rect width="130" height="30" rx="12" fill="rgba(255,255,255,0.1)" />
+                     <text x="65" y="20" fill="white" fontSize="12" fontWeight="bold" textAnchor="middle">{dailyRevenue != null ? formatMoney(dailyRevenue, activeCurrency) : 'Unavailable'}</text>
                   </g>
                 </g>
              </svg>

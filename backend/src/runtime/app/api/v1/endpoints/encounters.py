@@ -158,13 +158,15 @@ def get_encounter_summary_stats(
     paid_query = query.filter(EncounterModel.billing_status == "Paid")
     paid_charges = paid_query.with_entities(func.coalesce(func.sum(EncounterModel.billing_amount), 0.0)).scalar() or 0.0
 
+    from app.core.config import get_deployment_currency
     return {
         "total_encounters": total_count,
         "total_charges": float(total_charges),
         "total_paid": float(paid_charges),
         "paid_count": paid_query.count(),
         "pending_count": query.filter(EncounterModel.billing_status.in_(["Pending", "Billed", "Submitted"])).count(),
-        "denied_count": query.filter(EncounterModel.billing_status.in_(["Claim Denied", "Denied"])).count()
+        "denied_count": query.filter(EncounterModel.billing_status.in_(["Claim Denied", "Denied"])).count(),
+        "currency": get_deployment_currency()
     }
 
 

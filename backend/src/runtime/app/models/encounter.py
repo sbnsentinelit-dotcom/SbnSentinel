@@ -43,3 +43,8 @@ class EncounterModel(Base):
     @provider_name.setter
     def provider_name(self, value: str):
         self.provider_id = value
+
+    @property
+    def currency(self) -> str:
+        from app.core.config import get_deployment_currency
+        return get_deployment_currency()

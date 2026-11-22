@@ -6,28 +6,24 @@ import { IAKLogo } from '../Brand/IAKLogo';
 interface BootScreenProps {
   onComplete: () => void;
 }
-
 export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
   const [stage, setStage] = useState(1);
   const [healthStatus, setHealthStatus] = useState<'pending' | 'ready' | 'failed'>('pending');
   const [errorMessage, setErrorMessage] = useState('');
-  
   // Use a prefers-reduced-motion hook or media query check inside the component
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-
   useEffect(() => {
     setPrefersReducedMotion(window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }, []);
 
   useEffect(() => {
     let isMounted = true;
-
     const performBoot = async () => {
       try {
         // Stage 1: INITIALIZING
         setStage(1);
         await new Promise(r => setTimeout(r, 800));
-        
+
         if (!isMounted) return;
 
         // Fire off readiness check concurrently while animation starts
@@ -76,7 +72,7 @@ export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
 
         // Stage 7: FINALIZING (Holding for backend)
         if (isMounted) setStage(7);
-        
+
       } catch (error) {
         if (isMounted) {
           setHealthStatus('failed');
@@ -109,27 +105,23 @@ export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
     if (stage >= triggerStage) return 1;
     return 0;
   };
-
   const getTransitionClass = () => {
     return prefersReducedMotion ? 'transition-opacity duration-300' : 'transition-all duration-700 ease-out';
   };
-
   return (
     <div className="fixed inset-0 bg-[var(--color-canvas)] text-[var(--color-text-primary)] flex flex-col items-center justify-center z-50 p-6 overflow-hidden">
-      
+
       {/* Central Visual Area */}
       <div className="relative w-full max-w-md flex flex-col items-center">
-        
+
         {/* Exact Segmented Logo Container */}
         <div className="w-48 h-48 md:w-56 md:h-56 mb-8 relative flex items-center justify-center">
-          <IAKLogo 
-            stage={stage} 
-            reducedMotion={prefersReducedMotion} 
-            className="w-full h-full object-contain drop-shadow-2xl" 
+          <IAKLogo
+            stage={stage}
+            reducedMotion={prefersReducedMotion}
+            className="w-full h-full object-contain drop-shadow-2xl"
           />
         </div>
-
-
         {/* Status Text Area (Top) */}
         <div className="h-8 flex items-center justify-center w-full mb-3">
           {healthStatus === 'failed' ? (
@@ -146,21 +138,20 @@ export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
             </span>
           )}
         </div>
-
         {/* Cosmetic Progress Line */}
         <div className="w-full h-[2px] bg-white/10 relative overflow-hidden mb-3">
-          <div 
+          <div
             className="absolute top-0 left-0 h-full bg-[var(--color-brand-gold)] transition-all ease-out shadow-[0_0_8px_var(--color-brand-gold)]"
-            style={{ 
+            style={{
               width: healthStatus === 'failed' ? '0%' : `${(stage / 9) * 100}%`,
               transitionDuration: prefersReducedMotion ? '0s' : '500ms'
             }}
           />
           {/* Glowing tip */}
           {stage > 0 && stage < 9 && healthStatus !== 'failed' && (
-            <div 
+            <div
               className="absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_10px_#fff] transition-all ease-out"
-              style={{ 
+              style={{
                 left: `calc(${(stage / 9) * 100}% - 3px)`,
                 transitionDuration: prefersReducedMotion ? '0s' : '500ms'
               }}

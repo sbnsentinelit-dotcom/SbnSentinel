@@ -7,7 +7,10 @@ export const formatMoney = (
   amount: number | string | null | undefined,
   currency?: string | null
 ): string => {
-  if (amount === null || amount === undefined || amount === '') return '$0.00';
+  const isUSD = currency?.toUpperCase() === 'USD' || (typeof amount === 'string' && amount.includes('$'));
+  const fallback = isUSD ? '$0.00' : 'AED 0.00';
+
+  if (amount === null || amount === undefined || amount === '') return fallback;
 
   let num: number;
   if (typeof amount === 'number') {
@@ -16,7 +19,7 @@ export const formatMoney = (
     const cleaned = String(amount).replace(/[^0-9.-]+/g, '');
     num = parseFloat(cleaned);
   }
-  if (isNaN(num)) return '$0.00';
+  if (isNaN(num)) return fallback;
 
   const formattedNum = num.toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -25,12 +28,11 @@ export const formatMoney = (
 
   const curr = (
     currency ||
-    (typeof amount === 'string' && amount.includes('AED') ? 'AED' : 'USD')
+    (typeof amount === 'string' && (amount.includes('$') || amount.includes('USD')) ? 'USD' : 'AED')
   ).toUpperCase();
 
-  if (curr === 'AED') {
-    return `AED ${formattedNum}`;
+  if (curr === 'USD') {
+    return `$${formattedNum}`;
   }
-  return `$${formattedNum}`;
+  return `AED ${formattedNum}`;
 };
-
