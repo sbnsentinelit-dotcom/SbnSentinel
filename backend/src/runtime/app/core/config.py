@@ -112,21 +112,9 @@ def get_deployment_currency(region: Optional[str] = None) -> str:
     """
     Authoritative regional currency mapping:
     UAE -> AED, US -> USD.
-    When operating with UAE clinic data or DEPLOYMENT_REGION is UAE, returns AED.
+    Strictly determined by DEPLOYMENT_REGION without database sniffing.
     """
     reg = region or getattr(settings, "DEPLOYMENT_REGION", "US")
     if str(reg).upper() == "UAE":
         return "AED"
-    if region is None:
-        try:
-            from app.db.database import SessionLocal
-            from app.models.clinic import ClinicModel
-            with SessionLocal() as db:
-                uae_clinic = db.query(ClinicModel).filter(
-                    (ClinicModel.id.ilike("%dxb%")) | (ClinicModel.name.ilike("%dubai%")) | (ClinicModel.name.ilike("%uae%"))
-                ).first()
-                if uae_clinic:
-                    return "AED"
-        except Exception:
-            pass
     return "USD"

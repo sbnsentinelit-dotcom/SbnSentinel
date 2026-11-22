@@ -46,8 +46,10 @@ class VerifyPaymentRequest(BaseModel):
 def create_order(request: OrderCreateRequest, db: Session = Depends(get_db)):
     """
     Create a Razorpay order for a subscription upgrade and save pending invoice.
+    Strictly enforces USD invariant for subscription billing orders.
     """
     invoice_id = f"INV-{uuid.uuid4().hex[:8].upper()}"
+    order_currency = "USD"
 
     if not client or "mock" in razorpay_key_id:
         mock_order_id = f"order_mock_{request.plan_id}_{uuid.uuid4().hex[:6]}"
@@ -55,7 +57,7 @@ def create_order(request: OrderCreateRequest, db: Session = Depends(get_db)):
             id=invoice_id,
             user_id=request.user_id,
             amount=request.amount / 100.0,
-            currency=request.currency,
+            currency=order_currency,
             status="Pending",
             razorpay_order_id=mock_order_id
         )
@@ -64,7 +66,7 @@ def create_order(request: OrderCreateRequest, db: Session = Depends(get_db)):
         return {
             "order_id": mock_order_id,
             "amount": request.amount,
-            "currency": request.currency,
+            "currency": order_currency,
             "key_id": razorpay_key_id,
             "invoice_id": invoice_id
         }
@@ -72,7 +74,7 @@ def create_order(request: OrderCreateRequest, db: Session = Depends(get_db)):
     try:
         order_data = {
             "amount": request.amount,
-            "currency": request.currency,
+            "currency": order_currency,
             "receipt": invoice_id,
             "payment_capture": 1
         }
@@ -82,7 +84,7 @@ def create_order(request: OrderCreateRequest, db: Session = Depends(get_db)):
             id=invoice_id,
             user_id=request.user_id,
             amount=request.amount / 100.0,
-            currency=request.currency,
+            currency=order_currency,
             status="Pending",
             razorpay_order_id=order["id"]
         )

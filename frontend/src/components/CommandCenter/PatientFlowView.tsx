@@ -50,14 +50,25 @@ export const PatientFlowView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (selectedPatientEncounter?.id) {
-      fetchWithAuth(`/api/v1/encounters/${selectedPatientEncounter.id}/journey`)
+    let cancelled = false;
+    const encId = selectedPatientEncounter?.id;
+    if (encId) {
+      fetchWithAuth(`/api/v1/encounters/${encId}/journey`)
         .then(res => res && res.ok ? res.json() : null)
         .then(data => {
-          if (data) setJourneyData(data);
+          if (!cancelled && data && data.encounter_id === encId) {
+            setJourneyData(data);
+          }
         })
-        .catch(err => console.error("Failed to fetch journey:", err));
+        .catch(err => {
+          if (!cancelled) console.error("Failed to fetch journey:", err);
+        });
+    } else {
+      setJourneyData(null);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [selectedPatientEncounter?.id]);
 
   // Charting form states for doctor
@@ -1104,22 +1115,70 @@ export const PatientFlowView: React.FC = () => {
 
           {/* Top Stats */}
       {(() => {
-        const waitTimes = encounters.map(e => {
-          const m = String(e.wait_time || '').match(/(\d+)/);
-          return m ? parseInt(m[1], 10) : 0;
-        }).filter(w => w > 0);
-        const avgWaitMinutes = waitTimes.length > 0 ? Math.round(waitTimes.reduce((a, b) => a + b, 0) / waitTimes.length) : 14;
+        // True zero wait time preservation: do not drop 0, parse all valid numbers
+        const validWaitTimes = encounters.map(e => {
+          const m = String(e.wait_time ?? '').match(/(\d+)/);
+          return m ? parseInt(m[1], 10) : null;
+        }).filter((w): w is number => w !== null);
+
+        const avgWaitMinutes = validWaitTimes.length > 0
+          ? Math.round(validWaitTimes.reduce((a, b) => a + b, 0) / validWaitTimes.length)
+          : 0;
+
         const checkedInCount = encounters.filter(e => e.status === 'Waiting').length;
         const inConsultationCount = encounters.filter(e => e.status === 'In Room').length;
         const delayedCount = encounters.filter(e => e.status === 'Delayed').length;
 
+        // Group encounters by date to compute trends comparing current clinic day against prior clinic day
+        const dateGroups: Record<string, any[]> = {};
+        for (const enc of encounters) {
+          const rawDate = enc.date || (enc.created_at ? enc.created_at.slice(0, 10) : 'current');
+          const dKey = String(rawDate).slice(0, 10);
+          if (!dateGroups[dKey]) dateGroups[dKey] = [];
+          dateGroups[dKey].push(enc);
+        }
+        const sortedDates = Object.keys(dateGroups).sort();
+        const currentDayEncs = sortedDates.length > 0 ? dateGroups[sortedDates[sortedDates.length - 1]] : encounters;
+        const priorDayEncs = sortedDates.length > 1 ? dateGroups[sortedDates[sortedDates.length - 2]] : [];
+
+        const priorCheckedIn = priorDayEncs.filter(e => e.status === 'Waiting').length;
+        const priorInConsultation = priorDayEncs.filter(e => e.status === 'In Room').length;
+        const priorDelayed = priorDayEncs.filter(e => e.status === 'Delayed').length;
+        const priorWaitTimes = priorDayEncs.map(e => {
+          const m = String(e.wait_time ?? '').match(/(\d+)/);
+          return m ? parseInt(m[1], 10) : null;
+        }).filter((w): w is number => w !== null);
+        const priorAvgWait = priorWaitTimes.length > 0
+          ? Math.round(priorWaitTimes.reduce((a, b) => a + b, 0) / priorWaitTimes.length)
+          : avgWaitMinutes;
+
+        const calcTrend = (curr: number, prev: number, isWait = false) => {
+          if (sortedDates.length <= 1) {
+            return isWait ? '0m' : '0%';
+          }
+          const diff = curr - prev;
+          if (isWait) {
+            return diff >= 0 ? `+${diff}m` : `${diff}m`;
+          }
+          if (prev === 0) {
+            return diff > 0 ? `+${diff}` : `${diff}`;
+          }
+          const pct = Math.round((diff / prev) * 100);
+          return pct >= 0 ? `+${pct}%` : `${pct}%`;
+        };
+
+        const checkedInTrend = calcTrend(checkedInCount, priorCheckedIn);
+        const inConsultationTrend = calcTrend(inConsultationCount, priorInConsultation);
+        const avgWaitTrend = calcTrend(avgWaitMinutes, priorAvgWait, true);
+        const delayedTrend = calcTrend(delayedCount, priorDelayed);
+
         return (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             {[
-              { title: 'Checked In', value: checkedInCount, trend: '+4%', icon: UserCheck, color: 'text-[var(--color-accent)]', bg: 'bg-blue-500/20', line: 'var(--color-accent)' },
-              { title: 'In Consultation', value: inConsultationCount, trend: '+2%', icon: Stethoscope, color: 'text-[var(--color-semantic-positive)]', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-              { title: 'Avg Wait Time', value: `${avgWaitMinutes}m`, trend: avgWaitMinutes <= 15 ? '-2m' : '+1m', icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
-              { title: 'Delayed', value: delayedCount, trend: delayedCount === 0 ? '0' : `+${delayedCount}`, icon: AlertCircle, color: 'text-[var(--color-semantic-critical)]', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
+              { title: 'Checked In', value: checkedInCount, trend: checkedInTrend, icon: UserCheck, color: 'text-[var(--color-accent)]', bg: 'bg-blue-500/20', line: 'var(--color-accent)' },
+              { title: 'In Consultation', value: inConsultationCount, trend: inConsultationTrend, icon: Stethoscope, color: 'text-[var(--color-semantic-positive)]', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
+              { title: 'Avg Wait Time', value: `${avgWaitMinutes}m`, trend: avgWaitTrend, icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
+              { title: 'Delayed', value: delayedCount, trend: delayedTrend, icon: AlertCircle, color: 'text-[var(--color-semantic-critical)]', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
             ].map((stat, i) => (
               <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover flex justify-between items-center text-white transition-all duration-300">
                 <div>
@@ -1155,15 +1214,34 @@ export const PatientFlowView: React.FC = () => {
         const handleTimelineStageClick = async (targetStage: string) => {
           if (!activeEncounter) return;
           try {
+            const statusMap: Record<string, string> = {
+              'Check In': 'Waiting',
+              'Waiting': 'Waiting',
+              'Consultation': 'In Room',
+              'Lab': 'In Room',
+              'Billing': 'In Room',
+              'Completed': 'Completed',
+            };
+            const newStatus = statusMap[targetStage] || 'Waiting';
             const res = await fetchWithAuth(`/api/v1/encounters/${activeEncounter.id}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ journey_stage: targetStage })
+              body: JSON.stringify({ journey_stage: targetStage, status: newStatus })
             });
             if (res && res.ok) {
               const updated = await res.json();
               setSelectedPatientEncounter(updated);
               fetchEncounters();
+              // Immediately refresh journey data after stage update clicks
+              try {
+                const jRes = await fetchWithAuth(`/api/v1/encounters/${activeEncounter.id}/journey`);
+                if (jRes && jRes.ok) {
+                  const jData = await jRes.json();
+                  if (jData && jData.encounter_id === activeEncounter.id) {
+                    setJourneyData(jData);
+                  }
+                }
+              } catch (jErr) {}
             }
           } catch (err) {
             console.error('Failed to update journey stage:', err);
@@ -1178,7 +1256,7 @@ export const PatientFlowView: React.FC = () => {
                   Patient Journey: <span className="text-blue-400 font-extrabold">{activeEncounter?.patient_name || 'Select a Patient'}</span>
                 </h3>
                 <p className="text-xs text-white/50">
-                  {activeEncounter ? `MRN: ${activeEncounter.mrn || 'MRN-' + activeEncounter.id} • Provider: ${activeEncounter.provider_name} • Department: ${activeEncounter.department || 'General Practice'} • Payer: ${activeEncounter.payer_network || 'Self Pay'}` : 'Click any queue row below to inspect real patient flow'}
+                  {activeEncounter ? `MRN: ${activeEncounter.mrn || 'MRN-' + activeEncounter.id} • Provider: ${activeEncounter.provider_name} • Department: ${activeEncounter.department || 'General Practice'} • Payer: ${activeEncounter.payer_network || journeyData?.insurance || 'Unknown'}` : 'Click any queue row below to inspect real patient flow'}
                 </p>
               </div>
               {activeEncounter && (
@@ -1195,6 +1273,7 @@ export const PatientFlowView: React.FC = () => {
                 let status = 'pending';
                 if (i === activeStageIndex) status = 'current';
                 else if (i < activeStageIndex) status = 'done';
+                const stageTs = journeyData?.stage_timestamps?.[stageName];
 
                 return (
                   <div key={i} onClick={() => handleTimelineStageClick(stageName)} className="flex flex-col items-center gap-3 bg-transparent px-2 relative group cursor-pointer">
@@ -1207,6 +1286,11 @@ export const PatientFlowView: React.FC = () => {
                     )}
                     <div className={`w-5 h-5 rounded-full shadow-sm z-10 transition-all duration-500 group-hover:scale-125 ${status === 'done' ? 'bg-[var(--color-semantic-positive)]' : status === 'current' ? 'bg-[var(--color-accent)] border-4 border-blue-500/30 scale-125' : 'bg-[var(--color-surface-raised)] border-4 border-white/20 group-hover:border-blue-500/30'}`}></div>
                     <span className={`text-[11px] font-extrabold uppercase tracking-wider transition-colors ${status === 'pending' ? 'text-white/50 group-hover:text-white/70' : 'text-white'}`}>{stageName}</span>
+                    {stageTs && (
+                      <span className="text-[10px] text-white/50 font-mono">
+                        {String(stageTs).includes('T') ? String(stageTs).split('T')[1].slice(0, 5) : String(stageTs).slice(0, 5)}
+                      </span>
+                    )}
                   </div>
                 );
               })}
@@ -1321,14 +1405,32 @@ export const PatientFlowView: React.FC = () => {
                             onClick={(e) => e.stopPropagation()}
                             onChange={async (e) => {
                               const newStatus = e.target.value;
+                              const stageMapping: Record<string, string> = {
+                                'Waiting': 'Waiting',
+                                'In Room': 'Consultation',
+                                'Completed': 'Completed',
+                                'Delayed': 'Waiting',
+                              };
+                              const journeyStage = stageMapping[newStatus] || newStatus;
                               try {
                                 const response = await fetchWithAuth(`/api/v1/encounters/${row.id}`, {
                                   method: 'PUT',
                                   headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ status: newStatus })
+                                  body: JSON.stringify({ status: newStatus, journey_stage: journeyStage })
                                 });
                                 if (response && response.ok) {
                                   fetchEncounters();
+                                  if (selectedPatientEncounter?.id === row.id) {
+                                    try {
+                                      const jRes = await fetchWithAuth(`/api/v1/encounters/${row.id}/journey`);
+                                      if (jRes && jRes.ok) {
+                                        const jData = await jRes.json();
+                                        if (jData && jData.encounter_id === row.id) {
+                                          setJourneyData(jData);
+                                        }
+                                      }
+                                    } catch (jErr) {}
+                                  }
                                 }
                               } catch (err) {
                                 console.error("Error updating patient status:", err);
@@ -1351,12 +1453,23 @@ export const PatientFlowView: React.FC = () => {
                                     await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/${row.id}`, {
                                       method: 'PUT',
                                       headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ status: 'In Room' })
+                                      body: JSON.stringify({ status: 'In Room', journey_stage: 'Consultation' })
                                     });
                                     window.dispatchEvent(new CustomEvent('show-sentinel-toast', {
                                       detail: { message: `🏥 Staff Approved: ${row.patient_name} assigned to Recommended Room 2!`, type: 'success' }
                                     }));
                                     fetchEncounters();
+                                    if (selectedPatientEncounter?.id === row.id) {
+                                      try {
+                                        const jRes = await fetchWithAuth(`/api/v1/encounters/${row.id}/journey`);
+                                        if (jRes && jRes.ok) {
+                                          const jData = await jRes.json();
+                                          if (jData && jData.encounter_id === row.id) {
+                                            setJourneyData(jData);
+                                          }
+                                        }
+                                      } catch (jErr) {}
+                                    }
                                   } catch (e) { }
                                 }}
                                 className="text-[11px] font-bold text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 hover:bg-emerald-500/30 px-3 py-1.5 rounded-[8px] transition-all flex items-center gap-1 active:scale-95 shadow-sm"

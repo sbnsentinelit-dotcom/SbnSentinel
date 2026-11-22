@@ -331,7 +331,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                 <button onClick={handleDismiss} className="px-6 py-3 rounded-2xl font-bold text-white/70 hover:bg-white/10 transition-colors flex items-center gap-2">
                   <X className="w-5 h-5" /> Dismiss
                 </button>
-                {(selectedEvent as any)?.decision_status === 'APPROVED' || (selectedEvent as any)?.status === 'APPROVED' ? (
+                {(selectedEvent as any)?.decision_status === 'APPROVED' || (selectedEvent as any)?.status === 'APPROVED' || (selectedEvent as any)?.decision === 'APPROVED' || (selectedEvent as any)?.decision?.status === 'APPROVED' ? (
                   <span className="px-6 py-3 rounded-2xl font-bold text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5" /> Decision Recorded – APPROVED
                   </span>

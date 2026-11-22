@@ -273,7 +273,7 @@ class SimulationEngine:
                         priority=random.choice(["Normal", "Urgent"]),
                         wait_time="0 mins",
                         department=random.choice(["General Practice", "Cardiology", "Radiology"]),
-                        avatar=f"https://i.pravatar.cc/150?img={random.randint(1, 70)}"
+                        avatar=None
                     )
                     db.add(new_enc)
 

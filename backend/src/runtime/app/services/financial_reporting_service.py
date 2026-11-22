@@ -50,16 +50,45 @@ class FinancialReportingService:
         currency: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
-        if not currency:
-            from app.core.config import get_deployment_currency
-            currency = get_deployment_currency()
         session = db or SessionLocal()
         try:
-            claims = session.query(FinancialClaimModel).filter(
+            # Query all claims for the period
+            all_claims = session.query(FinancialClaimModel).filter(
                 FinancialClaimModel.clinic_id == clinic_id,
                 FinancialClaimModel.service_date >= period_start,
                 FinancialClaimModel.service_date <= period_end,
             ).all()
+
+            target_currency = currency or (all_claims[0].currency if all_claims else None)
+            if not target_currency:
+                from app.core.config import get_deployment_currency
+                target_currency = get_deployment_currency()
+
+            # Separate totals by currency to prevent mixed-currency aggregation (e.g. AED 640 + USD 100 = 740)
+            currency_totals: Dict[str, Dict[str, Any]] = {}
+            for c in all_claims:
+                c_curr = c.currency or target_currency
+                if c_curr not in currency_totals:
+                    currency_totals[c_curr] = {
+                        "total_charges": 0.0,
+                        "submitted_amount": 0.0,
+                        "remittance_paid": 0.0,
+                        "claims_count": 0,
+                    }
+                currency_totals[c_curr]["total_charges"] += c.billed_amount or 0.0
+                if c.status in ("submitted", "adjudicated", "paid", "denied"):
+                    currency_totals[c_curr]["submitted_amount"] += c.billed_amount or 0.0
+                if c.paid_amount is not None:
+                    currency_totals[c_curr]["remittance_paid"] += c.paid_amount
+                currency_totals[c_curr]["claims_count"] += 1
+
+            for curr_key, t_dict in currency_totals.items():
+                t_dict["total_charges"] = round(t_dict["total_charges"], 2)
+                t_dict["submitted_amount"] = round(t_dict["submitted_amount"], 2)
+                t_dict["remittance_paid"] = round(t_dict["remittance_paid"], 2)
+
+            # Filter claims and receipts strictly matching the target currency
+            claims = [c for c in all_claims if (c.currency or target_currency) == target_currency]
 
             total_charges = sum(c.billed_amount or 0.0 for c in claims)
             submitted_claims = [c for c in claims if c.status in ("submitted", "adjudicated", "paid", "denied")]
@@ -68,11 +97,12 @@ class FinancialReportingService:
             patient_share = sum(c.patient_share or 0.0 for c in claims if c.patient_share is not None)
 
             # Reconciled Receipts
-            receipts = session.query(FinancialPaymentReceiptModel).filter(
+            all_receipts = session.query(FinancialPaymentReceiptModel).filter(
                 FinancialPaymentReceiptModel.clinic_id == clinic_id,
                 FinancialPaymentReceiptModel.received_date >= period_start,
                 FinancialPaymentReceiptModel.received_date <= period_end,
             ).all()
+            receipts = [r for r in all_receipts if (r.currency or target_currency) == target_currency]
 
             confirmed_receipts = sum(r.amount for r in receipts if r.bank_confirmed)
             total_cash_receipts = sum(r.amount for r in receipts)
@@ -93,7 +123,8 @@ class FinancialReportingService:
                 "report_code": "FR01",
                 "report_name": "Daily and Monthly Owner Summary",
                 "clinic_id": clinic_id,
-                "currency": currency,
+                "currency": target_currency,
+                "currency_totals": currency_totals,
                 "period_start": period_start.isoformat(),
                 "period_end": period_end.isoformat(),
                 "as_of_cutoff": datetime.now(timezone.utc).isoformat(),
@@ -123,15 +154,24 @@ class FinancialReportingService:
         clinic_id: str,
         period_start: datetime,
         period_end: datetime,
+        currency: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         session = db or SessionLocal()
         try:
-            claims = session.query(FinancialClaimModel).filter(
+            claims_query = session.query(FinancialClaimModel).filter(
                 FinancialClaimModel.clinic_id == clinic_id,
                 FinancialClaimModel.service_date >= period_start,
                 FinancialClaimModel.service_date <= period_end,
-            ).all()
+            )
+            if currency:
+                claims_query = claims_query.filter(FinancialClaimModel.currency == currency)
+            claims = claims_query.all()
+
+            effective_currency = currency or (claims[0].currency if claims else None)
+            if not effective_currency:
+                from app.core.config import get_deployment_currency
+                effective_currency = get_deployment_currency()
 
             payer_groups: Dict[str, Dict[str, Any]] = {}
             for c in claims:
@@ -140,6 +180,7 @@ class FinancialReportingService:
                     payer_groups[key] = {
                         "payer_id": c.payer_id,
                         "tpa_id": c.tpa_id or "Direct",
+                        "currency": c.currency or effective_currency,
                         "claim_count": 0,
                         "billed_total": 0.0,
                         "allowed_total": 0.0,
@@ -171,6 +212,7 @@ class FinancialReportingService:
                 "report_code": "FR02",
                 "report_name": "Payer and Plan Summary",
                 "clinic_id": clinic_id,
+                "currency": effective_currency,
                 "period_start": period_start.isoformat(),
                 "period_end": period_end.isoformat(),
                 "rows": rows,
@@ -188,15 +230,24 @@ class FinancialReportingService:
         clinic_id: str,
         period_start: datetime,
         period_end: datetime,
+        currency: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         session = db or SessionLocal()
         try:
-            claims = session.query(FinancialClaimModel).filter(
+            claims_query = session.query(FinancialClaimModel).filter(
                 FinancialClaimModel.clinic_id == clinic_id,
                 FinancialClaimModel.service_date >= period_start,
                 FinancialClaimModel.service_date <= period_end,
-            ).order_by(FinancialClaimModel.service_date.desc()).all()
+            )
+            if currency:
+                claims_query = claims_query.filter(FinancialClaimModel.currency == currency)
+            claims = claims_query.order_by(FinancialClaimModel.service_date.desc()).all()
+
+            effective_currency = currency or (claims[0].currency if claims else None)
+            if not effective_currency:
+                from app.core.config import get_deployment_currency
+                effective_currency = get_deployment_currency()
 
             rows = []
             for c in claims:
@@ -208,6 +259,7 @@ class FinancialReportingService:
                     "claim_id": c.claim_id,
                     "patient_id": c.patient_id,
                     "payer_id": c.payer_id,
+                    "currency": c.currency or effective_currency,
                     "service_date": c.service_date.isoformat(),
                     "submission_date": c.submission_date.isoformat() if c.submission_date else None,
                     "adjudication_date": c.adjudication_date.isoformat() if c.adjudication_date else None,
@@ -223,6 +275,7 @@ class FinancialReportingService:
                 "report_code": "FR03",
                 "report_name": "Claim Status and Processing Register",
                 "clinic_id": clinic_id,
+                "currency": effective_currency,
                 "rows": rows,
                 "total_claims": len(rows),
             }

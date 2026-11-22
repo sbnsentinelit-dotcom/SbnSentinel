@@ -170,6 +170,17 @@ def seed_dubai_data(db: Session):
         }
         encounters_data.append(enc_obj)
 
+        enc_status = "Completed" if i % 10 != 0 else "In Room"
+        enc_stage = "Completed" if enc_status == "Completed" else "Consultation"
+        enc_timestamps = {
+            "Check In": enc_date,
+            "Waiting": enc_date,
+            "Consultation": enc_date
+        }
+        if enc_status == "Completed":
+            enc_timestamps["Billing"] = enc_date
+            enc_timestamps["Completed"] = enc_date
+
         if enc_id not in existing_enc_ids:
             encounter = EncounterModel(
                 id=enc_id,
@@ -179,13 +190,15 @@ def seed_dubai_data(db: Session):
                 date=enc_date,
                 diagnosis=f"{diag_code} - {diag_desc}",
                 type=f"{specialty} Consultation",
-                status="Completed" if i % 10 != 0 else "In Room",
+                status=enc_status,
+                journey_stage=enc_stage,
+                stage_timestamps=enc_timestamps,
                 billing_status=billing_status,
                 copay=50.0 if p["payer"] != "Self Pay" else billed_amt,
                 priority="Urgent" if "Urgent" in specialty else "Normal",
                 wait_time=f"{(i * 7) % 25 + 5} mins",
                 department=specialty,
-                avatar=f"https://i.pravatar.cc/150?u={p['patient_id']}",
+                avatar=None,
                 clinical_notes=f"UAE Clinical Visit: Patient {p['name']} presenting with {diag_desc}. Evaluated by {doc} ({specialty}). Payer: {p['payer']}.",
                 medications="Standard UAE formulary prescription as indicated",
                 payer_network=p["payer"],

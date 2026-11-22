@@ -53,7 +53,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
   const [recentAuto, setRecentAuto] = useState<Record<string, SignalEvent>>({});
   useEffect(() => {
     if (!autopilot || autopilotBusy.current) return;
-    const next = activeSignals.find(s => isActionable(s) && !autopilotHandled.current.has(s.id));
+    const next = activeSignals.find(s => isActionable(s) && !s.decision && !autopilotHandled.current.has(s.id));
     if (!next) return;
     autopilotBusy.current = true;
     autopilotHandled.current.add(next.id);

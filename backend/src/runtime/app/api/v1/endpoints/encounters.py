@@ -352,21 +352,21 @@ def get_encounter_journey(
     """
     B-71 / B-72: Authoritative Patient Flow Journey endpoint.
     Returns encounter stages, timestamps, patient details, MRN, provider, department, insurance with clinic scope check.
+    Enforces positive facility membership, preserves recorded timestamps without dynamic generation, and defaults missing insurance to 'Unknown'.
     """
     enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
     if not enc:
         raise HTTPException(status_code=404, detail="Encounter record not found")
 
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and enc.clinic_id and enc.clinic_id != current_user.clinic_id:
+        user_clinic = getattr(current_user, 'clinic_id', None)
+        if not user_clinic or (enc.clinic_id and enc.clinic_id != user_clinic):
             raise HTTPException(status_code=403, detail="Cannot access encounter belonging to another clinic facility")
 
     timestamps = dict(enc.stage_timestamps or {})
     current_stage = enc.journey_stage or "Check In"
-    if not timestamps:
-        timestamps["Check In"] = enc.date or datetime.utcnow().isoformat()
-        if current_stage != "Check In":
-            timestamps[current_stage] = datetime.utcnow().isoformat()
+    if not timestamps and enc.date:
+        timestamps["Check In"] = enc.date
 
     patient_id_val = str(enc.patient_id or enc.id or "000000")
     mrn_val = getattr(enc, "mrn", None) or (
@@ -380,7 +380,7 @@ def get_encounter_journey(
         "mrn": mrn_val,
         "provider_name": enc.provider_name or "Unknown Provider",
         "department": enc.department or "General Practice",
-        "insurance": enc.payer_network or "Self Pay",
+        "insurance": enc.payer_network or "Unknown",
         "current_stage": current_stage,
         "stage_timestamps": timestamps,
         "stages": ["Check In", "Waiting", "Consultation", "Lab", "Billing", "Completed"],
@@ -410,7 +410,8 @@ def update_encounter(
         raise HTTPException(status_code=404, detail="Encounter record not found")
 
     if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and enc.clinic_id and enc.clinic_id != current_user.clinic_id:
+        user_clinic = getattr(current_user, 'clinic_id', None)
+        if not user_clinic or (enc.clinic_id and enc.clinic_id != user_clinic):
             raise HTTPException(status_code=403, detail="Cannot modify encounter belonging to another clinic facility")
 
     now_iso = datetime.utcnow().isoformat()
