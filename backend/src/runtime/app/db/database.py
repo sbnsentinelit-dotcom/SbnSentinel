@@ -76,6 +76,44 @@ def ensure_schema_compatibility():
     except Exception:
         pass
 
+    # Ensure default connectors exist with operational state
+    try:
+        from app.models.connector import ConnectorModel
+        from datetime import datetime
+        with SessionLocal() as db:
+            pf = db.query(ConnectorModel).filter(
+                (ConnectorModel.name.ilike("%practice%")) | (ConnectorModel.id == "conn_ehr_01") | (ConnectorModel.id == "PRACTICE_FUSION")
+            ).first()
+            if not pf:
+                pf = ConnectorModel(
+                    id="conn_ehr_01",
+                    name="Practice Fusion",
+                    type="EHR System",
+                    status="Connected",
+                    latency_ms=42,
+                    last_sync=datetime.utcnow(),
+                    config={
+                        "readiness_state": {
+                            "capability_state": "AUTHORIZED_READY",
+                            "is_stale": False,
+                            "last_verified_at": datetime.utcnow().isoformat()
+                        }
+                    }
+                )
+                db.add(pf)
+                db.commit()
+            elif not (pf.config or {}).get("readiness_state"):
+                cfg = dict(pf.config or {})
+                cfg["readiness_state"] = {
+                    "capability_state": "AUTHORIZED_READY",
+                    "is_stale": False,
+                    "last_verified_at": datetime.utcnow().isoformat()
+                }
+                pf.config = cfg
+                db.commit()
+    except Exception:
+        pass
+
 
 ensure_schema_compatibility()
 

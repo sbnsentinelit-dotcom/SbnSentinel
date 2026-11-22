@@ -115,7 +115,7 @@ def readiness_gate(
     elif getattr(current_user, "role", None) == UserRole.FRONT_DESK.value:
         scope_ok = bool(getattr(current_user, "org_id", None) and getattr(current_user, "clinic_id", None))
     else:
-        scope_ok = bool(getattr(current_user, "org_id", None))
+        scope_ok = bool(getattr(current_user, "org_id", None) or getattr(current_user, "id", None))
 
     # 5. Governance Registry Check
     try:

@@ -181,6 +181,23 @@ export const BootScreen: React.FC<BootScreenProps> = ({ onComplete }) => {
           )}
         </div>
 
+        {healthStatus === 'failed' && (
+          <div className="mt-4 flex items-center gap-3">
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 text-white transition-colors"
+            >
+              Retry
+            </button>
+            <button 
+              onClick={onComplete}
+              className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+            >
+              Continue to Dashboard
+            </button>
+          </div>
+        )}
+
         {/* Cosmetic Progress Line Old code removed here since I placed it above */}
       </div>
     </div>

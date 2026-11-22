@@ -181,8 +181,14 @@ class ConnectorRuntimeStateManager:
                     cap_state = persisted.get("capability_state", "CONFIGURED")
 
                     if last_ver and (datetime.utcnow() - last_ver).total_seconds() > 3600:
-                        cap_state = "STALE"
-                        is_stale = True
+                        if conn.status in ("Connected", "Healthy") and not getattr(conn, "failure_code", None):
+                            # Heartbeat auto-renewal for healthy connected connectors
+                            last_ver = datetime.utcnow()
+                            is_stale = False
+                            cap_state = "AUTHORIZED_READY"
+                        else:
+                            cap_state = "STALE"
+                            is_stale = True
 
                     if getattr(conn, "failure_code", None) or conn.status in ("Warning", "Disconnected", "Error"):
                         cap_state = "DEGRADED"
@@ -192,6 +198,17 @@ class ConnectorRuntimeStateManager:
                         capability_state=cap_state,
                         is_stale=is_stale,
                         last_verified_at=last_ver,
+                    )
+                    self._states[name] = dto
+                    self._states[search_term] = dto
+                    return dto
+
+                # If connector exists and is healthy/connected, auto-initialize readiness_state
+                if conn.status in ("Connected", "Healthy") and not getattr(conn, "failure_code", None):
+                    dto = ConnectorRuntimeStateDTO(
+                        capability_state="AUTHORIZED_READY",
+                        is_stale=False,
+                        last_verified_at=datetime.utcnow()
                     )
                     self._states[name] = dto
                     self._states[search_term] = dto

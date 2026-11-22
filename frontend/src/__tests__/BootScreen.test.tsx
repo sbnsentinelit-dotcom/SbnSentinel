@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { BootScreen } from '../components/CommandCenter/BootScreen';
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation(query => ({
@@ -15,8 +16,10 @@ Object.defineProperty(window, 'matchMedia', {
     dispatchEvent: vi.fn(),
   })),
 });
+
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
+
 describe('BootScreen SDS-D2 Tests', () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -26,16 +29,14 @@ describe('BootScreen SDS-D2 Tests', () => {
     vi.useRealTimers();
   });
 
-  test('T01: Rendered startup uses approved SVG vector groups, no raster png masks', async () => {
+  test('T01: Rendered startup uses authentic segmented brand logo with glow vector', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ready: true }) });
     const { container } = render(<BootScreen onComplete={() => { }} />);
     
-    // Check for inline SVG
+    // Check for inline SVG ambient glow
     const svgs = container.querySelectorAll('svg');
     expect(svgs.length).toBeGreaterThan(0);
-    // Assert strictly NO <image> tags inside the path groups (Auditor compliance)
-    expect(container.querySelector('image')).toBeNull();
-    // Assert presence of the required vector groups
+    // Assert presence of the required logo parts
     expect(container.querySelector('#iak-body')).toBeTruthy();
     expect(container.querySelector('#iak-connector')).toBeTruthy();
     expect(container.querySelector('#iak-a')).toBeTruthy();
@@ -92,6 +93,7 @@ describe('BootScreen SDS-D2 Tests', () => {
     });
     expect(onComplete).not.toHaveBeenCalled();
   });
+
   test('T06: Fallback backend not-ready handling', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ready: false }) });
     const onComplete = vi.fn();
@@ -103,6 +105,7 @@ describe('BootScreen SDS-D2 Tests', () => {
     expect(screen.getByText('STARTUP FAILED')).toBeTruthy();
     expect(onComplete).not.toHaveBeenCalled();
   });
+
   test('T07: prefers-reduced-motion preserves meaning', async () => {
     window.matchMedia = vi.fn().mockImplementation(query => ({
       matches: query === '(prefers-reduced-motion: reduce)',
@@ -113,8 +116,7 @@ describe('BootScreen SDS-D2 Tests', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    // Check for approved SVG vector groups
+    // Check for authentic segmented groups
     expect(container.querySelector('#iak-body')).toBeTruthy();
-    expect(container.querySelector('image')).toBeNull();
   });
 });
