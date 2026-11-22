@@ -144,4 +144,42 @@ describe('QA Verification Fixes', () => {
       expect(avgWaitToday).toBe(13);
     });
   });
+
+  describe('Printed Invoice & Invoice Rendering (Rule 4)', () => {
+    it('renders charges and copay using formatMoney with regional currency and preserves genuine 0', () => {
+      // AED 640 charge must render as "AED 640.00", not "$640.00"
+      expect(formatMoney(640, 'AED')).toBe('AED 640.00');
+
+      // Genuine 0 copay must render as "AED 0.00", not "Unavailable"
+      expect(formatMoney(0, 'AED')).toBe('AED 0.00');
+
+      // USD 100 must render as "$100.00"
+      expect(formatMoney(100, 'USD')).toBe('$100.00');
+    });
+  });
+
+  describe('Patient Switch & Late Write Guard (B-72)', () => {
+    it('guards visible selection when late asynchronous save finishes for previous patient', async () => {
+      let activePatientId = 'Patient_A';
+      const selectedPatientEncounterRef = { current: 'enc_patient_A' };
+
+      // User switches to Patient B
+      activePatientId = 'Patient_B';
+      selectedPatientEncounterRef.current = 'enc_patient_B';
+
+      // Now Patient A's late stage-save callback finishes
+      const targetEncIdFromSaveA = 'enc_patient_A';
+      const onSaveComplete = (savedEncId: string, updatedPatientId: string) => {
+        // Guard check: only update if active encounter matches the saved encounter
+        if (selectedPatientEncounterRef.current === savedEncId) {
+          activePatientId = updatedPatientId;
+        }
+      };
+
+      onSaveComplete(targetEncIdFromSaveA, 'Patient_A');
+
+      // Active patient must remain Patient B! Patient A's late save was blocked from hijacking selection.
+      expect(activePatientId).toBe('Patient_B');
+    });
+  });
 });

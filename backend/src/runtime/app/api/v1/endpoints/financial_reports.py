@@ -20,7 +20,7 @@ def _default_dates():
 @router.get("/daily-receipts")
 def get_daily_receipts(
     days: int = Query(7, ge=1, le=31),
-    currency: str = Query("AED"),
+    currency: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -34,6 +34,9 @@ def get_daily_receipts(
     from sqlalchemy import func
     from app.models.financial_reporting import FinancialPaymentReceiptModel
     from app.models.user import UserRole
+    from app.core.config import get_deployment_currency
+
+    eff_currency = currency or get_deployment_currency()
 
     clinic_id = getattr(current_user, "clinic_id", None)
     if not clinic_id and current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
@@ -43,7 +46,7 @@ def get_daily_receipts(
     first_day = today - timedelta(days=days - 1)
     day_col = func.date(FinancialPaymentReceiptModel.received_date)
     q = db.query(day_col, func.sum(FinancialPaymentReceiptModel.amount)).filter(
-        FinancialPaymentReceiptModel.currency == currency,
+        FinancialPaymentReceiptModel.currency == eff_currency,
         FinancialPaymentReceiptModel.received_date >= datetime.combine(first_day, datetime.min.time()),
         FinancialPaymentReceiptModel.received_date < datetime.combine(today + timedelta(days=1), datetime.min.time()),
     )
@@ -54,7 +57,7 @@ def get_daily_receipts(
     for offset in range(days):
         day = first_day + timedelta(days=offset)
         series.append({"date": day.isoformat(), "amount": round(totals.get(day.isoformat(), 0.0), 2)})
-    return {"currency": currency, "clinic_id": clinic_id, "days": series}
+    return {"currency": eff_currency, "clinic_id": clinic_id, "days": series}
 
 
 @router.get("/summary")
@@ -115,6 +118,7 @@ def get_claim_register(
     clinic_id: Optional[str] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    currency: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -129,6 +133,7 @@ def get_claim_register(
         clinic_id=target_clinic,
         period_start=s_date,
         period_end=e_date,
+        currency=currency,
         db=db,
     )
 
@@ -138,6 +143,7 @@ def get_unpaid_lines(
     clinic_id: Optional[str] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    currency: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -152,6 +158,7 @@ def get_unpaid_lines(
         clinic_id=target_clinic,
         period_start=s_date,
         period_end=e_date,
+        currency=currency,
         db=db,
     )
 
@@ -161,6 +168,7 @@ def get_denials(
     clinic_id: Optional[str] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    currency: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -175,6 +183,7 @@ def get_denials(
         clinic_id=target_clinic,
         period_start=s_date,
         period_end=e_date,
+        currency=currency,
         db=db,
     )
 

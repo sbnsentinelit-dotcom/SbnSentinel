@@ -292,11 +292,12 @@ class FinancialReportingService:
         clinic_id: str,
         period_start: datetime,
         period_end: datetime,
+        currency: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         session = db or SessionLocal()
         try:
-            lines = session.query(
+            q = session.query(
                 FinancialClaimLineModel, FinancialClaimModel
             ).join(
                 FinancialClaimModel, FinancialClaimLineModel.claim_id == FinancialClaimModel.claim_id
@@ -305,10 +306,20 @@ class FinancialReportingService:
                 FinancialClaimModel.service_date >= period_start,
                 FinancialClaimModel.service_date <= period_end,
                 FinancialClaimLineModel.line_status.in_(["submitted", "partially_paid", "denied"]),
-            ).all()
+            )
+            if currency:
+                q = q.filter(FinancialClaimModel.currency == currency)
+            lines = q.all()
 
+            effective_currency = currency or (lines[0][1].currency if lines else None)
+            if not effective_currency:
+                from app.core.config import get_deployment_currency
+                effective_currency = get_deployment_currency()
+
+            currency_totals: Dict[str, float] = {}
             rows = []
             for line, claim in lines:
+                claim_curr = claim.currency or effective_currency
                 allowed = line.allowed_amount or 0.0
                 paid = line.paid_amount or 0.0
                 adjusted = line.adjusted_amount or 0.0
@@ -322,6 +333,7 @@ class FinancialReportingService:
                     "code_version": line.code_version,
                     "units": line.units,
                     "payer_id": claim.payer_id,
+                    "currency": claim_curr,
                     "service_date": claim.service_date.isoformat(),
                     "billed_amount": round(line.billed_amount or 0.0, 2),
                     "allowed_amount": round(allowed, 2) if line.allowed_amount is not None else None,
@@ -331,14 +343,17 @@ class FinancialReportingService:
                     "denial_code": line.denial_code,
                     "denial_reason": line.denial_reason,
                 })
+                currency_totals[claim_curr] = round(currency_totals.get(claim_curr, 0.0) + supported_balance, 2)
 
             return {
                 "report_code": "FR04",
                 "report_name": "Unpaid and Partially Paid Procedure Lines",
                 "clinic_id": clinic_id,
+                "currency": effective_currency,
+                "currency_totals": currency_totals,
                 "rows": rows,
                 "unpaid_lines_count": len(rows),
-                "total_unpaid_balance": round(sum(r["supported_balance"] for r in rows), 2),
+                "total_unpaid_balance": round(currency_totals.get(effective_currency, sum(r["supported_balance"] for r in rows)), 2),
             }
         finally:
             if not db:
@@ -352,12 +367,13 @@ class FinancialReportingService:
         clinic_id: str,
         period_start: datetime,
         period_end: datetime,
+        currency: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         session = db or SessionLocal()
         try:
             # Payer Adjudication Denials (from Claim Lines)
-            lines = session.query(
+            lines_q = session.query(
                 FinancialClaimLineModel, FinancialClaimModel
             ).join(
                 FinancialClaimModel, FinancialClaimLineModel.claim_id == FinancialClaimModel.claim_id
@@ -366,16 +382,28 @@ class FinancialReportingService:
                 FinancialClaimModel.service_date >= period_start,
                 FinancialClaimModel.service_date <= period_end,
                 FinancialClaimLineModel.line_status == "denied",
-            ).all()
+            )
+            if currency:
+                lines_q = lines_q.filter(FinancialClaimModel.currency == currency)
+            lines = lines_q.all()
+
+            effective_currency = currency
+            if not effective_currency and lines:
+                effective_currency = lines[0][1].currency
+            if not effective_currency:
+                from app.core.config import get_deployment_currency
+                effective_currency = get_deployment_currency()
 
             denial_groups: Dict[str, Dict[str, Any]] = {}
             for line, claim in lines:
+                claim_curr = claim.currency or effective_currency
                 code = line.denial_code or "UNKNOWN_DENIAL"
-                key = f"{claim.payer_id}:{code}"
+                key = f"{claim.payer_id}:{code}:{claim_curr}"
                 if key not in denial_groups:
                     denial_groups[key] = {
                         "category": "Payer Adjudication Denial",
                         "payer_id": claim.payer_id,
+                        "currency": claim_curr,
                         "code": code,
                         "reason": line.denial_reason or "Reason unavailable from payer",
                         "affected_lines_count": 0,
@@ -385,21 +413,26 @@ class FinancialReportingService:
                 denial_groups[key]["total_denied_amount"] += line.billed_amount or 0.0
 
             # Technical Rejections (from Submission Attempts)
-            attempts = session.query(
+            attempts_q = session.query(
                 FinancialSubmissionAttemptModel, FinancialClaimModel
             ).join(
                 FinancialClaimModel, FinancialSubmissionAttemptModel.claim_id == FinancialClaimModel.claim_id
             ).filter(
                 FinancialClaimModel.clinic_id == clinic_id,
                 FinancialSubmissionAttemptModel.outcome == "rejected_technical",
-            ).all()
+            )
+            if currency:
+                attempts_q = attempts_q.filter(FinancialClaimModel.currency == currency)
+            attempts = attempts_q.all()
 
             for att, claim in attempts:
-                key = f"{claim.payer_id}:TECH_REJECT:{att.rejection_reason or 'UNKNOWN'}"
+                claim_curr = claim.currency or effective_currency
+                key = f"{claim.payer_id}:TECH_REJECT:{att.rejection_reason or 'UNKNOWN'}:{claim_curr}"
                 if key not in denial_groups:
                     denial_groups[key] = {
                         "category": "Technical Clearinghouse Rejection",
                         "payer_id": claim.payer_id,
+                        "currency": claim_curr,
                         "code": "TECH_REJECT",
                         "reason": att.rejection_reason or "Technical format validation failure",
                         "affected_lines_count": 0,
@@ -409,13 +442,18 @@ class FinancialReportingService:
                 denial_groups[key]["total_denied_amount"] += claim.billed_amount or 0.0
 
             rows = list(denial_groups.values())
+            currency_totals: Dict[str, float] = {}
             for r in rows:
                 r["total_denied_amount"] = round(r["total_denied_amount"], 2)
+                curr = r["currency"]
+                currency_totals[curr] = round(currency_totals.get(curr, 0.0) + r["total_denied_amount"], 2)
 
             return {
                 "report_code": "FR05",
                 "report_name": "Rejection and Denial Reasons",
                 "clinic_id": clinic_id,
+                "currency": effective_currency,
+                "currency_totals": currency_totals,
                 "rows": rows,
                 "total_reasons": len(rows),
             }

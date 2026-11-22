@@ -104,6 +104,13 @@ jobs:
       run: |
         pytest tests/integration/test_round2_acceptance.py -v
 
+    - name: QA Verification and Audit Fixes Testing
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/test_qa_verification_fixes.py tests/integration/test_financial_reporting_pack.py -v
+
   frontend-quality:
     name: Frontend Quality Assurance
     runs-on: ubuntu-latest
