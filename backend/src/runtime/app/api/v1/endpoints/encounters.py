@@ -9,116 +9,133 @@ from app.api.deps import get_scoped_user, RoleChecker
 from app.models.user import User, UserRole
 from app.models.encounter import EncounterModel
 from app.schemas.encounter import EncounterCreate, EncounterUpdate, EncounterResponse
+from app.core.config import get_deployment_currency
 
 router = APIRouter()
 
 
 def seed_default_encounters(db: Session):
-    default_encounters = [{"id": "enc_01",
-                           "patient_name": "Michael R.",
-                           "provider_name": "Dr. Smith",
-                           "date": "2026-07-01",
-                           "diagnosis": "Unspecified essential hypertension",
-                           "type": "Urgent Care",
-                           "status": "Waiting",
-                           "billing_status": "Pending",
-                           "copay": 20.0,
-                           "priority": "High",
-                           "wait_time": "14 mins",
-                           "department": "Cardiology",
-                           "avatar": None,
-                           "clinical_notes": "Subjective: Patient reports mild headaches and occasional palpitations. Objective: BP 145/95 mmHg, HR 82 bpm, regular rhythm. Assessment: Unspecified essential hypertension. Plan: Advised low sodium diet. Initiated Lisinopril 10mg daily. Follow-up in 2 weeks.",
-                           "medications": "Lisinopril 10mg daily"},
-                          {"id": "enc_02",
-                           "patient_name": "Sarah J.",
-                           "provider_name": "Dr. Patel",
-                           "date": "2026-07-01",
-                           "diagnosis": "Acute upper respiratory infection",
-                           "type": "Consultation",
-                           "status": "In Room",
-                           "billing_status": "Billed",
-                           "copay": 45.0,
-                           "priority": "Normal",
-                           "wait_time": "5 mins",
-                           "department": "General Practice",
-                           "avatar": None,
-                           "clinical_notes": "Subjective: Patient reports sore throat, congestion, and dry cough for 3 days. Objective: Temp 99.1 F, pharynx erythematous without exudate. Lungs clear to auscultation. Assessment: Acute upper respiratory infection (viral). Plan: Rest, hydration, OTC decongestants. Follow-up if symptoms worsen.",
-                           "medications": "OTC Decongestants, Saline Nasal Spray"},
-                          {"id": "enc_03",
-                           "patient_name": "David L.",
-                           "provider_name": "Dr. Smith",
-                           "date": "2026-07-01",
-                           "diagnosis": "Type 2 diabetes mellitus without complications",
-                           "type": "Checkup",
-                           "status": "Completed",
-                           "billing_status": "Paid",
-                           "copay": 20.0,
-                           "priority": "Normal",
-                           "wait_time": "25 mins",
-                           "department": "Cardiology",
-                           "avatar": None,
-                           "clinical_notes": "Subjective: Patient presents for routine diabetic checkup. Reports compliance with medication. Objective: HbA1c 6.8%, BP 122/78 mmHg. Foot exam normal. Assessment: Controlled Type 2 diabetes mellitus. Plan: Continue Metformin 500mg BID. Recommended annual eye exam.",
-                           "medications": "Metformin 500mg BID"},
-                          {"id": "enc_04",
-                           "patient_name": "Emily D.",
-                           "provider_name": "Dr. Chen",
-                           "date": "2026-07-01",
-                           "diagnosis": "Pain in right knee",
-                           "type": "X-Ray Scan",
-                           "status": "Waiting",
-                           "billing_status": "Claim Denied",
-                           "copay": 50.0,
-                           "priority": "Normal",
-                           "wait_time": "18 mins",
-                           "department": "Radiology",
-                           "avatar": None,
-                           "clinical_notes": "Subjective: Patient reports sharp pain in the right knee after a minor twist yesterday. Objective: Swelling noted over the lateral patellar region. Limited range of motion. Assessment: Suspected ligamentous strain. Plan: X-ray completed to rule out fracture. Rest, Ice, Compression, Elevation.",
-                           "medications": "Ibuprofen 400mg q6h PRN"},
-                          {"id": "enc_05",
-                           "patient_name": "James K.",
-                           "provider_name": "Dr. Patel",
-                           "date": "2026-07-01",
-                           "diagnosis": "Gastro-esophageal reflux disease",
-                           "type": "Consultation",
-                           "status": "Delayed",
-                           "billing_status": "Pending",
-                           "copay": 45.0,
-                           "priority": "Urgent",
-                           "wait_time": "40 mins",
-                           "department": "General Practice",
-                           "avatar": None,
-                           "clinical_notes": "Subjective: Patient reports chronic burning sensation in chest, worse after meals and when lying down. Objective: Abdomen soft, non-tender, no organomegaly. Assessment: GERD. Plan: Avoid trigger foods. Initiated Omeprazole 20mg daily 30 mins before breakfast.",
-                           "medications": "Omeprazole 20mg daily"},
-                          {"id": "enc_06",
-                           "patient_name": "Robert B.",
-                           "provider_name": "Dr. Sarah Jenkins",
-                           "date": "2026-07-01",
-                           "diagnosis": "Lumbago with sciatica, right side",
-                           "type": "Therapy",
-                           "status": "Completed",
-                           "billing_status": "Paid",
-                           "copay": 25.0,
-                           "priority": "Normal",
-                           "wait_time": "12 mins",
-                           "department": "Physical Therapy",
-                           "avatar": None,
-                           "clinical_notes": "Subjective: Patient reports lower back pain radiating down the right leg. Objective: Straight leg raise positive on the right at 45 degrees. Palpable lumbar spasm. Assessment: Sciatica secondary to lumbar strain. Plan: Initiated physical therapy program, heat packs, and gentle stretching.",
-                           "medications": "Cyclobenzaprine 5mg daily"},
-                          {"id": "enc_07",
-                           "patient_name": "Jessica M.",
-                           "provider_name": "Dr. Sarah Jenkins",
-                           "date": "2026-07-01",
-                           "diagnosis": "Generalized anxiety disorder",
-                           "type": "Consultation",
-                           "status": "In Room",
-                           "billing_status": "Billed",
-                           "copay": 30.0,
-                           "priority": "Normal",
-                           "wait_time": "8 mins",
-                           "department": "Psychiatry",
-                           "avatar": None,
-                           "clinical_notes": "Subjective: Patient reports persistent worry, insomnia, and muscle tension for over 6 months. Objective: Patient appears anxious, hyperactive fidgeting, speech normal. Assessment: Generalized anxiety disorder. Plan: Recommended Cognitive Behavioral Therapy (CBT). Initiated Sertraline 25mg daily.",
-                           "medications": "Sertraline 25mg daily"}]
+    default_encounters = [
+        {
+            "id": "enc_01",
+            "patient_name": "Michael R.",
+            "provider_name": "Dr. Smith",
+            "date": "2026-07-01",
+            "diagnosis": "Unspecified essential hypertension",
+            "type": "Urgent Care",
+            "status": "Waiting",
+            "billing_status": "Pending",
+            "copay": 20.0,
+            "priority": "High",
+            "wait_time": "14 mins",
+            "department": "Cardiology",
+            "avatar": None,
+            "clinical_notes": "Subjective: Patient reports mild headaches and occasional palpitations. Objective: BP 145/95 mmHg, HR 82 bpm, regular rhythm. Assessment: Unspecified essential hypertension. Plan: Advised low sodium diet. Initiated Lisinopril 10mg daily. Follow-up in 2 weeks.",
+            "medications": "Lisinopril 10mg daily"
+        },
+        {
+            "id": "enc_02",
+            "patient_name": "Sarah J.",
+            "provider_name": "Dr. Patel",
+            "date": "2026-07-01",
+            "diagnosis": "Acute upper respiratory infection",
+            "type": "Consultation",
+            "status": "In Room",
+            "billing_status": "Billed",
+            "copay": 45.0,
+            "priority": "Normal",
+            "wait_time": "5 mins",
+            "department": "General Practice",
+            "avatar": None,
+            "clinical_notes": "Subjective: Patient reports sore throat, congestion, and dry cough for 3 days. Objective: Temp 99.1 F, pharynx erythematous without exudate. Lungs clear to auscultation. Assessment: Acute upper respiratory infection (viral). Plan: Rest, hydration, OTC decongestants. Follow-up if symptoms worsen.",
+            "medications": "OTC Decongestants, Saline Nasal Spray"
+        },
+        {
+            "id": "enc_03",
+            "patient_name": "David L.",
+            "provider_name": "Dr. Smith",
+            "date": "2026-07-01",
+            "diagnosis": "Type 2 diabetes mellitus without complications",
+            "type": "Checkup",
+            "status": "Completed",
+            "billing_status": "Paid",
+            "copay": 20.0,
+            "priority": "Normal",
+            "wait_time": "25 mins",
+            "department": "Cardiology",
+            "avatar": None,
+            "clinical_notes": "Subjective: Patient presents for routine diabetic checkup. Reports compliance with medication. Objective: HbA1c 6.8%, BP 122/78 mmHg. Foot exam normal. Assessment: Controlled Type 2 diabetes mellitus. Plan: Continue Metformin 500mg BID. Recommended annual eye exam.",
+            "medications": "Metformin 500mg BID"
+        },
+        {
+            "id": "enc_04",
+            "patient_name": "Emily D.",
+            "provider_name": "Dr. Chen",
+            "date": "2026-07-01",
+            "diagnosis": "Pain in right knee",
+            "type": "X-Ray Scan",
+            "status": "Waiting",
+            "billing_status": "Claim Denied",
+            "copay": 50.0,
+            "priority": "Normal",
+            "wait_time": "18 mins",
+            "department": "Radiology",
+            "avatar": None,
+            "clinical_notes": "Subjective: Patient reports sharp pain in the right knee after a minor twist yesterday. Objective: Swelling noted over the lateral patellar region. Limited range of motion. Assessment: Suspected ligamentous strain. Plan: X-ray completed to rule out fracture. Rest, Ice, Compression, Elevation.",
+            "medications": "Ibuprofen 400mg q6h PRN"
+        },
+        {
+            "id": "enc_05",
+            "patient_name": "James K.",
+            "provider_name": "Dr. Patel",
+            "date": "2026-07-01",
+            "diagnosis": "Gastro-esophageal reflux disease",
+            "type": "Consultation",
+            "status": "Delayed",
+            "billing_status": "Pending",
+            "copay": 45.0,
+            "priority": "Urgent",
+            "wait_time": "40 mins",
+            "department": "General Practice",
+            "avatar": None,
+            "clinical_notes": "Subjective: Patient reports chronic burning sensation in chest, worse after meals and when lying down. Objective: Abdomen soft, non-tender, no organomegaly. Assessment: GERD. Plan: Avoid trigger foods. Initiated Omeprazole 20mg daily 30 mins before breakfast.",
+            "medications": "Omeprazole 20mg daily"
+        },
+        {
+            "id": "enc_06",
+            "patient_name": "Robert B.",
+            "provider_name": "Dr. Sarah Jenkins",
+            "date": "2026-07-01",
+            "diagnosis": "Lumbago with sciatica, right side",
+            "type": "Therapy",
+            "status": "Completed",
+            "billing_status": "Paid",
+            "copay": 25.0,
+            "priority": "Normal",
+            "wait_time": "12 mins",
+            "department": "Physical Therapy",
+            "avatar": None,
+            "clinical_notes": "Subjective: Patient reports lower back pain radiating down the right leg. Objective: Straight leg raise positive on the right at 45 degrees. Palpable lumbar spasm. Assessment: Sciatica secondary to lumbar strain. Plan: Initiated physical therapy program, heat packs, and gentle stretching.",
+            "medications": "Cyclobenzaprine 5mg daily"
+        },
+        {
+            "id": "enc_07",
+            "patient_name": "Jessica M.",
+            "provider_name": "Dr. Sarah Jenkins",
+            "date": "2026-07-01",
+            "diagnosis": "Generalized anxiety disorder",
+            "type": "Consultation",
+            "status": "In Room",
+            "billing_status": "Billed",
+            "copay": 30.0,
+            "priority": "Normal",
+            "wait_time": "8 mins",
+            "department": "Psychiatry",
+            "avatar": None,
+            "clinical_notes": "Subjective: Patient reports persistent worry, insomnia, and muscle tension for over 6 months. Objective: Patient appears anxious, hyperactive fidgeting, speech normal. Assessment: Generalized anxiety disorder. Plan: Recommended Cognitive Behavioral Therapy (CBT). Initiated Sertraline 25mg daily.",
+            "medications": "Sertraline 25mg daily"
+        }
+    ]
     for enc_data in default_encounters:
         enc = EncounterModel(**enc_data)
         db.add(enc)
@@ -158,7 +175,6 @@ def get_encounter_summary_stats(
     paid_query = query.filter(EncounterModel.billing_status == "Paid")
     paid_charges = paid_query.with_entities(func.coalesce(func.sum(EncounterModel.billing_amount), 0.0)).scalar() or 0.0
 
-    from app.core.config import get_deployment_currency
     return {
         "total_encounters": total_count,
         "total_charges": float(total_charges),
@@ -204,9 +220,13 @@ def get_all_encounters(
 
         if search:
             pattern = f"%{search}%"
-            query = query.filter(or_(EncounterModel.id.ilike(pattern), EncounterModel.patient_id.ilike(pattern),
-                                     EncounterModel.diagnosis.ilike(pattern), EncounterModel.provider_id.ilike(pattern),
-                                     EncounterModel.billing_status.ilike(pattern)))
+            query = query.filter(or_(
+                EncounterModel.id.ilike(pattern),
+                EncounterModel.patient_id.ilike(pattern),
+                EncounterModel.diagnosis.ilike(pattern),
+                EncounterModel.provider_id.ilike(pattern),
+                EncounterModel.billing_status.ilike(pattern)
+            ))
         if billing_status:
             query = query.filter(EncounterModel.billing_status == billing_status)
         if status:
@@ -267,6 +287,7 @@ def trigger_seed_dubai(
         raise HTTPException(status_code=500, detail=f"Failed to seed Dubai data: {str(e)}")
 
 
+@router.post("", response_model=EncounterResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=EncounterResponse, status_code=status.HTTP_201_CREATED)
 def create_encounter(
     encounter_in: EncounterCreate,
@@ -295,8 +316,8 @@ def create_encounter(
         )
     new_enc = EncounterModel(
         id=encounter_in.id,
-        patient_name=encounter_in.patient_name,
-        provider_name=encounter_in.provider_name,
+        patient_id=encounter_in.patient_name,
+        provider_id=encounter_in.provider_name,
         clinic_id=effective_clinic,
         date=encounter_in.date,
         diagnosis=encounter_in.diagnosis,
@@ -370,6 +391,7 @@ def get_encounter_journey(
 
 
 @router.put("/{encounter_id}", response_model=EncounterResponse)
+@router.put("/{encounter_id}/", response_model=EncounterResponse)
 def update_encounter(
     encounter_id: str,
     encounter_in: EncounterUpdate,
@@ -443,6 +465,7 @@ def update_encounter(
 
 
 @router.delete("/{encounter_id}", status_code=status.HTTP_200_OK)
+@router.delete("/{encounter_id}/", status_code=status.HTTP_200_OK)
 def delete_encounter(
     encounter_id: str,
     db: Session = Depends(get_db),
