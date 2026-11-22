@@ -1,18 +1,17 @@
-import sys
 import os
+import sys
 
-# Add runtime directory to sys.path so the module can be run directly or via pytest
-runtime_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "runtime"))
-if runtime_path not in sys.path:
-    sys.path.insert(0, runtime_path)
+# Add runtime directory to sys.path so the module can run directly or via pytest
+_runtime = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "runtime"))
+if _runtime not in sys.path:
+    sys.path.insert(0, _runtime)
 
-import pytest
-from datetime import datetime, timezone, timedelta
-from app.core.config import get_deployment_currency
-from app.api.v1.endpoints.patients import _resolve_gender
-from app.services.financial_reporting_service import financial_reporting_service
-from app.models.financial_reporting import FinancialClaimModel
-from app.db.database import SessionLocal
+from datetime import datetime, timezone, timedelta  # noqa: E402
+from app.core.config import get_deployment_currency  # noqa: E402
+from app.api.v1.endpoints.patients import _resolve_gender  # noqa: E402
+from app.services.financial_reporting_service import financial_reporting_service  # noqa: E402
+from app.models.financial_reporting import FinancialClaimModel  # noqa: E402
+from app.db.database import SessionLocal  # noqa: E402
 
 
 def test_currency_mapping_no_db_sniffing():
