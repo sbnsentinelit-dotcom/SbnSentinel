@@ -202,115 +202,6 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
 
 
 
-  // Generate simulated Practice Fusion / twilio raw payload details for audit
-  const getSimulatedRawPayload = (signal: SignalEvent) => {
-    // CP-17: In production, return authoritative evidence projection rather than raw signal object
-    if (isProd) {
-      if (basisData?.evidence?.used && basisData.evidence.used.length > 0) {
-        return basisData.evidence.used;
-      }
-      return {
-        projection_type: "Governed Evidence Projection",
-        evidence_references: basisData?.evidence?.used?.map(u => u.evidence_id) || [],
-        governance_note: "Direct raw transport logs unavailable under strict governance boundary."
-      };
-    }
-    const patientName = signal.metadata?.patient_name || "Unknown Patient";
-    const cleanPatient = patientName.replace(/\s+/g, '').toLowerCase();
-
-    if (signal.type === 'EHR') {
-      return {
-        resourceType: "Appointment",
-        id: `fhir-${signal.id}`,
-        status: "noshow",
-        serviceCategory: {
-          coding: [{ system: "http://snomed.info/sct", code: "408443003", display: "General practice" }]
-        },
-        specialty: [{
-          coding: [{ system: "http://snomed.info/sct", code: "394814009", display: "General practice clinic" }]
-        }],
-        appointmentType: {
-          coding: [{ system: "http://terminology.hl7.org/CodeSystem/v2-0276", code: "WALKIN", display: "Walk in appointment" }]
-        },
-        patient: {
-          reference: `Patient/${cleanPatient}-9021`,
-          display: patientName,
-          contact: {
-            email: `${cleanPatient}@sbnsentinel-demo.com`,
-            phone: "+1 (555) 438-9210"
-          }
-        },
-        provider: {
-          reference: "Practitioner/dr-smith-223",
-          display: "Dr. Robert Smith"
-        },
-        schedule: {
-          planned_start: signal.timestamp,
-          wait_duration_minutes: signal.message.includes('45 minutes') ? 45 : 15
-        },
-        audit_trail: {
-          client_id: "sentinel-fhir-r4-client",
-          api_version: "FHIR R4",
-          authorization_scope: "user/Appointment.write patient/Patient.read"
-        }
-      };
-    } else if (signal.type === 'Phone') {
-      return {
-        event_type: "missed_call",
-        id: `twilio-${signal.id}`,
-        provider: "Twilio Voice API",
-        account_sid: "AC_MOCK_ACCOUNT_SID_1234567890",
-        call_sid: `CA${uuidSim(24)}`,
-        from: "+15550198",
-        to: "+18005553190",
-        duration_seconds: 0,
-        status: "no-answer",
-        direction: "inbound",
-        patient_matched: {
-          reference: `Patient/${cleanPatient}-9021`,
-          name: patientName,
-          email: `${cleanPatient}@sbnsentinel-demo.com`,
-          insurance_id: "INS-99210-A"
-        },
-        webhook_meta: {
-          url: "https://api.sbnsentinel.com/v1/signals/twilio/webhook",
-          signature: "sha256-aef8912cf31"
-        }
-      };
-    } else {
-      return {
-        message_id: `outlook-msg-${signal.id}@office365.microsoft.com`,
-        subject: `Diagnostic Report: ${patientName}`,
-        from: "notifications@labcorp-secure.com",
-        to: "dr.smith@sbnsentinel-demo.com",
-        received_time: signal.timestamp,
-        has_attachments: true,
-        attachments: [{
-          name: `${cleanPatient}_lab_result_cbc_cmp.pdf`,
-          mime_type: "application/pdf",
-          size_bytes: 409600
-        }],
-        nlp_extraction: {
-          patient_name: patientName,
-          critical_finding: false,
-          diagnostic_category: "Hematology & Chemistry Panel"
-        },
-        security: {
-          dkim_verification: "PASS",
-          spf_verification: "PASS",
-          security_compliance_check: "SECURE"
-        }
-      };
-    }
-  };
-  const uuidSim = (len: number) => {
-    let result = '';
-    const chars = 'abcdef0123456789';
-    for (let i = 0; i < len; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-  };
   if (selectedSignal) {
     const signalRef = createGovernedRef('Signal', selectedSignal.id);
     const primaryCtx = createPrimaryContext(signalRef, selectedSignal.metadata?.is_historical ? 'historical' : 'current');
@@ -332,11 +223,9 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
             </h4>
             <p className="text-[10px] text-white/70 font-extrabold uppercase tracking-widest mt-0.5">
               Source: {
-                (selectedSignal as any).origin?.kind === 'workbook'
-                  ? 'UAE Clinic Billing Workbook (Synthetic)'
-                  : (selectedSignal.source === 'Practice Fusion' || !selectedSignal.source
-                      ? 'UAE Clinic Billing Workbook (Synthetic)'
-                      : `${selectedSignal.source} Integration Layer`)
+                ((selectedSignal as any).origin?.kind || selectedSignal.metadata?.origin?.kind) === 'workbook'
+                  ? 'UAE Clinic Billing Workbook'
+                  : 'Clinic data feed'
               }
             </p>
           </div>
@@ -432,7 +321,7 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-[10px] text-white/50 uppercase tracking-widest font-bold">Risk Category</p>
-                  <p className="text-xs font-bold text-white">{selectedSignal.revenue_risk_category || 'None'}</p>
+                  <p className="text-xs font-bold text-white">{selectedSignal.revenue_risk_category || 'Not classified'}</p>
                 </div>
                 <div>
                   <p className="text-[10px] text-white/50 uppercase tracking-widest font-bold">Financial Exposure</p>
@@ -468,23 +357,23 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Payer Network</span>
                     <div className="flex items-center gap-1.5 font-bold text-emerald-400">
                       <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>{selectedSignal.metadata?.payer || (selectedSignal.metadata?.claim_id ? "Daman" : "No linked payer")}</span>
+                      <span>{selectedSignal.metadata?.payer || selectedSignal.metadata?.risk_inputs?.payer || "No linked payer"}</span>
                     </div>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Clearinghouse Gateway</span>
                     <div className="flex items-center gap-1.5 font-bold text-blue-400">
                       <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />
-                      <span>{selectedSignal.metadata?.claim_id ? "DHPO eClaimLink (DHA)" : "No claim transmitted"}</span>
+                      <span>{selectedSignal.metadata?.submission_reference ? `Submitted (${selectedSignal.metadata.submission_reference})` : "No submission recorded"}</span>
                     </div>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Target Procedure</span>
-                    <p className="font-bold text-white">{selectedSignal.metadata?.cpt_code ? `CPT ${selectedSignal.metadata.cpt_code}` : (selectedSignal.metadata?.claim_id ? 'CPT 99214 (E&M Visit)' : 'No linked procedure')}</p>
+                    <p className="font-bold text-white">{selectedSignal.metadata?.cpt_code ? `CPT ${selectedSignal.metadata.cpt_code}` : 'No linked procedure'}</p>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Audit Verification</span>
-                    <p className="font-bold text-amber-300">{selectedSignal.metadata?.rule_id || (selectedSignal.metadata?.claim_id ? "Deterministic Rule Match" : "No linked claim verification")}</p>
+                    <p className="font-bold text-amber-300">{selectedSignal.metadata?.rule_id || selectedSignal.risk_evaluation?.rule_id || "No linked rule evaluation"}</p>
                   </div>
                 </div>
 
@@ -492,17 +381,17 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                 <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2.5">
                   <div className="flex items-center justify-between text-[11px] pb-2 border-b border-white/10">
                     <span className="text-white/60 font-semibold">Matched Electronic Claim</span>
-                    <span className="font-mono text-white font-bold">{selectedSignal.metadata?.claim_id || "No linked claim"}</span>
+                    <span className="font-mono text-white font-bold">{selectedSignal.metadata?.claim_id || selectedSignal.metadata?.risk_inputs?.claim_id || "No linked claim"}</span>
                   </div>
-                  {selectedSignal.metadata?.claim_id && (
+                  {selectedSignal.metadata?.statutory_rule && (
                     <div className="flex items-center justify-between text-[11px] pb-2 border-b border-white/10">
                       <span className="text-white/60 font-semibold">Statutory Authority Rule</span>
-                      <span className="text-amber-400 font-bold">{selectedSignal.metadata?.statutory_rule || "UAE DHA Circular 2026/04"}</span>
+                      <span className="text-amber-400 font-bold">{selectedSignal.metadata.statutory_rule}</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="text-white/60 font-semibold">Telemetry Ingestion</span>
-                    <span className="text-white/90 font-medium">{formatDateTimeWithZone(selectedSignal.timestamp)} • Zero Drift</span>
+                    <span className="text-white/90 font-medium">{formatDateTimeWithZone(selectedSignal.timestamp)}</span>
                   </div>
                 </div>
 
@@ -518,7 +407,7 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                   {showRawJson && (
                     <div className="mt-2 bg-black/60 rounded-[12px] p-3 text-[10px] font-mono text-emerald-400 overflow-x-auto max-h-40 custom-scrollbar border border-white/10">
                       <pre>{JSON.stringify({
-                        decision_context_id: basisData?.decision_context?.context_id || selectedSignal.metadata?.decision_context_id || `CTX-UAE-${selectedSignal.id}`,
+                        decision_context_id: basisData?.decision_context?.context_id || selectedSignal.metadata?.decision_context_id || null,
                         signal_payload: {
                           id: selectedSignal.id,
                           source: selectedSignal.source,
@@ -640,7 +529,7 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 md:gap-0 relative">
         <div>
           <h2 className="text-3xl font-extrabold text-white mb-1">Signals Intelligence Hub</h2>
-          <p className="text-sm text-white/70 font-medium">Real-time Secure Data EHR connections, Twilio hooks, and automated audit stream logs.</p>
+          <p className="text-sm text-white/70 font-medium">Real-time secure data connections, voice hooks, and automated audit stream logs.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
           {onClose && (

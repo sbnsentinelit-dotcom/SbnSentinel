@@ -28,7 +28,9 @@ class RulesEngine(BaseService):
             if getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION" and not getattr(settings, "SYNTHETIC_TEST_ENABLED", False):
                 if source in ("Practice Fusion", "PRACTICE_FUSION", "practice_fusion"):
                     return "NOT_EVALUABLE"
-            if inputs.get("primary_context") == "Operational" and inputs.get("secondary_context") == "Provider Schedule Gap":
+            # A no-show (with or without a confirmed schedule gap) triggers the follow-up review.
+            if inputs.get("primary_context") == "Operational" and inputs.get("secondary_context") in (
+                    "Provider Schedule Gap", "Patient No-Show"):
                 return "CONDITION_MET"
             return "CONDITION_NOT_MET"
 

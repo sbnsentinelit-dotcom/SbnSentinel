@@ -7,6 +7,8 @@ interface StatCardProps {
   icon: LucideIcon;
   trend?: string;
   trendUp?: boolean;
+  /** true = the change is good, false = bad, null = neutral (no change or no comparison). */
+  trendGood?: boolean | null;
   color: 'blue' | 'green' | 'red' | 'purple';
   sparkData: string;
   lastUpdated?: string;
@@ -20,6 +22,7 @@ export const StatCard: React.FC<StatCardProps> = ({
   icon: Icon,
   trend,
   trendUp,
+  trendGood,
   color,
   sparkData,
   lastUpdated,
@@ -59,9 +62,19 @@ export const StatCard: React.FC<StatCardProps> = ({
         <div className="flex flex-col gap-1">
           {trend && (
             <div className="flex items-center gap-1.5">
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 shadow-sm ${trendUp ? 'bg-[var(--color-semantic-positive)]/20 text-[var(--color-semantic-positive)] border border-[var(--color-semantic-positive)]/30' : 'bg-[var(--color-semantic-critical)]/20 text-[var(--color-semantic-critical)] border border-[var(--color-semantic-critical)]/30'}`}>
-                {trendUp ? '↑' : '↓'} {trend}
-              </span>
+              {(() => {
+                const good = trendGood === undefined ? trendUp : trendGood;
+                const tone = good === null || trend === 'Unavailable'
+                  ? 'bg-white/10 text-white/60 border border-white/20'
+                  : good
+                    ? 'bg-[var(--color-semantic-positive)]/20 text-[var(--color-semantic-positive)] border border-[var(--color-semantic-positive)]/30'
+                    : 'bg-[var(--color-semantic-critical)]/20 text-[var(--color-semantic-critical)] border border-[var(--color-semantic-critical)]/30';
+                return (
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 shadow-sm ${tone}`}>
+                    {trend === 'Unavailable' ? '' : trendUp ? '↑' : '↓'} {trend}
+                  </span>
+                );
+              })()}
               <span className="text-[10px] font-bold text-white/60 uppercase tracking-wider">vs yesterday</span>
             </div>
           )}

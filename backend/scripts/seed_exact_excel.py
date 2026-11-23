@@ -114,10 +114,12 @@ def seed_exact():
 
         # Map patient name by ID
         patient_map = {}
+        mrn_map = {}
         for p in patients_raw:
             pid = p.get('Patient_ID')
             pname = f"{p.get('First_Name', '')} {p.get('Last_Name', '')}".strip()
             patient_map[pid] = pname
+            mrn_map[pid] = p.get('MRN') or None
 
         # Map charge by encounter ID
         charge_map = {}
@@ -138,20 +140,21 @@ def seed_exact():
 
             pid = enc.get('Patient_ID')
             pname = patient_map.get(pid, pid)
-            doc = enc.get('Provider', 'Dr. Omar Ali')
-            specialty = enc.get('Specialty', 'General Practice')
+            # Values come from the workbook rows; a missing value stays empty (nothing is guessed).
+            doc = enc.get('Provider') or 'Unknown'
+            specialty = enc.get('Specialty') or None
             parsed_edate = parse_excel_date(enc.get('Encounter_Date'))
-            edate = parsed_edate.strftime("%Y-%m-%d") if parsed_edate else enc.get('Encounter_Date', '2026-01-01')
-            diag_code = enc.get('Diagnosis_Code', 'Z00.00')
-            diag_desc = enc.get('Diagnosis_Description', 'General examination')
-            full_diag = f"{diag_code} - {diag_desc}"
+            edate = parsed_edate.strftime("%Y-%m-%d") if parsed_edate else None
+            diag_code = enc.get('Diagnosis_Code') or None
+            diag_desc = enc.get('Diagnosis_Description') or None
+            full_diag = f"{diag_code} - {diag_desc}" if diag_code and diag_desc else (diag_code or diag_desc)
 
             chg = charge_map.get(eid, {})
-            cpt = chg.get('CPT_Code', '99203')
+            cpt = chg.get('CPT_Code') or None
             try:
-                billed = float(chg.get('Billed_Amount', 250.0))
-            except Exception:
-                billed = 250.0
+                billed = float(chg.get('Billed_Amount'))
+            except (TypeError, ValueError):
+                billed = None
 
             clm = claim_by_enc.get(eid, {})
             c_status = clm.get('Claim_Status', 'Submitted')
@@ -166,7 +169,11 @@ def seed_exact():
             denial_reason = clm.get('Denial_Reason')
             d_text = f"{denial_code}: {denial_reason}" if denial_code and denial_reason else None
 
-            payer = clm.get('Payer', 'Daman')
+            payer = clm.get('Payer') or None
+            try:
+                patient_share = float(clm.get('Patient_Responsibility'))
+            except (TypeError, ValueError):
+                patient_share = None
 
             status_val = enc.get('Encounter_Status', 'Completed')
             stage_map = {
@@ -175,11 +182,13 @@ def seed_exact():
                 "Completed": "Completed",
                 "Delayed": "Waiting"
             }
-            j_stage = stage_map.get(status_val, "Check In")
+            j_stage = stage_map.get(status_val)
 
             db_enc = EncounterModel(
                 id=eid,
-                patient_id=pid,
+                patient_id=pname,
+                patient_ref=pid,
+                mrn=mrn_map.get(pid),
                 provider_id=doc,
                 clinic_id=clinic_id,
                 date=edate,
@@ -187,9 +196,9 @@ def seed_exact():
                 type=f"{specialty} {enc.get('Visit_Type', 'Consultation')}",
                 status=status_val,
                 journey_stage=j_stage,
-                stage_timestamps={"Check In": edate, j_stage: edate},
+                stage_timestamps=None,  # the workbook records no stage times
                 billing_status=b_status,
-                copay=50.0 if payer != 'Self Pay' else billed,
+                copay=patient_share,
                 priority='Urgent' if 'Urgent' in enc.get('Visit_Type', '') else 'Normal',
                 wait_time=None,
                 department=specialty,
@@ -421,7 +430,7 @@ def seed_exact():
                         "payer": payer,
                         "denial_reason": d_reason,
                         "required_evidence": [f"Corrected claim with documentation for {d_code}"],
-                        "evidence_available": [f"Corrected claim with documentation for {d_code}"]
+                        "evidence_available": []  # not established by the workbook
                     }
                 }
             )
@@ -434,8 +443,12 @@ def seed_exact():
             IngestionLedgerModel.connector_instance_id == "WORKBOOK",
             IngestionLedgerModel.resource_kind == "Claims"
         ).first()
+        import hashlib
+        with open(json_path, 'rb') as fh:
+            source_sha256 = hashlib.sha256(fh.read()).hexdigest()
+        sheet_counts = {name: len(rows) for name, rows in excel_data.items() if isinstance(rows, list)}
+        print(f"Import receipt: source SHA-256 {source_sha256}, sheets {sheet_counts}")
         if not ledger_entry:
-            import hashlib
             dedupe = hashlib.sha256(f"{clinic_id}:WORKBOOK:Claims:REC-WB-DXB-01:1.0".encode()).hexdigest()
             ledger_entry = IngestionLedgerModel(
                 id=dedupe,
@@ -445,7 +458,7 @@ def seed_exact():
                 external_record_id="REC-WB-DXB-01",
                 source_version="1.0",
                 status="COMMITTED",
-                payload_hash="3b714adc0849267b2fc1549231ae98dd78797092d0aedb117824c319ea1a6591",
+                payload_hash=source_sha256,  # hash of the file actually imported
                 created_at=datetime.utcnow()
             )
             db.add(ledger_entry)

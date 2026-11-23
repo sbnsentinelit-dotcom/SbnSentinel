@@ -29,7 +29,7 @@ UAE_DENIAL_RULES: Dict[str, tuple] = {
             "Claim resubmitted with the correct modifier and paid."),
     "CO15": ("Pre-bill Prior Authorization Omission", "High",
              "Attach pre-authorization approval code or request retrospective urgent review.",
-             "High risk of immediate claim bounce under DHA / DHPO technical rejection rule TR-04.",
+             "High risk of immediate claim bounce under the DHA technical rejection rule TR-04.",
              "Claim resubmitted with a valid prior authorization reference."),
     "CO16": ("Missing Supporting Clinical Documentation", "Moderate",
              "Upload signed operative clinical notes directly via DHA unified portal integration.",
@@ -52,7 +52,7 @@ SYNTHETIC_REQUIRED_EVIDENCE: Dict[str, list] = {
     "CO4": ["Corrected claim with modifier 25", "Procedure note"],
     "CO15": ["Prior authorization approval code"],
     "CO16": ["Signed operative note", "Pathology report"],
-    "CO29": ["Proof of original timely submission (DHPO receipt)"],
+    "CO29": ["Proof of original timely submission (claim submission receipt)"],
     "CO50": ["Updated ICD-10 diagnosis", "Clinical rationale note"],
 }
 
@@ -103,7 +103,7 @@ def register_uae_claims_governance() -> None:
         policy = PolicyVersion(
             policy_id=UAE_POLICY_ID,
             version=UAE_POLICY_VERSION,
-            content="Dubai Health Authority (DHPO) Unified Insurance Adjudication Policy & Automated Claims Scrubber Rules.",
+            content="Dubai Health Authority Unified Insurance Adjudication Policy & Automated Claims Scrubber Rules.",
             lifecycle_state=LifecycleState.ACTIVE,
             effective_from=UAE_POLICY_EFFECTIVE_FROM,
             approval_state="APPROVED",

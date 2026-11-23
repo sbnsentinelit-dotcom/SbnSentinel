@@ -25,7 +25,7 @@ EHR_SOURCE = "EHR document store (synthetic)"
 SECONDARY_SOURCES = (
     "Lab information system (synthetic)",
     "Provider document request (synthetic)",
-    "DHPO claim history (synthetic)",
+    "Claim submission history (synthetic)",
 )
 NOTIFICATION_SOURCE = "Sentinel Evidence Retrieval"
 

@@ -59,6 +59,14 @@ def get_patient_flow(period: str = Query("Today"), department: Optional[str] = Q
     return flow.snapshot(db, clinic, period=period, department=department, priority=priority)
 
 
+@router.get("/providers")
+def get_providers(current_user: User = Depends(RoleChecker(_READ_ROLES))):
+    """The clinic's providers as its patient records name them, with their main specialty."""
+    from app.services import workbook_dataset
+    specialty = workbook_dataset.provider_specialty()
+    return [{"name": p, "specialty": specialty.get(p)} for p in workbook_dataset.providers()]
+
+
 @router.get("/visits/{visit_id}/actions")
 def get_visit_actions(visit_id: str, clinic_id: Optional[str] = Query(None), db: Session = Depends(get_db),
                       current_user: User = Depends(RoleChecker(_READ_ROLES))):
