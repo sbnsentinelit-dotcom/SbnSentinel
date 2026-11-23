@@ -149,6 +149,23 @@ def get_patient_insurance_details(
         PatientInsuranceModel.patient_name == patient_name
     ).first()
     if not record:
+        # Crosswalk by Patient_ID or MRN (Report 05 §05.5)
+        try:
+            from app.api.v1.endpoints.patients import _get_all_raw_patients
+            for p in _get_all_raw_patients():
+                if p.get("patient_id") == patient_name or p.get("mrn") == patient_name:
+                    resolved_name = f"{p.get('first_name')} {p.get('last_name')}"
+                    record = db.query(PatientInsuranceModel).filter(
+                        PatientInsuranceModel.patient_name == resolved_name
+                    ).first()
+                    if not record and p.get("member_id"):
+                        record = db.query(PatientInsuranceModel).filter(
+                            PatientInsuranceModel.member_id == p.get("member_id")
+                        ).first()
+                    break
+        except Exception:
+            pass
+    if not record:
         # Create a default unverified record so user can verify
         return None
     return record

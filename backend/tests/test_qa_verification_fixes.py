@@ -906,6 +906,89 @@ def test_report_03_organization_admin_authority_policy():
     assert DecisionType.RETURNED_FOR_REVIEW in config.allowed_decisions
 
 
+def test_report_05_journey_mrn_crosswalk():
+    """Report 05 §05.5: Encounter journey crosswalks patient to true workbook MRN (MRN-000001)."""
+    from app.db.database import SessionLocal
+    from app.models.encounter import EncounterModel
+    from app.api.v1.endpoints.encounters import get_encounter_journey
+    from unittest.mock import MagicMock
+
+    db = SessionLocal()
+    enc_id = "test_enc_r05_01"
+    try:
+        enc = EncounterModel(
+            id=enc_id,
+            patient_id="PAT20260001",
+            provider_id="Dr. Omar Ali",
+            clinic_id="DXB-CLINIC-01",
+            date="2026-01-05",
+            diagnosis="R10.9",
+            type="Consultation",
+            status="Completed",
+            journey_stage="Completed"
+        )
+        db.add(enc)
+        db.commit()
+
+        mock_user = MagicMock()
+        mock_user.role = "System Administrator"
+        mock_user.clinic_id = "DXB-CLINIC-01"
+
+        res = get_encounter_journey(encounter_id=enc_id, db=db, current_user=mock_user)
+        assert res.get("mrn") == "MRN-000001", f"Expected MRN-000001 but got {res.get('mrn')}"
+        assert res.get("encounter_id") == enc_id
+        assert res.get("patient_id") == "PAT20260001"
+    finally:
+        db.query(EncounterModel).filter(EncounterModel.id == enc_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_report_05_workbook_encounters_readonly():
+    """Report 05 §05.6: Encounters are read-only in workbook integration profile."""
+    from app.db.database import SessionLocal
+    from app.models.encounter import EncounterModel
+    from app.api.v1.endpoints.encounters import update_encounter
+    from app.schemas.encounter import EncounterUpdate
+    from app.core.config import settings
+    from fastapi import HTTPException
+    from unittest.mock import MagicMock
+
+    db = SessionLocal()
+    enc_id = "test_enc_r05_ro"
+    orig_profile = getattr(settings, "SOURCE_PROFILE", "")
+    try:
+        settings.SOURCE_PROFILE = "workbook"
+        enc = EncounterModel(
+            id=enc_id,
+            patient_id="PAT20260002",
+            provider_id="Dr. Omar Ali",
+            clinic_id="DXB-CLINIC-01",
+            date="2026-01-05",
+            type="Consultation",
+            status="Completed"
+        )
+        db.add(enc)
+        db.commit()
+
+        mock_user = MagicMock()
+        mock_user.role = "Clinic Manager"
+        mock_user.clinic_id = "DXB-CLINIC-01"
+
+        update_in = EncounterUpdate(status="In Room")
+        try:
+            update_encounter(encounter_id=enc_id, encounter_in=update_in, db=db, current_user=mock_user)
+            assert False, "Expected 403 HTTPException for workbook read-only mode"
+        except HTTPException as exc:
+            assert exc.status_code == 403
+            assert "read-only" in exc.detail
+    finally:
+        settings.SOURCE_PROFILE = orig_profile
+        db.query(EncounterModel).filter(EncounterModel.id == enc_id).delete()
+        db.commit()
+        db.close()
+
+
 if __name__ == "__main__":
     test_currency_mapping_no_db_sniffing()
     test_gender_authoritative_source_preservation()
@@ -929,4 +1012,6 @@ if __name__ == "__main__":
     test_report_01_check_3_trend_and_freshness()
     test_report_03_problem_reason_and_operational_dependency_defaults()
     test_report_03_organization_admin_authority_policy()
+    test_report_05_journey_mrn_crosswalk()
+    test_report_05_workbook_encounters_readonly()
     print("All QA verification fix tests passed successfully!")
