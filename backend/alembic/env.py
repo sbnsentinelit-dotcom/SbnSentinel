@@ -35,9 +35,10 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Override sqlalchemy.url with actual environment URL if provided
+# Escape '%' as '%%' to prevent configparser interpolation errors with URL-encoded passwords (e.g. %40 for @)
 db_url = os.environ.get("DATABASE_URL") or os.environ.get("SQLALCHEMY_DATABASE_URL") or SQLALCHEMY_DATABASE_URL
 if db_url:
-    config.set_main_option("sqlalchemy.url", db_url)
+    config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
