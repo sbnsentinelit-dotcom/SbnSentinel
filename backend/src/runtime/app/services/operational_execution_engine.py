@@ -316,7 +316,11 @@ class OperationalExecutionEngine(BaseService):
                 "message": "Real connector not implemented for V1 production."}
 
         # D6 Correction: Do not persist MOCK_PRACTICE_FUSION_CONNECTOR outside synthetic mode
-        actual_connector = "MOCK_PRACTICE_FUSION_CONNECTOR" if getattr(settings, "SYNTHETIC_TEST_ENABLED", False) else "UNAVAILABLE"
+        synthetic = getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+        if action.action_type == ActionType.RESUBMIT_CLAIM:
+            actual_connector = "MOCK_PAYER_CLAIMS_CONNECTOR" if synthetic else "UNAVAILABLE"
+        else:
+            actual_connector = "MOCK_PRACTICE_FUSION_CONNECTOR" if synthetic else "UNAVAILABLE"
 
         # Record Attempt
         attempt = ExecutionAttemptRecord(
@@ -348,6 +352,8 @@ class OperationalExecutionEngine(BaseService):
                 "connector": actual_connector,
                 "intent_hash": action.intent_hash
             }
+            if mock_result.get("submission"):
+                receipt["submission"] = mock_result["submission"]
             governance_registry.update_operational_action(action_id, new_status, mock_result["result"], receipt=receipt)
 
         return {
@@ -363,6 +369,8 @@ class OperationalExecutionEngine(BaseService):
         """
         # We can use the action target to deterministically mock failures for testing.
         target = action.target_reference
+        if action.action_type == ActionType.RESUBMIT_CLAIM and not target.endswith(("-FAIL", "-UNKNOWN", "-UNAVAILABLE")):
+            return self._mock_claim_resubmission(action)
 
         if target.endswith("-FAIL"):
             return {
@@ -388,6 +396,38 @@ class OperationalExecutionEngine(BaseService):
                 "error": None,
                 "message": "Operation successfully confirmed."
             }
+
+    def _mock_claim_resubmission(self, action: OperationalActionRecord) -> Dict[str, Any]:
+        """Synthetic payer connector: resubmits the denied claim of the target signal with the evidence
+        the EHR holds. It never reports success when required evidence is missing."""
+        from app.db.database import SessionLocal
+        from app.models.signal import SignalModel
+        db = SessionLocal()
+        try:
+            signal = db.query(SignalModel).filter(SignalModel.id == action.target_reference).first()
+            inputs = ((signal.metadata_data or {}).get("risk_inputs") or {}) if signal else {}
+        finally:
+            db.close()
+        claim_id = inputs.get("claim_id")
+        if not claim_id:
+            return {"result": ExecutionResult.FAILED, "error": "NO_CLAIM_DATA",
+                    "message": "No payer claim data is linked to this target, so nothing was resubmitted."}
+        required = list(inputs.get("required_evidence") or [])
+        available = set(inputs.get("evidence_available") or [])
+        missing = [e for e in required if e not in available]
+        if missing:
+            return {"result": ExecutionResult.FAILED, "error": "EVIDENCE_MISSING",
+                    "message": f"Claim {claim_id} was not resubmitted: evidence not in the EHR: {', '.join(missing)}."}
+        acknowledgement = f"ACK-{uuid.uuid4().hex[:8].upper()}"
+        payer = inputs.get("payer") or "payer"
+        return {
+            "result": ExecutionResult.SUCCESS,
+            "error": None,
+            "message": (f"Claim {claim_id} resubmitted to {payer} with evidence: {', '.join(required) or 'none'}. "
+                        f"Synthetic payer acknowledgement {acknowledgement}."),
+            "submission": {"claim_id": claim_id, "payer": payer, "evidence": required,
+                           "acknowledgement": acknowledgement, "connector": "synthetic payer (demo)"},
+        }
 
 
 operational_execution_engine = OperationalExecutionEngine()

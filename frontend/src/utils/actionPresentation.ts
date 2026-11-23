@@ -127,6 +127,7 @@ export function actionTypeLabel(actionType: string): string {
     SEND_NOTIFICATION: 'Send Notification',
     UPDATE_OPERATIONAL_STATUS: 'Update Operational Status',
     CREATE_FOLLOWUP_TASK: 'Create Follow-Up Task',
+    RESUBMIT_CLAIM: 'Resubmit Claim with Evidence',
   };
   return MAP[actionType] ?? actionType;
 }

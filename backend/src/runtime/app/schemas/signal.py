@@ -10,6 +10,8 @@ class SignalEvent(BaseModel):
     timestamp: str
     metadata: Optional[Dict[str, Any]] = None
     risk_level: Optional[str] = None
+    # Risk level evaluation from the source data (level, reason, deadline, Autopilot eligibility).
+    risk_evaluation: Optional[Dict[str, Any]] = None
     problem: Optional[str] = None
     reason: Optional[str] = None
     business_impact: Optional[str] = None

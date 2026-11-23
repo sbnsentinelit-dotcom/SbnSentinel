@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, CheckCircle2, AlertTriangle, ArrowRight, UserCircle2, FileText, Zap, X, AlertOctagon, Info, AlertCircle } from 'lucide-react';
+import { Activity, CheckCircle2, AlertTriangle, ArrowRight, UserCircle2, FileText, Zap, X, AlertOctagon, Info, AlertCircle, Clock } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '@/store';
 import { removeSignal, fetchHistoricalSignals } from '@/store/slices/signalSlice';
 import { formatMoney } from '@/utils/currency';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import { formatExposureTotals, isActionable, isPendingDecision } from '@/utils/signalSummary';
+import { byRiskPriority, formatExposureTotals, isActionable, isPendingDecision } from '@/utils/signalSummary';
 import { recordSignalReview } from '@/utils/signalReview';
+import { timeLeftText, timeLeftTone } from '@/utils/timeLeft';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || '';
 
@@ -55,8 +56,17 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
   // Decided or dismissed signals (recorded in the backend) stay visible in queue with their recorded status.
   const actionableEvents = rawEvents
     .filter(isActionable)
-    .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
+    .sort(byRiskPriority);
+  // The summary cards count only signals still waiting for a decision, so approving one
+  // (by a person or by Autopilot) lowers Critical Risks and Total Financial Exposure.
+  const pendingEvents = actionableEvents.filter(isPendingDecision);
   const [selectedEventIndex, setSelectedEventIndex] = useState<number>(0);
+  // Clock for the time-left badge: it counts down live while the screen is open.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
   const selectedEvent = actionableEvents.length > 0 && selectedEventIndex < actionableEvents.length ? actionableEvents[selectedEventIndex] : (actionableEvents.length > 0 ? actionableEvents[0] : null);
   const handleDismiss = async () => {
     if (selectedEvent) {
@@ -125,7 +135,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           </div>
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Critical Risks</div>
-            <div className="text-2xl font-black text-white">{actionableEvents.filter(e => e.risk_level === 'Critical' || e.risk_level === 'High').length}</div>
+            <div className="text-2xl font-black text-white">{pendingEvents.filter(e => e.risk_level === 'Critical' || e.risk_level === 'High').length}</div>
           </div>
         </div>
         <div className="bg-gradient-to-br from-[#1E1E2E] to-[#12121A] border border-white/10 p-6 rounded-[24px] shadow-lg flex items-center gap-4">
@@ -135,7 +145,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Total Financial Exposure</div>
             <div className="text-2xl font-black text-white">
-              {formatExposureTotals(actionableEvents.map((e) => e.estimated_financial_exposure))}
+              {formatExposureTotals(pendingEvents.map((e) => e.estimated_financial_exposure))}
             </div>
           </div>
         </div>
@@ -221,6 +231,20 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                       {getRiskIcon(selectedEvent.risk_level || 'Information')}
                       <span className="text-xs font-medium">Risk Level: <span className="font-bold text-white">{selectedEvent.risk_level || 'Information'}</span></span>
                     </div>
+                    {timeLeftText(selectedEvent.risk_evaluation?.deadline, nowMs) && (() => {
+                      const tone = timeLeftTone(selectedEvent.risk_evaluation?.deadline, nowMs);
+                      const toneClass = tone === 'critical' ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                        : tone === 'warning' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+                        : tone === 'passed' ? 'bg-violet-500/20 text-violet-300 border-violet-500/30'
+                        : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+                      return (
+                        <div className={`flex items-center gap-2 backdrop-blur-md px-3 py-1.5 rounded-lg border ${toneClass}`}
+                          title="Time left before the payer resubmission deadline">
+                          <Clock className="w-5 h-5" />
+                          <span className="text-xs font-medium">Time Left: <span className="font-bold text-white">{timeLeftText(selectedEvent.risk_evaluation?.deadline, nowMs)}</span></span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

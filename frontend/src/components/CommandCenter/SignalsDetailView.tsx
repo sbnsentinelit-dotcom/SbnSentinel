@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createGovernedRef, createPrimaryContext, createNestedContext } from '@/utils/governedNavigation';
 import { GovernedWorkspace } from '@/components/GovernedUI/GovernedWorkspace';
 import { RecommendationReview } from '@/components/GovernedUI/RecommendationReview';
+import { EvidenceRetrievalPanel } from '@/components/GovernedUI/EvidenceRetrievalPanel';
 import { ContextPanel } from '@/components/GovernedUI/ContextPanel';
 import { ProgressiveSection } from '@/components/GovernedUI/ProgressiveSection';
 import { createPortal } from 'react-dom';
@@ -339,6 +340,9 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
               <p className="text-xs text-white/90 font-semibold"><span className="text-white/50">Problem:</span> {selectedSignal.problem || 'None'}</p>
               <p className="text-xs text-white/90 font-semibold"><span className="text-white/50">Reason:</span> {selectedSignal.reason || 'None'}</p>
             </div>
+            {selectedSignal.metadata?.risk_kind === 'claim_denial' && (
+              <EvidenceRetrievalPanel signalId={selectedSignal.id} />
+            )}
 
             <div className="mt-8">
               <RecommendationReview

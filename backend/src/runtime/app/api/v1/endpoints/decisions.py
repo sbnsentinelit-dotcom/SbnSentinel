@@ -77,6 +77,9 @@ async def record_human_decision(
     return result
 
 
+from app.services.risk_level_evaluator import current_level  # noqa: E402
+
+
 @router.get("/review/{signal_id}")
 async def get_recommendation_review(
     signal_id: str,
@@ -146,7 +149,9 @@ async def get_recommendation_review(
         "mapping_version": authoritative_rec.mapping_version,
         "content": authoritative_rec.content,
         "status": authoritative_rec.status,
-        "priority": authoritative_rec.priority,
+        # The signal's evaluated risk level (from the source data) when it has one; else the stored one.
+        "priority": current_level(authoritative_rec.priority, metadata) if metadata.get("risk_kind")
+        else authoritative_rec.priority,
         "generated_at": authoritative_rec.generated_at
     }
 

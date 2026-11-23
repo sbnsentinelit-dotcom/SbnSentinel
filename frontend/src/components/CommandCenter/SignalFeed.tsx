@@ -4,10 +4,10 @@ import { createPortal } from 'react-dom';
 import { Activity, Phone, Mail, Calendar, ChevronRight, X, Clock, Database, Sparkles, Check, Shield, ArrowRight } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '@/store';
-import { incrementActionsTaken, SignalEvent, acknowledgeSignal, fetchSignalSummary, markSignalDecided } from '@/store/slices/signalSlice';
+import { incrementActionsTaken, SignalEvent, acknowledgeSignal, fetchSignalSummary, fetchHistoricalSignals, markSignalDecided } from '@/store/slices/signalSlice';
 import { recordSignalReview } from '@/utils/signalReview';
-import { isActionable } from '@/utils/signalSummary';
-import { runAutopilotForSignal } from '@/utils/autopilot';
+import { byRiskPriority, isPendingDecision } from '@/utils/signalSummary';
+import { isAutopilotEligible, runAutopilot } from '@/utils/autopilot';
 
 interface SignalFeedProps {
   setActiveTab?: (tab: string) => void;
@@ -39,11 +39,14 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
   const [autopilot, setAutopilot] = useState(false);
   const signals = useSelector((state: RootState) => state.signals.events);
   // Acknowledged, dismissed or decided signals (all stored in the backend) leave the live feed.
-  const activeSignals = signals.filter(s => s.status !== 'acknowledged' && s.status !== 'dismissed' && !s.decision);
+  // Notifications (e.g. evidence not found) belong to the bell, not to the live feed.
+  const isNotification = (s: SignalEvent) => Boolean((s.metadata as Record<string, unknown> | undefined)?.notification);
+  const activeSignals = signals.filter(s => s.status !== 'acknowledged' && s.status !== 'dismissed' && !s.decision && !isNotification(s));
 
-  // Autopilot: while it is on, every open signal with a recommendation (the existing queue first, then
-  // each new one) is approved, and its permitted action created and executed, one at a time, through
-  // the same governed APIs a user would use. Handled signals stay in the feed for a few seconds with
+  // Autopilot: while it is on, open Critical signals whose evaluation has every required input and
+  // piece of evidence (most urgent first) are approved, and their permitted action (a claim
+  // resubmission with the evidence) created and executed, one at a time, through the same governed
+  // APIs a user would use. All other signals wait for a human decision. Handled signals stay in the feed for a few seconds with
   // an "Auto-approved" badge, and the switch shows how many were approved in this session.
   const AUTO_BADGE_MS = 8000;
   const autopilotHandled = useRef<Set<string>>(new Set());
@@ -53,11 +56,13 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
   const [recentAuto, setRecentAuto] = useState<Record<string, SignalEvent>>({});
   useEffect(() => {
     if (!autopilot || autopilotBusy.current) return;
-    const next = activeSignals.find(s => isActionable(s) && !s.decision && !autopilotHandled.current.has(s.id));
+    // Only signals still waiting for a human decision (decided ones now stay visible in the queue, B-51).
+    const next = [...activeSignals].sort(byRiskPriority)
+      .find(s => isPendingDecision(s) && isAutopilotEligible(s) && !autopilotHandled.current.has(s.id));
     if (!next) return;
     autopilotBusy.current = true;
     autopilotHandled.current.add(next.id);
-    runAutopilotForSignal(next.id)
+    runAutopilot(next)
       .then(result => {
         if (!result.decision) return;
         const decision = result.decision;
@@ -75,8 +80,10 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
       .catch(err => console.error('Autopilot error:', err))
       .finally(() => {
         autopilotBusy.current = false;
-        // Card counts come from the backend, so they show the stored decisions.
+        // Card counts come from the backend, so they show the stored decisions; the reload also
+        // brings any new bell notification (evidence not found).
         dispatch(fetchSignalSummary());
+        dispatch(fetchHistoricalSignals());
         setAutopilotTick(t => t + 1);
       });
   }, [activeSignals, autopilot, autopilotTick, dispatch]);
@@ -84,7 +91,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ setActiveTab, onSignalSe
   // Feed items, in the store's order (newest first): open signals plus signals Autopilot approved in
   // the last few seconds (still in the store, now carrying their decision).
   const feedSignals = signals.filter(s =>
-    Boolean(recentAuto[s.id]) || (s.status !== 'acknowledged' && s.status !== 'dismissed' && !s.decision));
+    Boolean(recentAuto[s.id]) || (s.status !== 'acknowledged' && s.status !== 'dismissed' && !s.decision && !isNotification(s)));
 
   const getIcon = (type: string) => {
     switch (type) {
