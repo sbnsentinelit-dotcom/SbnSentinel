@@ -149,11 +149,116 @@ def _signal_matches_provider(signal: SignalModel, target_provider: Optional[str]
         if target in val or target_clean in val:
             return True
 
-    msg = (signal.message or "").lower()
-    if target_clean and target_clean in msg:
-        return True
-
     return False
+
+
+def _actionable(signal: SignalModel) -> bool:
+    return bool(signal.recommended_action) and signal.recommended_action not in _NOT_ACTIONABLE
+
+
+def _exposure(signal: SignalModel):
+    """(amount, currency) of a signal's estimated exposure, or (None, None) when not established."""
+    import re
+    amount = getattr(signal, "exposure_amount", None)
+    currency = getattr(signal, "exposure_currency", None) or (signal.metadata_data or {}).get("currency")
+    if amount is None:
+        text = signal.estimated_financial_exposure or ""
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text.replace(",", ""))
+        if match:
+            amount = float(match.group(1))
+        code = re.search(r"\b([A-Z]{3})\b", text)
+        currency = currency or (code.group(1) if code else None)
+    if amount is None or not currency:
+        return None, None
+    return float(amount), currency
+
+
+def _count_trend(current: int, previous: Optional[int], rising_is_good: Optional[bool]) -> dict:
+    """Change against the earlier cutoff. Without history at that cutoff the trend is unavailable;
+    from a verified zero the count change is shown without a percentage."""
+    if previous is None:
+        return {"trend": None, "trend_up": None, "trend_good": None, "previous": None}
+    diff = current - previous
+    if previous == 0:
+        trend = f"+{diff}" if diff >= 0 else str(diff)
+    else:
+        pct = diff / previous * 100
+        if abs(pct) > 999:
+            trend = ">+999%" if pct > 0 else "<-999%"
+        else:
+            whole = int(round(pct))
+            trend = f"+{whole}%" if whole >= 0 else f"{whole}%"
+    good = None if diff == 0 or rising_is_good is None else (diff > 0) == rising_is_good
+    return {"trend": trend, "trend_up": diff >= 0, "trend_good": good, "previous": previous}
+
+
+def _summary_payload(signals, decisions, cutoff_dt, prior_cutoff_dt, now_utc, now_clinic, is_uae) -> dict:
+    """Card values at the reporting cutoff, each compared with the same measure at the earlier
+    cutoff (open queue at both times; decisions and patient events recorded by each time)."""
+    def level(s):
+        return current_level(s.risk_level, s.metadata_data)
+
+    def measures(cut):
+        open_now = [s for s in signals if _is_open_at_cutoff(s, decisions, cut)]
+        awaiting = [s for s in open_now if _actionable(s)]
+        decided = 0
+        for s in signals:
+            dec = decisions.get(_journey_id(s))
+            dec_time = _to_utc_dt(dec.get("decision_timestamp")) if dec else None
+            if dec and (dec_time is None or dec_time <= cut):
+                decided += 1
+        return {
+            "active": len(open_now),
+            "awaiting": awaiting,
+            "critical": sum(1 for s in open_now if level(s) == "Critical"),
+            "critical_awaiting": sum(1 for s in awaiting if level(s) == "Critical"),
+            "high": sum(1 for s in open_now if level(s) == "High"),
+            "patient_flow": sum(1 for s in signals if s.type in ("EHR", "Patient")
+                                and (not s.timestamp or _to_utc_dt(s.timestamp) <= cut)),
+            "actions": decided,
+        }
+
+    now = measures(cutoff_dt)
+    has_history = any(s.timestamp and _to_utc_dt(s.timestamp) <= prior_cutoff_dt for s in signals)
+    prev = measures(prior_cutoff_dt) if has_history else None
+
+    def prev_of(key):
+        return prev[key] if prev else None
+
+    totals: dict = {}
+    known = 0
+    for s in now["awaiting"]:
+        amount, currency = _exposure(s)
+        if amount is not None:
+            totals[currency] = round(totals.get(currency, 0.0) + amount, 2)
+            known += 1
+
+    active_trend = _count_trend(now["active"], prev_of("active"), None)
+    clinic_ts_str = f"{now_clinic.strftime('%H:%M')} GST" if is_uae else f"{now_utc.strftime('%H:%M')} UTC"
+    return {
+        "active_signals": now["active"],
+        "awaiting_decision": len(now["awaiting"]),
+        "patient_flow": now["patient_flow"],
+        "critical_events": now["critical"],
+        "high_events": now["high"],
+        "critical_awaiting": now["critical_awaiting"],
+        "actions_taken": now["actions"],
+        "awaiting_exposure": {"totals": totals, "known_count": known, "count": len(now["awaiting"])},
+        "prior_active_signals": prev_of("active"),
+        "trend": active_trend["trend"],
+        "trend_up": active_trend["trend_up"],
+        "card_trends": {
+            "active_signals": active_trend,
+            "patient_flow": _count_trend(now["patient_flow"], prev_of("patient_flow"), None),
+            "critical_events": _count_trend(now["critical"], prev_of("critical"), False),
+            "actions_taken": _count_trend(now["actions"], prev_of("actions"), True),
+        },
+        "history_available": has_history,
+        "server_timestamp": now_utc.isoformat(),
+        "reporting_cutoff": cutoff_dt.isoformat(),
+        "clinic_timestamp": clinic_ts_str,
+        "clinic_timezone": "Asia/Dubai" if is_uae else "UTC",
+    }
 
 
 @router.get("/summary")
@@ -215,57 +320,17 @@ def get_signal_summary(
         try:
             from app.models.encounter import EncounterModel
             encs = db.query(
-                EncounterModel.id, EncounterModel.doctor_name, EncounterModel.provider_id
+                EncounterModel.id, EncounterModel.provider_id
             ).filter(EncounterModel.id.in_(enc_ids)).all()
             for row in encs:
-                encounter_providers[row.id] = row.doctor_name or row.provider_id or ""
+                encounter_providers[row.id] = row.provider_id or ""
         except Exception:
             pass
 
-    signals = [s for s in scoped_signals if _signal_matches_provider(s, provider, encounter_providers)]
+    signals = [s for s in scoped_signals if _signal_matches_provider(s, provider, encounter_providers)
+               and not (s.metadata_data or {}).get("notification")]  # bell notifications are not signals
     decisions = _recorded_decisions_by_journey(db, signals)
-
-    active_signals_list = [s for s in signals if _is_open_at_cutoff(s, decisions, cutoff_dt)]
-    active_count = len(active_signals_list)
-
-    prior_signals_list = [s for s in signals if _is_open_at_cutoff(s, decisions, prior_cutoff_dt)]
-    prior_count = len(prior_signals_list)
-
-    # Apples-to-apples open queue growth comparison (MS-008 §5 & SDS-001 §2)
-    if prior_count == 0:
-        if active_count == 0:
-            trend_str = "0%"
-            trend_up = True
-        else:
-            # Verified zero baseline shows count change without percentage (Check 3 & 01.4)
-            trend_str = f"+{active_count}"
-            trend_up = True
-    else:
-        pct = ((active_count - prior_count) / prior_count) * 100
-        trend_up = active_count >= prior_count
-        sign = "+" if active_count >= prior_count else "-"
-        pct_abs = abs(pct)
-        if abs(pct_abs - round(pct_abs)) < 0.01:
-            trend_str = f"{sign}{int(round(pct_abs))}%"
-        else:
-            trend_str = f"{sign}{pct_abs:.1f}%"
-
-    clinic_ts_str = f"{now_clinic.strftime('%H:%M')} GST" if is_uae else f"{now_utc.strftime('%H:%M')} UTC"
-
-    return {
-        "active_signals": active_count,
-        "patient_flow": sum(1 for s in signals if s.type in ("EHR", "Patient") and (not s.timestamp or _to_utc_dt(s.timestamp) <= cutoff_dt)),
-        "critical_events": sum(1 for s in active_signals_list
-                               if current_level(s.risk_level, s.metadata_data) in ("Critical", "High")),
-        "actions_taken": sum(1 for s in signals if decisions.get(_journey_id(s)) is not None),
-        "prior_active_signals": prior_count,
-        "trend": trend_str,
-        "trend_up": trend_up,
-        "server_timestamp": now_utc.isoformat(),
-        "reporting_cutoff": cutoff_dt.isoformat(),
-        "clinic_timestamp": clinic_ts_str,
-        "clinic_timezone": "Asia/Dubai" if is_uae else "UTC",
-    }
+    return _summary_payload(signals, decisions, cutoff_dt, prior_cutoff_dt, now_utc, now_clinic, is_uae)
 
 
 @router.get("")
@@ -315,10 +380,10 @@ def get_historical_signals(
         try:
             from app.models.encounter import EncounterModel
             encs = db.query(
-                EncounterModel.id, EncounterModel.doctor_name, EncounterModel.provider_id
+                EncounterModel.id, EncounterModel.provider_id
             ).filter(EncounterModel.id.in_(enc_ids)).all()
             for row in encs:
-                encounter_providers[row.id] = row.doctor_name or row.provider_id or ""
+                encounter_providers[row.id] = row.provider_id or ""
         except Exception:
             pass
 

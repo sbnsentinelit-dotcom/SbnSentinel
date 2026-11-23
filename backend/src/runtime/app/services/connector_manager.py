@@ -181,14 +181,10 @@ class ConnectorRuntimeStateManager:
                     cap_state = persisted.get("capability_state", "CONFIGURED")
 
                     if last_ver and (datetime.utcnow() - last_ver).total_seconds() > 3600:
-                        if conn.status in ("Connected", "Healthy") and not getattr(conn, "failure_code", None):
-                            # Heartbeat auto-renewal for healthy connected connectors
-                            last_ver = datetime.utcnow()
-                            is_stale = False
-                            cap_state = "AUTHORIZED_READY"
-                        else:
-                            cap_state = "STALE"
-                            is_stale = True
+                        # A status string is not verification: readiness older than an hour is stale
+                        # until the readiness probe verifies the connector again (Report 04 §04.2).
+                        cap_state = "STALE"
+                        is_stale = True
 
                     if getattr(conn, "failure_code", None) or conn.status in ("Warning", "Disconnected", "Error"):
                         cap_state = "DEGRADED"
@@ -203,12 +199,13 @@ class ConnectorRuntimeStateManager:
                     self._states[search_term] = dto
                     return dto
 
-                # If connector exists and is healthy/connected, auto-initialize readiness_state
+                # A stored "Connected" status without a verified readiness record is configured, not
+                # ready: only the readiness probe grants AUTHORIZED_READY (Report 04 §04.2).
                 if conn.status in ("Connected", "Healthy") and not getattr(conn, "failure_code", None):
                     dto = ConnectorRuntimeStateDTO(
-                        capability_state="AUTHORIZED_READY",
-                        is_stale=False,
-                        last_verified_at=datetime.utcnow()
+                        capability_state="CONFIGURED",
+                        is_stale=True,
+                        last_verified_at=None
                     )
                     self._states[name] = dto
                     self._states[search_term] = dto

@@ -46,13 +46,33 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
     return () => { cancelled = true; };
   }, []);
 
-  const healthPct = health ? Math.round((health.passed / health.total) * 100) : null;
-  const healthText = healthPct === null
-    ? 'System Health: Unavailable'
-    : `System Health: ${healthPct}% (${healthPct === 100 ? 'Healthy' : 'Degraded'})`;
+  // Readiness of the backend (checks passed), separate from connector state and data freshness.
+  const healthAllPass = !!health && health.passed === health.total;
+  const healthText = health === null
+    ? 'Readiness checks: Unavailable'
+    : `Readiness checks passed: ${health.passed}/${health.total}`;
+
+  // Card values from the server for the clinic's whole scope (not only the signals loaded here).
+  const [summary, setSummary] = useState<{
+    active_signals: number; awaiting_decision: number; critical_awaiting: number; clinic_timestamp?: string;
+    awaiting_exposure?: { totals: Record<string, number>; known_count: number; count: number };
+  } | null>(null);
+  const [summaryFailed, setSummaryFailed] = useState(false);
 
   const rawEvents = useSelector((state: RootState) => state.signals.events);
   const pendingEventsCount = rawEvents.filter(isPendingDecision).length;
+  const decidedCount = rawEvents.filter((e) => !!e.decision).length;
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithAuth(`${BACKEND}/api/v1/signals/summary`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const body = await res.json();
+        if (!cancelled) { setSummary(body); setSummaryFailed(false); }
+      })
+      .catch(() => { if (!cancelled) setSummaryFailed(true); });
+    return () => { cancelled = true; };
+  }, [rawEvents.length, decidedCount, pendingEventsCount]);
   // Decided or dismissed signals (recorded in the backend) stay visible in queue with their recorded status.
   const actionableEvents = rawEvents
     .filter(isActionable)
@@ -118,10 +138,10 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           </div>
           <p className="text-sm text-white/70 font-medium ml-12">Decision support & operational risk management for clinic leadership.</p>
         </div>
-        <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-5 py-2.5 rounded-full border border-emerald-100 shadow-sm">
+        <div className={`flex items-center gap-2 px-5 py-2.5 rounded-full border shadow-sm ${healthAllPass ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
           <div className="relative flex h-2.5 w-2.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            {healthAllPass && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+            <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${healthAllPass ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
           </div>
           <span className="text-sm font-bold tracking-wide">{healthText}</span>
         </div>
@@ -135,7 +155,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           </div>
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Critical Risks</div>
-            <div className="text-2xl font-black text-white">{pendingEvents.filter(e => e.risk_level === 'Critical' || e.risk_level === 'High').length}</div>
+            <div className="text-2xl font-black text-white">{summary ? summary.critical_awaiting : summaryFailed ? 'Unavailable' : pendingEvents.filter(e => e.risk_level === 'Critical').length}</div>
           </div>
         </div>
         <div className="bg-gradient-to-br from-[#1E1E2E] to-[#12121A] border border-white/10 p-6 rounded-[24px] shadow-lg flex items-center gap-4">
@@ -145,8 +165,15 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Total Financial Exposure</div>
             <div className="text-2xl font-black text-white">
-              {formatExposureTotals(pendingEvents.map((e) => e.estimated_financial_exposure))}
+              {summary?.awaiting_exposure
+                ? formatExposureTotals(Object.entries(summary.awaiting_exposure.totals).map(([cur, amt]) => `${cur} ${amt}`))
+                : summaryFailed ? 'Unavailable' : formatExposureTotals(pendingEvents.map((e) => e.estimated_financial_exposure))}
             </div>
+            {summary?.awaiting_exposure && (
+              <div className="text-[10px] text-white/50 font-semibold mt-1">
+                Known exposure for {summary.awaiting_exposure.known_count} of {summary.awaiting_exposure.count} signals awaiting a decision
+              </div>
+            )}
           </div>
         </div>
         <div className="bg-gradient-to-br from-[#1E1E2E] to-[#12121A] border border-white/10 p-6 rounded-[24px] shadow-lg flex items-center gap-4">
@@ -155,7 +182,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           </div>
           <div>
             <div className="text-xs text-white/50 font-bold uppercase tracking-widest mb-1">Active Connectors</div>
-            <div className="text-2xl font-black text-white">{connectors ? `${connectors.healthy} / ${connectors.total} Healthy` : '– / – Healthy'}</div>
+            <div className="text-2xl font-black text-white">{!connectors ? 'Unavailable' : connectors.total === 0 ? 'No external systems' : `${connectors.healthy} / ${connectors.total} Connected`}</div>
           </div>
         </div>
       </div>
@@ -166,11 +193,16 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           <div className="bg-gradient-to-br from-[#1E1E2E] to-[#12121A] rounded-3xl p-6 border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.3)] text-white">
             <h3 className="text-lg font-bold text-white mb-6 flex items-center justify-between">
               Priority Queue
-              <span className="bg-indigo-500/20 text-indigo-300 text-xs px-2.5 py-1 rounded-full font-bold">
-                {pendingEventsCount} Pending
+              <span className="bg-indigo-500/20 text-indigo-300 text-xs px-2.5 py-1 rounded-full font-bold" title={summary ? `${summary.active_signals} active signals in scope` : undefined}>
+                {summary ? summary.awaiting_decision : pendingEventsCount} Pending
               </span>
             </h3>
 
+            {summary && (
+              <p className="text-[10px] text-white/50 font-semibold -mt-4 mb-3">
+                {summary.active_signals} active · {summary.awaiting_decision} awaiting a decision · {actionableEvents.length} shown
+              </p>
+            )}
             <div className="space-y-3 overflow-y-auto custom-scrollbar max-h-[600px] pr-2">
               {actionableEvents.length > 0 ? actionableEvents.map((evt, idx) => (
                 <button
@@ -187,7 +219,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                     </div>
                     <div>
                       <div className="flex justify-between items-center mb-1">
-                        <h4 className="text-sm font-bold text-white capitalize">{evt.source} Notification</h4>
+                        <h4 className="text-sm font-bold text-white capitalize">{evt.type === 'EHR' ? 'Patient Event' : (evt.type || 'Signal')} Notification</h4>
                         <span className="text-xs text-white/60 font-medium">
                           {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
@@ -346,7 +378,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                   </p>
                   <div className="mt-4 pt-4 border-t border-emerald-500/20 flex items-start gap-2">
                     <div className="text-xs font-bold text-emerald-400/70 uppercase tracking-wide shrink-0 mt-0.5">Expected Outcome:</div>
-                    <div className="text-emerald-200/90 text-sm font-medium">{selectedEvent.expected_outcome || "Issue resolved."}</div>
+                    <div className="text-emerald-200/90 text-sm font-medium">{selectedEvent.expected_outcome || "Expected outcome unavailable"}</div>
                   </div>
                 </div>
               </div>

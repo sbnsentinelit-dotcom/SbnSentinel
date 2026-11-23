@@ -329,7 +329,7 @@ def seed_dubai_data(db: Session):
         ("CO15", "PRIOR_AUTH_OMISSION", "High", 350.0,
          "Pre-bill Prior Authorization Omission",
          "Claim scheduled for submission to Daman lacks mandatory pre-authorization approval reference.",
-         "High risk of immediate claim bounce under DHA / DHPO technical rejection rule TR-04.",
+         "High risk of immediate claim bounce under the DHA technical rejection rule TR-04.",
          "Attach pre-authorization approval code or request retrospective urgent review.",
          88),
         ("CO4", "MODIFIER_UNBUNDLING", "Critical", 520.0,
@@ -438,6 +438,8 @@ def seed_dubai_data(db: Session):
             "risk_kind": CLAIM_DENIAL,
             "risk_inputs": risk_inputs,
             "risk_evaluation": risk_eval.to_dict(),
+            "origin": {"kind": "simulator", "import_id": None, "sheet": None,
+                       "external_record_id": None, "connector_instance_id": None},
         }
 
         if sig_id in existing_signals:

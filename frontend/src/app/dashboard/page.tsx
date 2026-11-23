@@ -140,6 +140,37 @@ export default function Dashboard() {
 
   const cardTrend = (key: 'signals' | 'patient_flow' | 'critical' | 'decisions') =>
     trendFromDaily(dailyStats.map((d) => d[key]));
+  // Card trend from the server: the same measure at the earlier cutoff (unavailable without history).
+  const serverTrend = (key: 'active_signals' | 'patient_flow' | 'critical_events' | 'actions_taken') => {
+    const t = stats.cardTrends?.[key];
+    return {
+      trend: t?.trend ?? 'Unavailable',
+      trendUp: t?.trend_up ?? undefined,
+      trendGood: t ? t.trend_good : null,
+    };
+  };
+
+  // The clinic's providers as its records name them (for the provider filter).
+  const [providers, setProviders] = useState<Array<{ name: string; specialty: string | null }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/patient-flow/providers`)
+      .then(async (res) => { if (res.ok && !cancelled) setProviders(await res.json()); })
+      .catch(() => { if (!cancelled) setProviders([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Today's patient flow split, calculated from the clinic's visit events.
+  const [flowToday, setFlowToday] = useState<{ arrivals: number; waiting: number; in_care: number; checked_out: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/patient-flow?period=Today`)
+      .then(async (res) => { if (res.ok && !cancelled) setFlowToday((await res.json())?.today || null); })
+      .catch(() => { if (!cancelled) setFlowToday(null); });
+    load();
+    const timer = setInterval(load, 30000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
 
   useSignalStream({ provider: selectedProvider, date_range: selectedDate });
 
@@ -689,13 +720,7 @@ export default function Dashboard() {
                       <div id="providerDropdown" className="hidden absolute right-0 mt-3 w-[320px] bg-[#120524] border border-white/20 rounded-[16px] shadow-2xl z-50 animate-in fade-in slide-in-from-top-2">
                         <div className="p-2 space-y-1">
                           <button onClick={(e) => { setSelectedProvider('All Providers'); e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} className={`w-full text-left px-3 py-2 text-sm font-bold rounded-[10px] transition-colors ${selectedProvider === 'All Providers' ? 'text-white bg-white/10' : 'text-[#9CA3AF] hover:text-white hover:bg-white/10'}`}>All Providers</button>
-                          {[
-                            { name: 'Dr. Sarah Mitchell', specialty: 'Internal Medicine' },
-                            { name: 'Dr. James Okafor', specialty: 'Family Medicine' },
-                            { name: 'Dr. Priya Sharma', specialty: 'Urgent Care' },
-                            { name: 'Dr. Carlos Rivera', specialty: 'Pediatrics' },
-                            { name: 'Dr. Emily Chen', specialty: 'Cardiology' }
-                          ].map((doc) => (
+                          {providers.map((doc) => (
                             <button 
                               key={doc.name} 
                               onClick={(e) => { setSelectedProvider(doc.name); e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} 
@@ -750,8 +775,7 @@ export default function Dashboard() {
                   <StatCard 
                     title="Active Signals" 
                     value={stats.activeSignals === 'Unavailable' ? 'Unavailable' : stats.activeSignals.toLocaleString()} 
-                    trend={stats.trend || cardTrend('signals').trend} 
-                    trendUp={stats.trendUp !== undefined ? stats.trendUp : cardTrend('signals').trendUp} 
+                    {...serverTrend('active_signals')}  
                     sparkData={cardTrend('signals').sparkData} 
                     lastUpdated={stats.lastUpdated}
                     isStale={stats.isStale}
@@ -762,7 +786,8 @@ export default function Dashboard() {
                   <StatCard 
                     title="Patient Flow" 
                     value={stats.patientFlow === 'Unavailable' ? 'Unavailable' : stats.patientFlow.toString()} 
-                    {...cardTrend('patient_flow')} 
+                    sparkData={cardTrend('patient_flow').sparkData}
+                    {...serverTrend('patient_flow')}  
                     lastUpdated={stats.lastUpdated}
                     isStale={stats.isStale}
                     color="green" 
@@ -772,7 +797,8 @@ export default function Dashboard() {
                   <StatCard 
                     title="Critical Events" 
                     value={stats.criticalEvents === 'Unavailable' ? 'Unavailable' : stats.criticalEvents.toString()} 
-                    {...cardTrend('critical')} 
+                    sparkData={cardTrend('critical').sparkData}
+                    {...serverTrend('critical_events')}  
                     lastUpdated={stats.lastUpdated}
                     isStale={stats.isStale}
                     color="red" 
@@ -782,7 +808,8 @@ export default function Dashboard() {
                   <StatCard 
                     title="Actions Taken" 
                     value={stats.actionsTaken === 'Unavailable' ? 'Unavailable' : stats.actionsTaken.toString()} 
-                    {...cardTrend('decisions')} 
+                    sparkData={cardTrend('decisions').sparkData}
+                    {...serverTrend('actions_taken')}  
                     lastUpdated={stats.lastUpdated}
                     isStale={stats.isStale}
                     color="purple" 
@@ -805,35 +832,47 @@ export default function Dashboard() {
                       <Users className="w-5 h-5 text-[#2563EB]" /> Patient Flow Overview
                     </h3>
                     <div className="flex items-center justify-between">
-                      <div className="relative w-32 h-32">
-                        <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
-                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#F3F4F6" strokeWidth="4"></circle>
-                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#10B981" strokeWidth="4" strokeDasharray="72 28" strokeDashoffset="0"></circle>
-                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#120524" strokeWidth="4" strokeDasharray="18 82" strokeDashoffset="-72"></circle>
-                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#F59E0B" strokeWidth="4" strokeDasharray="10 90" strokeDashoffset="-90"></circle>
-                        </svg>
-                        <div className="absolute inset-0 flex flex-col items-center justify-center">
-                          <span className="text-2xl font-extrabold text-white">{stats.patientFlow}</span>
-                          <span className="text-[9px] text-white/70 font-bold uppercase">Total Patients</span>
-                        </div>
-                      </div>
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-sm">
-                          <div className="w-2.5 h-2.5 rounded-full bg-[#10B981]"></div>
-                          <span className="text-white/70 font-medium">Checked In</span>
-                          <span className="font-bold text-white ml-2">72% ({Math.round((typeof stats.patientFlow === 'number' ? stats.patientFlow : 0) * 0.72)})</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm">
-                          <div className="w-2.5 h-2.5 rounded-full bg-[#120524]"></div>
-                          <span className="text-white/70 font-medium">In Consultation</span>
-                          <span className="font-bold text-white ml-2">18% ({Math.round((typeof stats.patientFlow === 'number' ? stats.patientFlow : 0) * 0.18)})</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm">
-                          <div className="w-2.5 h-2.5 rounded-full bg-[#F59E0B]"></div>
-                          <span className="text-white/70 font-medium">Checked Out</span>
-                          <span className="font-bold text-white ml-2">10% ({Math.round((typeof stats.patientFlow === 'number' ? stats.patientFlow : 0) * 0.10)})</span>
-                        </div>
-                      </div>
+                      {(() => {
+                        const total = flowToday ? flowToday.waiting + flowToday.in_care + flowToday.checked_out : 0;
+                        const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
+                        const parts = flowToday ? [
+                          { label: 'Checked In', n: flowToday.waiting, color: '#10B981' },
+                          { label: 'In Consultation', n: flowToday.in_care, color: '#120524' },
+                          { label: 'Checked Out', n: flowToday.checked_out, color: '#F59E0B' },
+                        ] : [];
+                        let offset = 0;
+                        return (
+                          <>
+                            <div className="relative w-32 h-32">
+                              <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
+                                <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#F3F4F6" strokeWidth="4"></circle>
+                                {parts.map((part) => {
+                                  const share = total > 0 ? (part.n / total) * 100 : 0;
+                                  const circle = share > 0 ? (
+                                    <circle key={part.label} cx="18" cy="18" r="15.915" fill="transparent" stroke={part.color} strokeWidth="4" strokeDasharray={`${share} ${100 - share}`} strokeDashoffset={-offset}></circle>
+                                  ) : null;
+                                  offset += share;
+                                  return circle;
+                                })}
+                              </svg>
+                              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                <span className="text-2xl font-extrabold text-white">{flowToday ? flowToday.arrivals : 'Unavailable'}</span>
+                                <span className="text-[9px] text-white/70 font-bold uppercase">Patients Today</span>
+                              </div>
+                            </div>
+                            <div className="space-y-3">
+                              {parts.length === 0 && <p className="text-xs text-white/50">Patient flow unavailable.</p>}
+                              {parts.map((part) => (
+                                <div key={part.label} className="flex items-center gap-2 text-sm">
+                                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: part.color }}></div>
+                                  <span className="text-white/70 font-medium">{part.label}</span>
+                                  <span className="font-bold text-white ml-2">{pct(part.n)}% ({part.n})</span>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                     <div className="mt-6 flex justify-center">
                       <button onClick={() => setActiveTab('patient-flow')} className="text-sm font-bold text-[#2563EB] flex items-center gap-1 hover:underline cursor-pointer">View Full Report <ChevronRight className="w-4 h-4" /></button>

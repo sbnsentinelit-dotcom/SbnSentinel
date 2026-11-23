@@ -454,8 +454,19 @@ def snapshot(db: Session, clinic_id: str, period: str = "Today", department: Opt
     last_event = max((e.event_time for e in events if e.event_time <= now), default=None)
     synced = bool(last_event and now - last_event <= timedelta(minutes=policy.feed_fresh_minutes))
 
+    today_start = local_midnight_utc(policy.local_date(now), policy)
+    today_states = [s for s in now_states.values() if s.arrived_at >= today_start or s.is_open]
+    counts_today = {
+        "arrivals": sum(1 for s in today_states if s.arrived_at >= today_start),
+        "waiting": sum(1 for s in today_states if s.waiting),
+        "in_care": sum(1 for s in today_states if s.is_open and not s.waiting),
+        "checked_out": sum(1 for s in today_states if s.t(CHECKED_OUT) and s.t(CHECKED_OUT) >= today_start),
+        "cancelled": sum(1 for s in today_states if s.t(CANCELLED) and s.t(CANCELLED) >= today_start),
+    }
+
     return {
         "clinic_id": clinic_id, "as_of": iso(now), "period": period, "mode": mode,
+        "today": counts_today,
         "cutoff": iso(cutoff), "timezone": policy.timezone_label,
         "policy": {"id": policy.policy_id, "version": policy.version,
                    "delay_threshold_minutes": policy.delay_threshold_minutes,

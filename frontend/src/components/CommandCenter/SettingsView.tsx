@@ -95,14 +95,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
 
   // Integrations States
   const [selectedApiRegion, setSelectedApiRegion] = useState<'UAE' | 'US'>('UAE');
-  const [uaePlatform, setUaePlatform] = useState('DHPO eClaimLink (Dubai Health Authority)');
-  const [uaeFacilityId, setUaeFacilityId] = useState('DXB-CLINIC-01');
-  const [uaeEndpoint, setUaeEndpoint] = useState('https://services.dhpo.eclaimlink.ae/api/v1');
-  const [uaeApiKey, setUaeApiKey] = useState('dha_live_sec_99420x_dxb');
-  const [uaePayerNetwork, setUaePayerNetwork] = useState('Daman (National Health Insurance)');
+  const [uaePlatform, setUaePlatform] = useState('Claims clearinghouse');
+  const [uaeFacilityId, setUaeFacilityId] = useState('');
+  const [uaeEndpoint, setUaeEndpoint] = useState('');
+  const [uaeApiKey, setUaeApiKey] = useState('');
+  const [uaePayerNetwork, setUaePayerNetwork] = useState('');
   
-  const [usPlatform, setUsPlatform] = useState('Epic Systems (FHIR R4)');
-  const [usEndpoint, setUsEndpoint] = useState('https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4');
+  const [usPlatform, setUsPlatform] = useState('EHR system (FHIR R4)');
+  const [usEndpoint, setUsEndpoint] = useState('');
   const [usClientId, setUsClientId] = useState('');
   const [usClientSecret, setUsClientSecret] = useState('');
   const [usPracticeId, setUsPracticeId] = useState('');
@@ -111,11 +111,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [apiConnectionStatus, setApiConnectionStatus] = useState<'connected' | 'disconnected'>('connected');
   const [apiTestSuccessMsg, setApiTestSuccessMsg] = useState<string | null>(null);
 
-  const [integrationsList, setIntegrationsList] = useState([
-    { id: 'openai', name: 'OpenAI Intelligence Engine', type: 'AI Diagnostic Copilot', connected: true, lastSync: '5 mins ago' },
-    { id: 'twilio', name: 'Twilio Outbound Gateway', type: 'Voice & SMS API', connected: true, lastSync: '10 mins ago' },
-    { id: 'gmail', name: 'Google Workspace Gmail', type: 'Secure Communication', connected: true, lastSync: '30 mins ago' },
-  ]);
+  // Integrations come from the server only (no pre-filled "connected" entries).
+  const [integrationsList, setIntegrationsList] = useState<Array<{ id: string; name: string; type: string; connected: boolean; lastSync: string }>>([]);
 
   // Billing States
   const [regionCurrency, setRegionCurrency] = useState('USD');
@@ -946,7 +943,7 @@ document.body
                             : 'text-white/60 hover:text-white'
                         }`}
                       >
-                        <span className="text-base">🇦🇪</span> UAE Clinic (DHA / Malaffi)
+                        <span className="text-base">🇦🇪</span> UAE Clinic
                       </button>
                       <button
                         onClick={() => setSelectedApiRegion('US')}
@@ -1005,8 +1002,9 @@ document.body
                                      const data = await res.json();
                                      const hasActive = Array.isArray(data) && data.length > 0;
                                      if (hasActive) {
-                                        setApiTestSuccessMsg(`✔ Handshake verified! Connected to ${selectedApiRegion === 'UAE' ? 'DHPO UAE' : 'US EHR'} (24ms latency).`);
-                                        showToast(`API Verified: ${selectedApiRegion} connection is live.`);
+                                        // The server answered; each connector is verified by its own readiness probe.
+                                        setApiTestSuccessMsg(`ℹ Server reachable. ${data.length} external connector(s) configured; their status is shown under Connectors.`);
+                                        showToast('Server reachable.');
                                      } else {
                                         setApiTestSuccessMsg('ℹ Source profile is Workbook-only. Zero external connectors configured.');
                                         showToast('Workbook Mode: No external systems integrated.');
@@ -1078,7 +1076,7 @@ document.body
                       <div>
                          <h4 className="text-lg font-bold text-white flex items-center gap-2">
                             <Key className="w-5 h-5 text-amber-400" />
-                            {selectedApiRegion === 'UAE' ? 'Configure UAE Clinic Integration (DHPO / Malaffi)' : 'Configure US EHR Integration (SMART on FHIR)'}
+                            {selectedApiRegion === 'UAE' ? 'Configure UAE Clinic Integration' : 'Configure US EHR Integration'}
                          </h4>
                          <p className="text-xs text-white/60 mt-0.5">
                             Enter your clinic's direct credentials. Sentinel uses these to authenticate and sync clinical encounters and revenue claims automatically.
@@ -1099,11 +1097,10 @@ document.body
                                onChange={(e) => setUaePlatform(e.target.value)}
                                className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-emerald-500"
                             >
-                               <option value="DHPO eClaimLink (Dubai Health Authority)">DHPO eClaimLink (Dubai Health Authority)</option>
-                               <option value="Malaffi HIE (Department of Health Abu Dhabi)">Malaffi HIE (Department of Health Abu Dhabi)</option>
-                               <option value="Riayati MOHAP (Northern Emirates)">Riayati MOHAP (Northern Emirates)</option>
-                               <option value="Nabidh Unified Health Record (Dubai)">Nabidh Unified Health Record (Dubai)</option>
-                               <option value="Custom UAE Clearinghouse Gateway">Custom UAE Clearinghouse Gateway</option>
+                               <option value="Claims clearinghouse">Claims clearinghouse</option>
+                               <option value="Health information exchange">Health information exchange</option>
+                               <option value="Unified health record">Unified health record</option>
+                               <option value="Custom gateway">Custom gateway</option>
                             </select>
                          </div>
 
@@ -1124,7 +1121,7 @@ document.body
                                type="text"
                                value={uaeEndpoint}
                                onChange={(e) => setUaeEndpoint(e.target.value)}
-                               placeholder="https://services.dhpo.eclaimlink.ae/api/v1"
+                               placeholder="https://clearinghouse.example/api"
                                className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-emerald-500 font-mono"
                             />
                          </div>
@@ -1168,9 +1165,8 @@ document.body
                                className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-blue-500"
                             >
                                <option value="Standard FHIR R4 Connector">Standard FHIR R4 Connector</option>
-                               <option value="Epic Systems (FHIR R4)">Epic Systems (FHIR R4)</option>
-                               <option value="Cerner / Oracle Health">Cerner / Oracle Health</option>
-                               <option value="AthenaHealth API">AthenaHealth API</option>
+                               <option value="EHR system (FHIR R4)">EHR system (FHIR R4)</option>
+                               <option value="EHR system (other API)">EHR system (other API)</option>
                                <option value="Kareo / Tebra Billing">Kareo / Tebra Billing</option>
                             </select>
                          </div>
@@ -1309,7 +1305,7 @@ document.body
                   <div className="grid grid-cols-3 gap-4">
                     {[
                       { id: 'starter', name: 'Sentinel Starter', price: '$0', desc: 'Basic patient logs tracking.' },
-                      { id: 'professional', name: 'Sentinel Pro', price: '$199/mo', desc: 'Complete revenue logs, outbound Twilio dialer.' },
+                      { id: 'professional', name: 'Sentinel Pro', price: '$199/mo', desc: 'Complete revenue logs, outbound dialer.' },
                       { id: 'enterprise', name: 'Sentinel Enterprise', price: '$499/mo', desc: 'Unlimited attending staff, multi-tenant EHR sync.' }
                     ].map(plan => (
                       <div 

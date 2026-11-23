@@ -153,12 +153,25 @@ class DecisionContextEngine(BaseService):
                 "evidence_package": evidence_package,
                 "event_type": event_type}
         elif has_no_show:
-            context = {
-                "primary_context": "Operational",
-                "secondary_context": "Provider Schedule Gap",
-                "reason": "Appointment marked as No-Show observed; capacity status recorded.",
-                "evidence_package": evidence_package,
-                "event_type": event_type}
+            # The no-show is the observed fact. A lost slot (schedule gap) is asserted only when a
+            # schedule record confirms the slot stayed empty; otherwise its capacity effect is unknown.
+            slot_status = next((str(get_fact_value(e)).upper() for e in evidence_items
+                                if get_fact_key(e) in ("slot_status", "schedule_slot_status")), None)
+            if slot_status in ("UNFILLED", "EMPTY", "OPEN"):
+                context = {
+                    "primary_context": "Operational",
+                    "secondary_context": "Provider Schedule Gap",
+                    "reason": "Appointment marked as no-show; the schedule record shows the slot was not refilled.",
+                    "evidence_package": evidence_package,
+                    "event_type": event_type}
+            else:
+                context = {
+                    "primary_context": "Operational",
+                    "secondary_context": "Patient No-Show",
+                    "reason": ("Appointment marked as no-show. No schedule record shows whether the slot was "
+                               "refilled, so the capacity effect is unknown."),
+                    "evidence_package": evidence_package,
+                    "event_type": event_type}
         elif has_wait_time:
             context = {
                 "primary_context": "Operational",

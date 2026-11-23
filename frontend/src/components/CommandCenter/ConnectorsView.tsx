@@ -93,7 +93,7 @@ export const ConnectorsView: React.FC = () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               id: 'conn_practicefusion_real',
-              name: 'Practice Fusion EHR',
+              name: 'EHR connector',
               type: 'EHR System',
               status: 'Connected',
               config: { auth_code: code }
@@ -191,7 +191,13 @@ export const ConnectorsView: React.FC = () => {
 
     try {
       // 2. Redirect to Practice Fusion Official Auth Portal for OAuth Code Grant
-      const clientId = process.env.NEXT_PUBLIC_PRACTICE_FUSION_CLIENT_ID || 'demo_client_12345';
+      const clientId = process.env.NEXT_PUBLIC_PRACTICE_FUSION_CLIENT_ID;
+      if (!clientId) {
+        // No invented client id: the EHR connection needs the clinic's configured OAuth client.
+        setConnectError('The EHR client ID is not configured for this clinic. Contact your administrator.');
+        setIsSubmitting(false);
+        return;
+      }
       const redirectUri = encodeURIComponent(`${window.location.origin}/dashboard`);
       const scopes = encodeURIComponent('patient/*.read user/Patient.read offline_access');
       const state = 'sbn_auth_state_' + Math.random().toString(36).substring(7);
@@ -258,7 +264,7 @@ export const ConnectorsView: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 md:gap-0">
         <div>
           <h2 className="text-3xl font-extrabold text-white mb-1">Connections & Connectors</h2>
-          <p className="text-sm text-white/70 font-medium">Manage connected health systems, Twilio voice gateways, and billing APIs.</p>
+          <p className="text-sm text-white/70 font-medium">Manage connected health systems, voice gateways, and billing APIs.</p>
         </div>
         <button 
           onClick={() => {
@@ -469,9 +475,8 @@ export const ConnectorsView: React.FC = () => {
                 <div className="space-y-3 mb-6">
                    {[
                      { name: 'Standard FHIR R4 EHR', type: 'EHR System' },
-                     { name: 'Cerner Millennium', type: 'EHR System' },
-                     { name: 'AthenaHealth API', type: 'EHR API' },
-                     { name: 'Salesforce Health Cloud', type: 'CRM' },
+                     { name: 'EHR system (other API)', type: 'EHR API' },
+                     { name: 'CRM system', type: 'CRM' },
                      { name: 'Custom Developer Hook', type: 'Developer API' }
                    ].map(sys => (
                      <div 

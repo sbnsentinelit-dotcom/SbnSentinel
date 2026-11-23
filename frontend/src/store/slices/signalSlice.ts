@@ -55,6 +55,8 @@ export interface SignalStats {
   actionsTaken: number | 'Unavailable';
   trend?: string;
   trendUp?: boolean;
+  /** Per-card change against the earlier cutoff, from the server summary (null trend = unavailable). */
+  cardTrends?: Record<string, { trend: string | null; trend_up: boolean | null; trend_good: boolean | null }>;
   lastUpdated?: string;
   isStale?: boolean;
 }
@@ -101,6 +103,9 @@ export interface SignalSummary {
   reporting_cutoff?: string;
   clinic_timestamp?: string;
   clinic_timezone?: string;
+  awaiting_decision?: number;
+  critical_awaiting?: number;
+  card_trends?: SignalStats['cardTrends'];
 }
 
 export const fetchHistoricalSignals = createAsyncThunk(
@@ -204,6 +209,7 @@ const signalSlice = createSlice({
       state.stats.actionsTaken = action.payload.actions_taken;
       state.stats.trend = action.payload.trend;
       state.stats.trendUp = action.payload.trend_up;
+      state.stats.cardTrends = action.payload.card_trends;
       state.stats.lastUpdated = action.payload.clinic_timestamp || action.payload.server_timestamp;
       state.stats.isStale = false;
     });
@@ -224,15 +230,12 @@ const signalSlice = createSlice({
         state.stats.actionsTaken = summary.actions_taken;
         state.stats.trend = summary.trend;
         state.stats.trendUp = summary.trend_up;
+        state.stats.cardTrends = summary.card_trends;
         state.stats.lastUpdated = summary.clinic_timestamp || summary.server_timestamp;
         state.stats.isStale = false;
-      } else {
-        const open = state.events.filter(e => !e.decision && e.status !== 'dismissed');
-        state.stats.activeSignals = open.length;
-        state.stats.patientFlow = state.events.filter(e => e.type === 'EHR' || e.type === 'Patient').length;
-        state.stats.criticalEvents = open.filter(e => e.risk_level === 'Critical' || e.risk_level === 'High').length;
-        state.stats.actionsTaken = state.events.filter(e => e.decision).length;
       }
+      // Without a server summary the cards keep their last confirmed values (marked by
+      // lastUpdated); the loaded list is never counted, it does not hold the full scope.
     });
   }
 });
