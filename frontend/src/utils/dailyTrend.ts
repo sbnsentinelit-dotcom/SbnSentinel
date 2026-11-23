@@ -3,16 +3,21 @@
  * oldest first with today last. The path uses the card's 120 x 40 drawing box.
  */
 export function trendFromDaily(counts: number[]): { trend: string; trendUp: boolean; sparkData: string } {
-  const values = counts.length > 0 ? counts : [0];
+  if (!counts || counts.length === 0) {
+    return { trend: 'Unavailable', trendUp: true, sparkData: 'M0,38 L120,38' };
+  }
+  const values = counts;
   const today = values.at(-1) ?? 0;
   const yesterday = values.length > 1 ? values.at(-2) ?? 0 : 0;
 
   let trend: string;
   if (yesterday === 0) {
-    trend = today === 0 ? '0%' : 'new';
+    trend = today === 0 ? '0%' : (today > 0 ? `+${today}` : `${today}`);
   } else {
     const pct = ((today - yesterday) / yesterday) * 100;
-    trend = `${Math.abs(Math.round(pct * 10) / 10)}%`;
+    const sign = today >= yesterday ? '+' : '-';
+    const absVal = Math.abs(Math.round(pct * 10) / 10);
+    trend = absVal === 0 ? '0%' : `${sign}${absVal}%`;
   }
   const trendUp = today >= yesterday;
 

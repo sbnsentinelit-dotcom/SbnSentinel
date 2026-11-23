@@ -1,10 +1,12 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useDispatch } from 'react-redux';
-import { addSignal, setConnectionStatus } from '@/store/slices/signalSlice';
+import { addSignal, setConnectionStatus, fetchSignalSummary } from '@/store/slices/signalSlice';
+import type { AppDispatch } from '@/store';
 import { getBackendWsBaseUrl } from '@/utils/wsUrl';
 
-export const useSignalStream = () => {
-  const dispatch = useDispatch();
+export const useSignalStream = (filterParams?: { provider?: string; date_range?: string; cutoff?: string }) => {
+  const dispatch = useDispatch<AppDispatch>();
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const wsUrl = getBackendWsBaseUrl();
@@ -21,6 +23,14 @@ export const useSignalStream = () => {
       try {
         const signal = JSON.parse(event.data);
         dispatch(addSignal(signal));
+
+        // Coalesce overlapping requests on incoming delivery (Report 01 §01.2)
+        if (refreshTimeoutRef.current) {
+          clearTimeout(refreshTimeoutRef.current);
+        }
+        refreshTimeoutRef.current = setTimeout(() => {
+          dispatch(fetchSignalSummary(filterParams));
+        }, 300);
       } catch (err) {
         console.error("Failed to parse signal message:", err);
       }
@@ -28,11 +38,13 @@ export const useSignalStream = () => {
 
     ws.onclose = () => {
       dispatch(setConnectionStatus(false));
-      // Basic reconnect logic could go here
     };
 
     return () => {
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
       ws.close();
     };
-  }, [dispatch]);
+  }, [dispatch, filterParams?.provider, filterParams?.date_range, filterParams?.cutoff]);
 };

@@ -34,8 +34,8 @@ export const RevenueImpact: React.FC<RevenueImpactProps> = ({ setActiveTab }) =>
   // The trend below is drawn only from payments received (stored receipts).
   const weekTotal = receipts.reduce((sum, r) => sum + r.amount, 0);
   const hasFinancialEvidence = weekTotal > 0;
-  const resolvedActions = stats.actionsTaken || 0;
-  const criticalCount = stats.criticalEvents || 0;
+  const resolvedActions = typeof stats.actionsTaken === 'number' ? stats.actionsTaken : 0;
+  const criticalCount = typeof stats.criticalEvents === 'number' ? stats.criticalEvents : 0;
 
   // Chart geometry kept from the original design: x 20..400, y 10 (top) .. 110 (bottom).
   const maxAmount = Math.max(0, ...receipts.map((r) => r.amount));

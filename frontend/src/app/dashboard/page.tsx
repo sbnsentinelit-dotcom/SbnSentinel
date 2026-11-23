@@ -27,7 +27,7 @@ import { SuperAdminPanel } from '@/components/CommandCenter/SuperAdminPanel';
 import { useSignalStream } from '@/hooks/useSignalStream';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '@/store';
-import { fetchHistoricalSignals } from '@/store/slices/signalSlice';
+import { fetchHistoricalSignals, fetchSignalSummary } from '@/store/slices/signalSlice';
 
 interface ClinicalReminder {
   id: string;
@@ -116,12 +116,15 @@ export default function Dashboard() {
   const stats = useSelector((state: RootState) => state.signals.stats);
   const signals = useSelector((state: RootState) => state.signals.events);
   const isStreamConnected = useSelector((state: RootState) => state.signals.isConnected);
+  const [selectedProvider, setSelectedProvider] = useState<string>('All Providers');
+  const [selectedDate, setSelectedDate] = useState<string>('Today');
   // Daily counts (last 7 days, today last) behind the stat-card trends and sparklines.
   const [dailyStats, setDailyStats] = useState<Array<{ signals: number; patient_flow: number; critical: number; decisions: number }>>([]);
 
   useEffect(() => {
-    dispatch(fetchHistoricalSignals());
-  }, [dispatch]);
+    dispatch(fetchHistoricalSignals({ provider: selectedProvider, date_range: selectedDate }));
+    dispatch(fetchSignalSummary({ provider: selectedProvider, date_range: selectedDate }));
+  }, [dispatch, selectedProvider, selectedDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +141,7 @@ export default function Dashboard() {
   const cardTrend = (key: 'signals' | 'patient_flow' | 'critical' | 'decisions') =>
     trendFromDaily(dailyStats.map((d) => d[key]));
 
-  useSignalStream();
+  useSignalStream({ provider: selectedProvider, date_range: selectedDate });
 
   const [toast, setToast] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -679,13 +682,13 @@ export default function Dashboard() {
                       >
                         <Users className="w-4 h-4 text-[#2E1055]" />
                         <div className="text-sm">
-                          <span className="font-bold text-white" id="selectedProviderText">All Providers</span>
+                          <span className="font-bold text-white" id="selectedProviderText">{selectedProvider}</span>
                         </div>
                         <ChevronDown className="w-4 h-4 text-white/70" />
                       </div>
                       <div id="providerDropdown" className="hidden absolute right-0 mt-3 w-[320px] bg-[#120524] border border-white/20 rounded-[16px] shadow-2xl z-50 animate-in fade-in slide-in-from-top-2">
                         <div className="p-2 space-y-1">
-                          <button onClick={(e) => { document.getElementById('selectedProviderText')!.innerText = 'All Providers'; e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} className="w-full text-left px-3 py-2 text-sm font-bold text-white hover:bg-white/10 rounded-[10px] transition-colors">All Providers</button>
+                          <button onClick={(e) => { setSelectedProvider('All Providers'); e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} className={`w-full text-left px-3 py-2 text-sm font-bold rounded-[10px] transition-colors ${selectedProvider === 'All Providers' ? 'text-white bg-white/10' : 'text-[#9CA3AF] hover:text-white hover:bg-white/10'}`}>All Providers</button>
                           {[
                             { name: 'Dr. Sarah Mitchell', specialty: 'Internal Medicine' },
                             { name: 'Dr. James Okafor', specialty: 'Family Medicine' },
@@ -695,8 +698,8 @@ export default function Dashboard() {
                           ].map((doc) => (
                             <button 
                               key={doc.name} 
-                              onClick={(e) => { document.getElementById('selectedProviderText')!.innerText = doc.name; e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} 
-                              className="w-full flex items-center justify-between px-3 py-2.5 text-sm font-bold text-[#9CA3AF] hover:text-white hover:bg-white/10 rounded-[10px] transition-colors"
+                              onClick={(e) => { setSelectedProvider(doc.name); e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} 
+                              className={`w-full flex items-center justify-between px-3 py-2.5 text-sm font-bold rounded-[10px] transition-colors ${selectedProvider === doc.name ? 'text-white bg-white/10' : 'text-[#9CA3AF] hover:text-white hover:bg-white/10'}`}
                             >
                               <span>{doc.name}</span>
                               <span className="text-xs font-normal opacity-50 whitespace-nowrap">{doc.specialty}</span>
@@ -712,16 +715,21 @@ export default function Dashboard() {
                       >
                         <Calendar className="w-4 h-4 text-white/70" />
                         <div className="text-sm">
-                          <span className="font-bold text-white" id="selectedDateText">Today</span>
+                          <span className="font-bold text-white" id="selectedDateText">{selectedDate}</span>
                         </div>
                         <ChevronDown className="w-4 h-4 text-white/70" />
                       </button>
                       <div id="dateDropdown" className="hidden absolute right-0 mt-3 w-48 bg-[#120524] border border-white/20 rounded-[16px] shadow-2xl z-50 animate-in fade-in slide-in-from-top-2">
                         <div className="p-2 space-y-1">
-                          <button onClick={(e) => { document.getElementById('selectedDateText')!.innerText = 'Today'; e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} className="w-full text-left px-3 py-2 text-sm font-bold text-white hover:bg-white/10 rounded-[10px] transition-colors">Today</button>
-                          <button onClick={(e) => { document.getElementById('selectedDateText')!.innerText = 'Yesterday'; e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} className="w-full text-left px-3 py-2 text-sm font-bold text-[#4B5563] hover:text-white hover:bg-white/10 rounded-[10px] transition-colors">Yesterday</button>
-                          <button onClick={(e) => { document.getElementById('selectedDateText')!.innerText = 'Last 7 Days'; e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} className="w-full text-left px-3 py-2 text-sm font-bold text-[#4B5563] hover:text-white hover:bg-white/10 rounded-[10px] transition-colors">Last 7 Days</button>
-                          <button onClick={(e) => { document.getElementById('selectedDateText')!.innerText = 'Last 30 Days'; e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }} className="w-full text-left px-3 py-2 text-sm font-bold text-[#4B5563] hover:text-white hover:bg-white/10 rounded-[10px] transition-colors">Last 30 Days</button>
+                          {['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days'].map((d) => (
+                            <button
+                              key={d}
+                              onClick={(e) => { setSelectedDate(d); e.currentTarget.parentElement?.parentElement?.classList.add('hidden'); }}
+                              className={`w-full text-left px-3 py-2 text-sm font-bold rounded-[10px] transition-colors ${selectedDate === d ? 'text-white bg-white/10' : 'text-[#4B5563] hover:text-white hover:bg-white/10'}`}
+                            >
+                              {d}
+                            </button>
+                          ))}
                         </div>
                       </div>
                     </div>
@@ -739,10 +747,48 @@ export default function Dashboard() {
 
                 {/* Stats Row */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <StatCard title="Active Signals" value={stats.activeSignals.toLocaleString()} {...cardTrend('signals')} color="blue" icon={Activity} onClick={() => setActiveTab('intelligence')} />
-                  <StatCard title="Patient Flow" value={stats.patientFlow.toString()} {...cardTrend('patient_flow')} color="green" icon={Users} onClick={() => setActiveTab('patient-flow')} />
-                  <StatCard title="Critical Events" value={stats.criticalEvents.toString()} {...cardTrend('critical')} color="red" icon={AlertTriangle} onClick={() => setActiveTab('clinical-logs')} />
-                  <StatCard title="Actions Taken" value={stats.actionsTaken.toString()} {...cardTrend('decisions')} color="purple" icon={CheckCircle2} onClick={() => setActiveTab('intelligence')} />
+                  <StatCard 
+                    title="Active Signals" 
+                    value={stats.activeSignals === 'Unavailable' ? 'Unavailable' : stats.activeSignals.toLocaleString()} 
+                    trend={stats.trend || cardTrend('signals').trend} 
+                    trendUp={stats.trendUp !== undefined ? stats.trendUp : cardTrend('signals').trendUp} 
+                    sparkData={cardTrend('signals').sparkData} 
+                    lastUpdated={stats.lastUpdated}
+                    isStale={stats.isStale}
+                    color="blue" 
+                    icon={Activity} 
+                    onClick={() => setActiveTab('intelligence')} 
+                  />
+                  <StatCard 
+                    title="Patient Flow" 
+                    value={stats.patientFlow === 'Unavailable' ? 'Unavailable' : stats.patientFlow.toString()} 
+                    {...cardTrend('patient_flow')} 
+                    lastUpdated={stats.lastUpdated}
+                    isStale={stats.isStale}
+                    color="green" 
+                    icon={Users} 
+                    onClick={() => setActiveTab('patient-flow')} 
+                  />
+                  <StatCard 
+                    title="Critical Events" 
+                    value={stats.criticalEvents === 'Unavailable' ? 'Unavailable' : stats.criticalEvents.toString()} 
+                    {...cardTrend('critical')} 
+                    lastUpdated={stats.lastUpdated}
+                    isStale={stats.isStale}
+                    color="red" 
+                    icon={AlertTriangle} 
+                    onClick={() => setActiveTab('clinical-logs')} 
+                  />
+                  <StatCard 
+                    title="Actions Taken" 
+                    value={stats.actionsTaken === 'Unavailable' ? 'Unavailable' : stats.actionsTaken.toString()} 
+                    {...cardTrend('decisions')} 
+                    lastUpdated={stats.lastUpdated}
+                    isStale={stats.isStale}
+                    color="purple" 
+                    icon={CheckCircle2} 
+                    onClick={() => setActiveTab('intelligence')} 
+                  />
                 </div>
 
                 {/* Main Middle Row */}
@@ -775,17 +821,17 @@ export default function Dashboard() {
                         <div className="flex items-center gap-2 text-sm">
                           <div className="w-2.5 h-2.5 rounded-full bg-[#10B981]"></div>
                           <span className="text-white/70 font-medium">Checked In</span>
-                          <span className="font-bold text-white ml-2">72% ({Math.round(stats.patientFlow * 0.72)})</span>
+                          <span className="font-bold text-white ml-2">72% ({Math.round((typeof stats.patientFlow === 'number' ? stats.patientFlow : 0) * 0.72)})</span>
                         </div>
                         <div className="flex items-center gap-2 text-sm">
                           <div className="w-2.5 h-2.5 rounded-full bg-[#120524]"></div>
                           <span className="text-white/70 font-medium">In Consultation</span>
-                          <span className="font-bold text-white ml-2">18% ({Math.round(stats.patientFlow * 0.18)})</span>
+                          <span className="font-bold text-white ml-2">18% ({Math.round((typeof stats.patientFlow === 'number' ? stats.patientFlow : 0) * 0.18)})</span>
                         </div>
                         <div className="flex items-center gap-2 text-sm">
                           <div className="w-2.5 h-2.5 rounded-full bg-[#F59E0B]"></div>
                           <span className="text-white/70 font-medium">Checked Out</span>
-                          <span className="font-bold text-white ml-2">10% ({Math.round(stats.patientFlow * 0.10)})</span>
+                          <span className="font-bold text-white ml-2">10% ({Math.round((typeof stats.patientFlow === 'number' ? stats.patientFlow : 0) * 0.10)})</span>
                         </div>
                       </div>
                     </div>

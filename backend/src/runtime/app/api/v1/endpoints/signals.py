@@ -1,3 +1,5 @@
+from typing import Optional
+from datetime import datetime, timedelta, timezone
 from app.models.user import UserRole
 from app.api.deps import RoleChecker
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
@@ -76,47 +78,270 @@ def _review_status(signal: SignalModel) -> str:
     return ((signal.metadata_data or {}).get("review_state") or {}).get("status", "active")
 
 
+def _to_utc_dt(val) -> Optional[datetime]:
+    if val is None:
+        return None
+    if isinstance(val, str):
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    elif isinstance(val, datetime):
+        dt = val
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt
+
+
 def _is_open(signal: SignalModel, decisions) -> bool:
     """Open = no human decision recorded and not dismissed."""
     return decisions.get(_journey_id(signal)) is None and _review_status(signal) != "dismissed"
 
 
+def _is_open_at_cutoff(signal: SignalModel, decisions: dict, cutoff_dt: datetime) -> bool:
+    """Open queue at cutoff: created at or before cutoff, not dismissed before cutoff,
+    and no human decision recorded on its journey at or before cutoff."""
+    sig_time = _to_utc_dt(signal.timestamp)
+    cutoff_utc = _to_utc_dt(cutoff_dt)
+    if sig_time and cutoff_utc and sig_time > cutoff_utc:
+        return False
+
+    meta = signal.metadata_data or {}
+    review = meta.get("review_state") or {}
+    if review.get("status") == "dismissed":
+        dismissed_at = _to_utc_dt(review.get("at"))
+        if dismissed_at and cutoff_utc and dismissed_at <= cutoff_utc:
+            return False
+        if not dismissed_at:
+            return False
+
+    jid = _journey_id(signal)
+    dec = decisions.get(jid)
+    if dec:
+        dec_time = _to_utc_dt(dec.get("decision_timestamp"))
+        if dec_time and cutoff_utc and dec_time <= cutoff_utc:
+            return False
+        if not dec_time:
+            return False
+
+    return True
+
+
+def _signal_matches_provider(signal: SignalModel, target_provider: Optional[str], encounter_providers: dict) -> bool:
+    if not target_provider or target_provider.lower().strip() in ("all", "all providers", "", "*"):
+        return True
+    target = target_provider.lower().strip()
+    target_clean = target.replace("dr.", "").replace("dr ", "").strip()
+
+    meta = signal.metadata_data or {}
+    for field in ("provider", "provider_id", "doctor_name", "doctor"):
+        val = str(meta.get(field) or "").lower()
+        if val and (target in val or target_clean in val):
+            return True
+
+    eid = meta.get("encounter_id")
+    if eid and eid in encounter_providers:
+        val = encounter_providers[eid].lower()
+        if target in val or target_clean in val:
+            return True
+
+    msg = (signal.message or "").lower()
+    if target_clean and target_clean in msg:
+        return True
+
+    return False
+
+
 @router.get("/summary")
-def get_signal_summary(db: Session = Depends(get_db),
-                       current_user=Depends(RoleChecker([UserRole.CLINIC_MANAGER.value,
-                                                         UserRole.ORGANIZATION_ADMINISTRATOR.value,
-                                                         UserRole.SYSTEM_ADMINISTRATOR.value]))):
-    """Dashboard card counts over every signal in the user's scope (not only the listed ones)."""
-    signals = _scoped_signal_query(db, current_user).all()
+def get_signal_summary(
+    provider: Optional[str] = None,
+    date_range: Optional[str] = None,
+    cutoff: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(RoleChecker([
+        UserRole.CLINIC_MANAGER.value,
+        UserRole.ORGANIZATION_ADMINISTRATOR.value,
+        UserRole.SYSTEM_ADMINISTRATOR.value
+    ]))
+):
+    """Authoritative dashboard card counts with provider and reporting cutoff filtering."""
+    from app.core.config import settings
+    is_uae = getattr(settings, "DEPLOYMENT_REGION", "") == "UAE" or getattr(settings, "CLINIC_TIMEZONE", "") == "GST"
+    clinic_tz = timezone(timedelta(hours=4)) if is_uae else timezone.utc
+    now_utc = datetime.now(timezone.utc)
+    now_clinic = now_utc.astimezone(clinic_tz)
+
+    # 1. Determine reporting cutoff & prior cutoff
+    if cutoff:
+        cutoff_dt = _to_utc_dt(cutoff) or now_utc
+        prior_cutoff_dt = cutoff_dt - timedelta(days=1)
+    elif date_range:
+        dr = date_range.lower().strip()
+        if dr in ("today", "current"):
+            cutoff_dt = now_utc
+            prior_cutoff_dt = now_utc - timedelta(days=1)
+        elif dr in ("yesterday",):
+            yesterday_clinic_end = (now_clinic - timedelta(days=1)).replace(
+                hour=23, minute=59, second=59, microsecond=999999
+            )
+            cutoff_dt = yesterday_clinic_end.astimezone(timezone.utc)
+            prior_cutoff_dt = (yesterday_clinic_end - timedelta(days=1)).astimezone(timezone.utc)
+        elif dr in ("last 7 days", "7d", "last_7_days"):
+            cutoff_dt = now_utc
+            prior_cutoff_dt = now_utc - timedelta(days=7)
+        elif dr in ("last 30 days", "30d", "last_30_days"):
+            cutoff_dt = now_utc
+            prior_cutoff_dt = now_utc - timedelta(days=30)
+        else:
+            cutoff_dt = now_utc
+            prior_cutoff_dt = now_utc - timedelta(days=1)
+    else:
+        cutoff_dt = now_utc
+        prior_cutoff_dt = now_utc - timedelta(days=1)
+
+    scoped_signals = _scoped_signal_query(db, current_user).all()
+
+    encounter_providers = {}
+    enc_ids = [
+        s.metadata_data.get("encounter_id")
+        for s in scoped_signals
+        if s.metadata_data and s.metadata_data.get("encounter_id")
+    ]
+    if enc_ids:
+        try:
+            from app.models.encounter import EncounterModel
+            encs = db.query(
+                EncounterModel.id, EncounterModel.doctor_name, EncounterModel.provider_id
+            ).filter(EncounterModel.id.in_(enc_ids)).all()
+            for row in encs:
+                encounter_providers[row.id] = row.doctor_name or row.provider_id or ""
+        except Exception:
+            pass
+
+    signals = [s for s in scoped_signals if _signal_matches_provider(s, provider, encounter_providers)]
     decisions = _recorded_decisions_by_journey(db, signals)
-    open_signals = [s for s in signals if _is_open(s, decisions)]
+
+    active_signals_list = [s for s in signals if _is_open_at_cutoff(s, decisions, cutoff_dt)]
+    active_count = len(active_signals_list)
+
+    prior_signals_list = [s for s in signals if _is_open_at_cutoff(s, decisions, prior_cutoff_dt)]
+    prior_count = len(prior_signals_list)
+
+    # Apples-to-apples open queue growth comparison (MS-008 §5 & SDS-001 §2)
+    if prior_count == 0:
+        if active_count == 0:
+            trend_str = "0%"
+            trend_up = True
+        else:
+            # Verified zero baseline shows count change without percentage (Check 3 & 01.4)
+            trend_str = f"+{active_count}"
+            trend_up = True
+    else:
+        pct = ((active_count - prior_count) / prior_count) * 100
+        trend_up = active_count >= prior_count
+        sign = "+" if active_count >= prior_count else "-"
+        pct_abs = abs(pct)
+        if abs(pct_abs - round(pct_abs)) < 0.01:
+            trend_str = f"{sign}{int(round(pct_abs))}%"
+        else:
+            trend_str = f"{sign}{pct_abs:.1f}%"
+
+    clinic_ts_str = f"{now_clinic.strftime('%H:%M')} GST" if is_uae else f"{now_utc.strftime('%H:%M')} UTC"
+
     return {
-        "active_signals": len(open_signals),
-        "patient_flow": sum(1 for s in signals if s.type in ("EHR", "Patient")),
-        "critical_events": sum(1 for s in open_signals
+        "active_signals": active_count,
+        "patient_flow": sum(1 for s in signals if s.type in ("EHR", "Patient") and (not s.timestamp or _to_utc_dt(s.timestamp) <= cutoff_dt)),
+        "critical_events": sum(1 for s in active_signals_list
                                if current_level(s.risk_level, s.metadata_data) in ("Critical", "High")),
         "actions_taken": sum(1 for s in signals if decisions.get(_journey_id(s)) is not None),
+        "prior_active_signals": prior_count,
+        "trend": trend_str,
+        "trend_up": trend_up,
+        "server_timestamp": now_utc.isoformat(),
+        "reporting_cutoff": cutoff_dt.isoformat(),
+        "clinic_timestamp": clinic_ts_str,
+        "clinic_timezone": "Asia/Dubai" if is_uae else "UTC",
     }
 
 
 @router.get("")
 @router.get("/")
-def get_historical_signals(db: Session = Depends(get_db),
-                           current_user=Depends(RoleChecker([UserRole.CLINIC_MANAGER.value,
-                                                             UserRole.ORGANIZATION_ADMINISTRATOR.value,
-                                                             UserRole.SYSTEM_ADMINISTRATOR.value]))):
-    """The newest signals plus every open signal that carries a recommendation, so open
-    items are never pushed out of the list by newer events."""
+def get_historical_signals(
+    provider: Optional[str] = None,
+    date_range: Optional[str] = None,
+    cutoff: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(RoleChecker([
+        UserRole.CLINIC_MANAGER.value,
+        UserRole.ORGANIZATION_ADMINISTRATOR.value,
+        UserRole.SYSTEM_ADMINISTRATOR.value
+    ]))
+):
+    """The newest signals plus every open signal that carries a recommendation, scoped by provider/cutoff."""
+    from app.core.config import settings
+    is_uae = getattr(settings, "DEPLOYMENT_REGION", "") == "UAE" or getattr(settings, "CLINIC_TIMEZONE", "") == "GST"
+    clinic_tz = timezone(timedelta(hours=4)) if is_uae else timezone.utc
+    now_utc = datetime.now(timezone.utc)
+    now_clinic = now_utc.astimezone(clinic_tz)
+
+    if cutoff:
+        cutoff_dt = _to_utc_dt(cutoff) or now_utc
+    elif date_range:
+        dr = date_range.lower().strip()
+        if dr in ("yesterday",):
+            yesterday_clinic_end = (now_clinic - timedelta(days=1)).replace(
+                hour=23, minute=59, second=59, microsecond=999999
+            )
+            cutoff_dt = yesterday_clinic_end.astimezone(timezone.utc)
+        else:
+            cutoff_dt = now_utc
+    else:
+        cutoff_dt = now_utc
+
     scoped = _scoped_signal_query(db, current_user)
-    recent = scoped.order_by(SignalModel.timestamp.desc()).limit(RECENT_SIGNAL_LIMIT).all()
+    all_scoped = scoped.all()
+
+    encounter_providers = {}
+    enc_ids = [
+        s.metadata_data.get("encounter_id")
+        for s in all_scoped
+        if s.metadata_data and s.metadata_data.get("encounter_id")
+    ]
+    if enc_ids:
+        try:
+            from app.models.encounter import EncounterModel
+            encs = db.query(
+                EncounterModel.id, EncounterModel.doctor_name, EncounterModel.provider_id
+            ).filter(EncounterModel.id.in_(enc_ids)).all()
+            for row in encs:
+                encounter_providers[row.id] = row.doctor_name or row.provider_id or ""
+        except Exception:
+            pass
+
+    filtered_scoped = [
+        s for s in all_scoped
+        if _signal_matches_provider(s, provider, encounter_providers)
+        and (not s.timestamp or _to_utc_dt(s.timestamp) <= cutoff_dt)
+    ]
+    filtered_scoped_ids = {s.id for s in filtered_scoped}
+
+    recent = [s for s in scoped.order_by(SignalModel.timestamp.desc()).limit(RECENT_SIGNAL_LIMIT).all() if s.id in filtered_scoped_ids]
     recent_ids = {s.id for s in recent}
-    candidates = (scoped.filter(SignalModel.recommended_action.isnot(None),
-                                SignalModel.recommended_action.notin_(_NOT_ACTIONABLE))
-                  .order_by(SignalModel.priority_score.desc(), SignalModel.timestamp.desc())
-                  .all())
-    candidates = [s for s in candidates if s.id not in recent_ids]
+    candidates = [
+        s for s in (
+            scoped.filter(
+                SignalModel.recommended_action.isnot(None),
+                SignalModel.recommended_action.notin_(_NOT_ACTIONABLE)
+            ).order_by(SignalModel.priority_score.desc(), SignalModel.timestamp.desc()).all()
+        )
+        if s.id in filtered_scoped_ids and s.id not in recent_ids
+    ]
     candidate_decisions = _recorded_decisions_by_journey(db, candidates)
-    older_open = [s for s in candidates if _is_open(s, candidate_decisions)][:OPEN_SIGNAL_LIMIT]
+    older_open = [s for s in candidates if _is_open_at_cutoff(s, candidate_decisions, cutoff_dt)][:OPEN_SIGNAL_LIMIT]
     signals = recent + older_open
     decisions = _recorded_decisions_by_journey(db, signals)
     result = []
@@ -296,7 +521,8 @@ def retrieve_signal_evidence(signal_id: str, db: Session = Depends(get_db),
 @router.on_event("startup")
 async def startup_event():
     from app.core.config import settings
-    if (getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+    if (getattr(settings, "ENABLE_LIVE_SIMULATION", False)
+            and getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
             and getattr(settings, "ENABLE_PRACTICE_FUSION", False)
             and getattr(settings, "SOURCE_PROFILE", "") != "workbook"
             and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION"):

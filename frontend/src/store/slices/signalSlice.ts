@@ -48,15 +48,21 @@ export interface SignalEvent {
   } | null;
 }
 
+export interface SignalStats {
+  activeSignals: number | 'Unavailable';
+  patientFlow: number | 'Unavailable';
+  criticalEvents: number | 'Unavailable';
+  actionsTaken: number | 'Unavailable';
+  trend?: string;
+  trendUp?: boolean;
+  lastUpdated?: string;
+  isStale?: boolean;
+}
+
 interface SignalState {
   events: SignalEvent[];
   isConnected: boolean;
-  stats: {
-    activeSignals: number;
-    patientFlow: number;
-    criticalEvents: number;
-    actionsTaken: number;
-  };
+  stats: SignalStats;
 }
 
 const defaultInitialSignals: SignalEvent[] = [];
@@ -69,6 +75,10 @@ const initialState: SignalState = {
     patientFlow: 0,
     criticalEvents: 0,
     actionsTaken: 0,
+    trend: '0%',
+    trendUp: true,
+    lastUpdated: undefined,
+    isStale: false,
   }
 };
 
@@ -84,13 +94,26 @@ export interface SignalSummary {
   patient_flow: number;
   critical_events: number;
   actions_taken: number;
+  prior_active_signals?: number;
+  trend?: string;
+  trend_up?: boolean;
+  server_timestamp?: string;
+  reporting_cutoff?: string;
+  clinic_timestamp?: string;
+  clinic_timezone?: string;
 }
 
 export const fetchHistoricalSignals = createAsyncThunk(
   'signals/fetchHistoricalSignals',
-  async () => {
+  async (params?: { provider?: string; date_range?: string; cutoff?: string }) => {
     try {
-      const response = await fetchWithAuth('/api/v1/signals');
+      const q = new URLSearchParams();
+      if (params?.provider && params.provider !== 'All Providers') q.set('provider', params.provider);
+      if (params?.date_range) q.set('date_range', params.date_range);
+      if (params?.cutoff) q.set('cutoff', params.cutoff);
+      const qs = q.toString() ? `?${q.toString()}` : '';
+
+      const response = await fetchWithAuth(`/api/v1/signals${qs}`);
       if (!response.ok) {
         throw new Error('Failed to fetch signals');
       }
@@ -98,7 +121,7 @@ export const fetchHistoricalSignals = createAsyncThunk(
       // Card counts cover every signal in scope, not only the listed ones.
       let summary: SignalSummary | null = null;
       try {
-        const summaryRes = await fetchWithAuth('/api/v1/signals/summary');
+        const summaryRes = await fetchWithAuth(`/api/v1/signals/summary${qs}`);
         if (summaryRes.ok) summary = await summaryRes.json();
       } catch {
         summary = null;
@@ -111,11 +134,17 @@ export const fetchHistoricalSignals = createAsyncThunk(
   }
 );
 
-/** Reloads only the card counts (cheap); used while Autopilot works through the queue. */
+/** Reloads only the card counts (cheap); used while Autopilot works through the queue or on live updates. */
 export const fetchSignalSummary = createAsyncThunk(
   'signals/fetchSignalSummary',
-  async () => {
-    const res = await fetchWithAuth('/api/v1/signals/summary');
+  async (params?: { provider?: string; date_range?: string; cutoff?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.provider && params.provider !== 'All Providers') q.set('provider', params.provider);
+    if (params?.date_range) q.set('date_range', params.date_range);
+    if (params?.cutoff) q.set('cutoff', params.cutoff);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+
+    const res = await fetchWithAuth(`/api/v1/signals/summary${qs}`);
     if (!res.ok) throw new Error('Failed to fetch signal summary');
     return (await res.json()) as SignalSummary;
   }
@@ -139,17 +168,8 @@ const signalSlice = createSlice({
           if (idx === -1) break;
           state.events.splice(idx, 1);
         }
-        
-        // Update stats based on incoming signal
-        state.stats.activeSignals += 1;
-        
-        if (signal.type === 'EHR' || signal.type === 'Patient') {
-          state.stats.patientFlow += 1;
-        }
-        
-        if (signal.risk_level === 'Critical' || signal.risk_level === 'High') {
-          state.stats.criticalEvents += 1;
-        }
+        // Local arithmetic removed per Report 01 (01.2).
+        // Authoritative card counts are refreshed via backend summary.
       }
     },
     setConnectionStatus(state, action: PayloadAction<boolean>) {
@@ -162,7 +182,9 @@ const signalSlice = createSlice({
       }
     },
     incrementActionsTaken(state) {
-      state.stats.actionsTaken += 1;
+      if (typeof state.stats.actionsTaken === 'number') {
+        state.stats.actionsTaken += 1;
+      }
     },
     /** Records a decision stored in the backend on the signal held in the store. */
     markSignalDecided(state, action: PayloadAction<{ id: string; decision: NonNullable<SignalEvent['decision']> }>) {
@@ -171,7 +193,7 @@ const signalSlice = createSlice({
     },
     removeSignal(state, action: PayloadAction<string>) {
       state.events = state.events.filter(e => e.id !== action.payload);
-      state.stats.activeSignals = Math.max(0, state.stats.activeSignals - 1);
+      // Local arithmetic removed per Report 01 (01.2).
     }
   },
   extraReducers: (builder) => {
@@ -180,6 +202,16 @@ const signalSlice = createSlice({
       state.stats.patientFlow = action.payload.patient_flow;
       state.stats.criticalEvents = action.payload.critical_events;
       state.stats.actionsTaken = action.payload.actions_taken;
+      state.stats.trend = action.payload.trend;
+      state.stats.trendUp = action.payload.trend_up;
+      state.stats.lastUpdated = action.payload.clinic_timestamp || action.payload.server_timestamp;
+      state.stats.isStale = false;
+    });
+    builder.addCase(fetchSignalSummary.rejected, (state) => {
+      if (state.stats.activeSignals === undefined || state.stats.activeSignals === null) {
+        state.stats.activeSignals = 'Unavailable';
+      }
+      state.stats.isStale = true;
     });
     builder.addCase(fetchHistoricalSignals.fulfilled, (state, action) => {
       // The backend list is authoritative: replace local state even when it is empty.
@@ -190,6 +222,10 @@ const signalSlice = createSlice({
         state.stats.patientFlow = summary.patient_flow;
         state.stats.criticalEvents = summary.critical_events;
         state.stats.actionsTaken = summary.actions_taken;
+        state.stats.trend = summary.trend;
+        state.stats.trendUp = summary.trend_up;
+        state.stats.lastUpdated = summary.clinic_timestamp || summary.server_timestamp;
+        state.stats.isStale = false;
       } else {
         const open = state.events.filter(e => !e.decision && e.status !== 'dismissed');
         state.stats.activeSignals = open.length;

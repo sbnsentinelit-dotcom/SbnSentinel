@@ -715,7 +715,8 @@ def test_signals_verifiable_origin_in_workbook_profile():
 
     mock_user = MagicMock()
     mock_user.clinic_id = "DXB-CLINIC-01"
-    mock_user.role = "System Administrator"
+    mock_user.org_id = "ORG-UAE-01"
+    mock_user.role = "Clinic Manager"
 
     with SessionLocal() as db:
         signals = get_historical_signals(db=db, current_user=mock_user)
@@ -729,6 +730,128 @@ def test_signals_verifiable_origin_in_workbook_profile():
                 if origin.get("kind") == "workbook":
                     assert origin.get("import_id") == "REC-WB-DXB-01"
                     assert origin.get("connector_instance_id") is None
+
+
+def test_report_01_simulator_opt_in():
+    from app.core.config import settings
+    from app.services.simulation_engine import simulation_engine
+    assert getattr(settings, "ENABLE_LIVE_SIMULATION", None) is False
+    # Calling start() must not start simulation when ENABLE_LIVE_SIMULATION is False
+    simulation_engine.start()
+    assert simulation_engine.running is False
+
+
+def test_report_01_check_2_provider_scope_and_date_cutoff():
+    from app.models.signal import SignalModel
+    from app.api.v1.endpoints.signals import get_signal_summary
+    from unittest.mock import MagicMock
+
+    clinic = "DXB-CLINIC-R01"
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+
+    with SessionLocal() as db:
+        try:
+            db.query(SignalModel).filter(SignalModel.clinic_id == clinic).delete()
+            db.commit()
+
+            # Provider A: 1 yesterday, 1 today
+            s1 = SignalModel(
+                id="sig_r01_a1", clinic_id=clinic, org_id="ORG-TEST", source="Test", type="Claim",
+                timestamp=yesterday,
+                metadata_data={"provider": "Dr. Sarah Mitchell", "review_state": {"status": "active"}}
+            )
+            s2 = SignalModel(
+                id="sig_r01_a2", clinic_id=clinic, org_id="ORG-TEST", source="Test", type="Claim",
+                timestamp=now,
+                metadata_data={"provider": "Dr. Sarah Mitchell", "review_state": {"status": "active"}}
+            )
+            # Provider B: 1 today
+            s3 = SignalModel(
+                id="sig_r01_b1", clinic_id=clinic, org_id="ORG-TEST", source="Test", type="Claim",
+                timestamp=now,
+                metadata_data={"provider": "Dr. James Okafor", "review_state": {"status": "active"}}
+            )
+            db.add_all([s1, s2, s3])
+            db.commit()
+
+            mock_user = MagicMock()
+            mock_user.clinic_id = clinic
+            mock_user.org_id = "ORG-TEST"
+            mock_user.role = "Clinic Manager"
+
+            # Check: All Providers = 3
+            all_sum = get_signal_summary(provider="All Providers", db=db, current_user=mock_user)
+            assert all_sum["active_signals"] == 3
+
+            # Check: Provider A = 2
+            prov_a_sum = get_signal_summary(provider="Dr. Sarah Mitchell", db=db, current_user=mock_user)
+            assert prov_a_sum["active_signals"] == 2
+
+            # Check: Provider B = 1
+            prov_b_sum = get_signal_summary(provider="Dr. James Okafor", db=db, current_user=mock_user)
+            assert prov_b_sum["active_signals"] == 1
+
+            # Check: Unmatched Provider = 0
+            prov_c_sum = get_signal_summary(provider="Dr. Emily Chen", db=db, current_user=mock_user)
+            assert prov_c_sum["active_signals"] == 0
+
+            # Check date cutoff: Cutoff right after yesterday's signal
+            cutoff_past = (yesterday + timedelta(minutes=5)).isoformat()
+            past_sum = get_signal_summary(cutoff=cutoff_past, db=db, current_user=mock_user)
+            assert past_sum["active_signals"] == 1
+        finally:
+            db.query(SignalModel).filter(SignalModel.clinic_id == clinic).delete()
+            db.commit()
+
+
+def test_report_01_check_3_trend_and_freshness():
+    from app.api.v1.endpoints.signals import get_signal_summary
+    from app.models.signal import SignalModel
+    from unittest.mock import MagicMock
+
+    clinic = "DXB-CLINIC-R02"
+    now = datetime.now(timezone.utc)
+    yesterday_same_time = now - timedelta(days=1)
+
+    with SessionLocal() as db:
+        try:
+            db.query(SignalModel).filter(SignalModel.clinic_id == clinic).delete()
+            db.commit()
+
+            # Create 100 open signals yesterday
+            sigs_yesterday = [
+                SignalModel(
+                    id=f"sig_trend_{i}", clinic_id=clinic, org_id="ORG-TEST", source="Test", type="Claim",
+                    timestamp=yesterday_same_time - timedelta(minutes=i),
+                    metadata_data={"review_state": {"status": "active"}}
+                )
+                for i in range(100)
+            ]
+            # Create 1 new open signal today -> total 101 today
+            sig_today = SignalModel(
+                id="sig_trend_101", clinic_id=clinic, org_id="ORG-TEST", source="Test", type="Claim",
+                timestamp=now,
+                metadata_data={"review_state": {"status": "active"}}
+            )
+            db.add_all(sigs_yesterday + [sig_today])
+            db.commit()
+
+            mock_user = MagicMock()
+            mock_user.clinic_id = clinic
+            mock_user.org_id = "ORG-TEST"
+            mock_user.role = "Clinic Manager"
+
+            res = get_signal_summary(db=db, current_user=mock_user)
+            assert res["active_signals"] == 101
+            assert res["prior_active_signals"] == 100
+            # 100 prior vs 101 current must produce +1%
+            assert res["trend"] == "+1%"
+            assert res["trend_up"] is True
+            assert "GST" in res["clinic_timestamp"] or "UTC" in res["clinic_timestamp"]
+        finally:
+            db.query(SignalModel).filter(SignalModel.clinic_id == clinic).delete()
+            db.commit()
 
 
 if __name__ == "__main__":
@@ -749,4 +872,7 @@ if __name__ == "__main__":
     test_workbook_profile_isolation_and_no_practice_fusion()
     test_workbook_clinics_endpoint_receipt_and_connectors()
     test_signals_verifiable_origin_in_workbook_profile()
+    test_report_01_simulator_opt_in()
+    test_report_01_check_2_provider_scope_and_date_cutoff()
+    test_report_01_check_3_trend_and_freshness()
     print("All QA verification fix tests passed successfully!")

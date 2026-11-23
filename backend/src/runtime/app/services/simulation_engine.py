@@ -362,7 +362,8 @@ class SimulationEngine:
         from app.core.config import settings
         if (getattr(settings, "SOURCE_PROFILE", "") == "workbook"
                 or not getattr(settings, "ENABLE_PRACTICE_FUSION", False)
-                or not getattr(settings, "SYNTHETIC_TEST_ENABLED", False)):
+                or not getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+                or not getattr(settings, "ENABLE_LIVE_SIMULATION", False)):
             return
         if not self.running:
             self.running = True

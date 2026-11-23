@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     BOOTSTRAP_ADMIN_PASSWORD: str = ""
 
     ENABLE_PRACTICE_FUSION: bool = False
+    ENABLE_LIVE_SIMULATION: bool = False
 
     # JWT / JWKS — System App (SMART Backend Services)
     # JWT_PRIVATE_KEY must be a PEM-encoded RSA private key.
