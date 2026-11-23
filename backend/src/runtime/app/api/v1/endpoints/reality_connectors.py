@@ -93,6 +93,11 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
             adapter = registry.create("Practice Fusion", config=config)
             if not adapter:
                 raise ValueError("Adapter not available")
+            if hasattr(adapter, "auth") and adapter.auth and hasattr(adapter.auth, "authenticate"):
+                import asyncio
+                auth_res = asyncio.run(adapter.auth.authenticate())
+                if not auth_res or not getattr(auth_res, "access_token", None):
+                    raise ValueError("Authentication challenge failed")
             verified = True
         except Exception as e:
             # Prevent saving the connection if authentication fails

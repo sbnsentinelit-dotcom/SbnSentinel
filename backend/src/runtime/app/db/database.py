@@ -110,41 +110,34 @@ def ensure_schema_compatibility():
     except Exception:
         pass
 
-    # Ensure default connectors exist with operational state
+    # Ensure connectors table has modern columns
     try:
-        from app.models.connector import ConnectorModel
-        from datetime import datetime
-        with SessionLocal() as db:
-            pf = db.query(ConnectorModel).filter(
-                (ConnectorModel.name.ilike("%practice%")) | (ConnectorModel.id == "conn_ehr_01") | (ConnectorModel.id == "PRACTICE_FUSION")
-            ).first()
-            if not pf:
-                pf = ConnectorModel(
-                    id="conn_ehr_01",
-                    name="Practice Fusion",
-                    type="EHR System",
-                    status="Connected",
-                    latency_ms=42,
-                    last_sync=datetime.utcnow(),
-                    config={
-                        "readiness_state": {
-                            "capability_state": "AUTHORIZED_READY",
-                            "is_stale": False,
-                            "last_verified_at": datetime.utcnow().isoformat()
-                        }
-                    }
-                )
-                db.add(pf)
-                db.commit()
-            elif not (pf.config or {}).get("readiness_state"):
-                cfg = dict(pf.config or {})
-                cfg["readiness_state"] = {
-                    "capability_state": "AUTHORIZED_READY",
-                    "is_stale": False,
-                    "last_verified_at": datetime.utcnow().isoformat()
-                }
-                pf.config = cfg
-                db.commit()
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            is_sqlite = engine.url.drivername.startswith("sqlite")
+            if is_sqlite:
+                cols = [r[1] for r in conn.execute(text("PRAGMA table_info(connectors)")).fetchall()]
+                if cols:
+                    if "vendor_id" not in cols:
+                        conn.execute(text("ALTER TABLE connectors ADD COLUMN vendor_id VARCHAR"))
+                    if "clinic_id" not in cols:
+                        conn.execute(text("ALTER TABLE connectors ADD COLUMN clinic_id VARCHAR"))
+                    if "secret_ref" not in cols:
+                        conn.execute(text("ALTER TABLE connectors ADD COLUMN secret_ref VARCHAR"))
+                    if "permitted_resources" not in cols:
+                        conn.execute(text("ALTER TABLE connectors ADD COLUMN permitted_resources JSON"))
+                    if "state" not in cols:
+                        conn.execute(text("ALTER TABLE connectors ADD COLUMN state VARCHAR DEFAULT 'CONFIGURED'"))
+                    if "failure_code" not in cols:
+                        conn.execute(text("ALTER TABLE connectors ADD COLUMN failure_code VARCHAR"))
+            else:
+                conn.execute(text("ALTER TABLE connectors ADD COLUMN IF NOT EXISTS vendor_id VARCHAR"))
+                conn.execute(text("ALTER TABLE connectors ADD COLUMN IF NOT EXISTS clinic_id VARCHAR"))
+                conn.execute(text("ALTER TABLE connectors ADD COLUMN IF NOT EXISTS secret_ref VARCHAR"))
+                conn.execute(text("ALTER TABLE connectors ADD COLUMN IF NOT EXISTS permitted_resources JSON"))
+                conn.execute(text("ALTER TABLE connectors ADD COLUMN IF NOT EXISTS state VARCHAR DEFAULT 'CONFIGURED'"))
+                conn.execute(text("ALTER TABLE connectors ADD COLUMN IF NOT EXISTS failure_code VARCHAR"))
+            conn.commit()
     except Exception:
         pass
 

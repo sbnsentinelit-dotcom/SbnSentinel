@@ -133,7 +133,7 @@ def run_startup_seeding():
                 from app.services.dubai_seed_service import (
                     auto_seed_dubai_if_empty, repair_seeded_authority_requirement)
                 enc_count = db.query(EncounterModel).count()
-                if enc_count == 0:
+                if enc_count == 0 and getattr(settings, "SOURCE_PROFILE", "") != "workbook":
                     print("[INFO] Encounters empty on startup. Auto-seeding UAE Dubai clinic data...")
                     auto_seed_dubai_if_empty(db)
                     print("[SUCCESS] UAE Dubai clinic dataset seeded automatically.")

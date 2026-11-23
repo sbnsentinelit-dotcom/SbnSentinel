@@ -321,7 +321,15 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                 </span>
               )}
             </h4>
-            <p className="text-[10px] text-white/70 font-extrabold uppercase tracking-widest mt-0.5">Source: {selectedSignal.source} Integration Layer</p>
+            <p className="text-[10px] text-white/70 font-extrabold uppercase tracking-widest mt-0.5">
+              Source: {
+                (selectedSignal as any).origin?.kind === 'workbook'
+                  ? 'UAE Clinic Billing Workbook (Synthetic)'
+                  : (selectedSignal.source === 'Practice Fusion' || !selectedSignal.source
+                      ? 'UAE Clinic Billing Workbook (Synthetic)'
+                      : `${selectedSignal.source} Integration Layer`)
+              }
+            </p>
           </div>
         </div>
         <div className="bg-white/5 border border-white/10 rounded-[18px] p-4">
@@ -637,7 +645,7 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
 
         <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 p-6 rounded-[24px] shadow-[0_20px_50px_rgba(46,16,85,0.3)] flex items-center justify-between text-white">
           <div>
-            <p className="text-xs font-bold text-white/70 uppercase tracking-widest mb-1">EHR (Practice Fusion)</p>
+            <p className="text-xs font-bold text-white/70 uppercase tracking-widest mb-1">Clinical Records</p>
             <p className="text-2xl font-black text-[var(--color-semantic-attention)]">{ehrCount} Active</p>
           </div>
           <span className="p-3 bg-[var(--color-semantic-attention)]/20 text-[var(--color-semantic-attention)] rounded-[16px]">

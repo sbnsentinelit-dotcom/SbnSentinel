@@ -960,16 +960,16 @@ export default function Dashboard() {
                       <div className="flex items-center justify-between border-b border-white/10 pb-3">
                         <div className="flex items-center gap-2">
                           <Database className="w-4 h-4 text-emerald-400" />
-                          <span className="text-sm font-semibold text-white/90">Practice Fusion API</span>
+                          <span className="text-sm font-semibold text-white/90">UAE Billing Workbook (Synthetic)</span>
                         </div>
-                        <span className="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded-[6px]">Healthy</span>
+                        <span className="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded-[6px]">Active</span>
                       </div>
                       <div className="flex items-center justify-between border-b border-white/10 pb-3">
                         <div className="flex items-center gap-2">
-                          <Activity className="w-4 h-4 text-emerald-400" />
-                          <span className="text-sm font-semibold text-white/90">Twilio Webhooks</span>
+                          <Activity className="w-4 h-4 text-white/50" />
+                          <span className="text-sm font-semibold text-white/70">External Systems</span>
                         </div>
-                        <span className="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded-[6px]">Healthy</span>
+                        <span className="text-[10px] bg-white/10 text-white/60 font-bold px-2 py-0.5 rounded-[6px]">No external systems integrated</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">

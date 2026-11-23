@@ -562,18 +562,20 @@ def seed_dubai_data(db: Session):
 
     db.commit()
 
-    # 6. Ensure UAE Clinic Connector exists
-    existing_conn = db.query(ConnectorModel).filter(ConnectorModel.id == "conn_dxb_dhpo").first()
-    if not existing_conn:
-        conn = ConnectorModel(
-            id="conn_dxb_dhpo",
-            name="DHPO eClaimLink (Dubai Health Authority)",
-            type="UAE Clearinghouse / EHR Gateway",
-            status="Connected",
-            latency_ms=24,
-            last_sync=datetime.utcnow()
-        )
-        db.add(conn)
+    # 6. Ensure UAE Clinic Connector exists (Only outside workbook profile)
+    from app.core.config import settings
+    if getattr(settings, "SOURCE_PROFILE", "") != "workbook":
+        existing_conn = db.query(ConnectorModel).filter(ConnectorModel.id == "conn_dxb_dhpo").first()
+        if not existing_conn:
+            conn = ConnectorModel(
+                id="conn_dxb_dhpo",
+                name="DHPO eClaimLink (Dubai Health Authority)",
+                type="UAE Clearinghouse / EHR Gateway",
+                status="Connected",
+                latency_ms=24,
+                last_sync=datetime.utcnow()
+            )
+            db.add(conn)
 
     db.commit()
     print("✔ Successfully populated UAE Dubai clinic data into database.")
@@ -583,6 +585,9 @@ def auto_seed_dubai_if_empty(db: Session):
     """
     Checks if encounters table is empty, and auto-seeds the Dubai demo data if so.
     """
+    from app.core.config import settings
+    if getattr(settings, "SOURCE_PROFILE", "") == "workbook":
+        return
     count = db.query(EncounterModel).count()
     if count == 0:
         seed_dubai_data(db)

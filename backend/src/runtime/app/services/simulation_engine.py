@@ -359,6 +359,11 @@ class SimulationEngine:
             await q.put(event.model_dump_json())
 
     def start(self):
+        from app.core.config import settings
+        if (getattr(settings, "SOURCE_PROFILE", "") == "workbook"
+                or not getattr(settings, "ENABLE_PRACTICE_FUSION", False)
+                or not getattr(settings, "SYNTHETIC_TEST_ENABLED", False)):
+            return
         if not self.running:
             self.running = True
             asyncio.create_task(self.generate_realistic_data())

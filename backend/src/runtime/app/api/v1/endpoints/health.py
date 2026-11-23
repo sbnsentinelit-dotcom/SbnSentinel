@@ -129,10 +129,11 @@ def readiness_gate(
     from app.core.config import settings
     config_ok = bool(getattr(settings, "ENVIRONMENT", None))
 
-    # 7. Required Connector Readiness Check (Practice Fusion by default).
+    # 7. Required Connector Readiness Check
     # The same rule applies in every environment: a deployment that does not use a
-    # connector removes it from REQUIRED_CONNECTORS instead of being reported healthy.
-    required_connectors = list(getattr(settings, "REQUIRED_CONNECTORS", ["PRACTICE_FUSION"]) or [])
+    # connector sets REQUIRED_CONNECTORS=[] instead of expecting a live EHR connector.
+    raw_req = getattr(settings, "REQUIRED_CONNECTORS", [])
+    required_connectors = list(raw_req if raw_req is not None else [])
     try:
         from app.services.connector_manager import connector_manager
         pf_ok = all(connector_manager.is_ready(name) for name in required_connectors)

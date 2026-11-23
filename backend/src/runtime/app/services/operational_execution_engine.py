@@ -315,12 +315,13 @@ class OperationalExecutionEngine(BaseService):
                 "error": "NOT_IMPLEMENTED",
                 "message": "Real connector not implemented for V1 production."}
 
-        # D6 Correction: Do not persist MOCK_PRACTICE_FUSION_CONNECTOR outside synthetic mode
+        # D6 Correction: Do not persist mock vendor identifier outside synthetic mode with vendor enabled
         synthetic = getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+        vendor_enabled = getattr(settings, "ENABLE_PRACTICE_FUSION", False)
         if action.action_type == ActionType.RESUBMIT_CLAIM:
             actual_connector = "MOCK_PAYER_CLAIMS_CONNECTOR" if synthetic else "UNAVAILABLE"
         else:
-            actual_connector = "MOCK_PRACTICE_FUSION_CONNECTOR" if synthetic else "UNAVAILABLE"
+            actual_connector = "MOCK_EHR_CONNECTOR" if (synthetic and vendor_enabled) else "UNAVAILABLE"
 
         # Record Attempt
         attempt = ExecutionAttemptRecord(

@@ -17,7 +17,10 @@ router = APIRouter()
 def _scoped_signal_query(db: Session, actor):
     """Signals visible to the actor: all for System Administrators, otherwise the
     actor's organization, narrowed to the actor's clinic for clinic-scoped roles."""
+    from app.core.config import settings
     q = db.query(SignalModel)
+    if getattr(settings, "SOURCE_PROFILE", "") == "workbook" or not getattr(settings, "ENABLE_PRACTICE_FUSION", False):
+        q = q.filter(~SignalModel.source.ilike("%practice%"))
     if actor.role == UserRole.SYSTEM_ADMINISTRATOR.value:
         return q
     org_id = getattr(actor, "org_id", None)
@@ -133,9 +136,37 @@ def get_historical_signals(db: Session = Depends(get_db),
         # Re-evaluated now from the stored source inputs: level, time left, problem, reason and action.
         risk = current_evaluation(meta)
 
+        origin = meta.get("origin")
+        if not origin:
+            if s.source in ("UAE Billing Workbook", "DHPO", "Sentinel UAE Governance Engine") or "WB" in str(s.id) or meta.get("claim_id"):
+                origin = {
+                    "kind": "workbook",
+                    "import_id": "REC-WB-DXB-01",
+                    "sheet": "Claims" if (meta.get("claim_id") or s.type == "Claim") else "Encounters",
+                    "external_record_id": meta.get("claim_id") or meta.get("encounter_id") or s.id,
+                    "connector_instance_id": None
+                }
+            elif "Practice Fusion" in str(s.source) or "Twilio" in str(s.source) or "Outlook" in str(s.source):
+                origin = {
+                    "kind": "simulator",
+                    "import_id": None,
+                    "sheet": None,
+                    "external_record_id": s.id,
+                    "connector_instance_id": None
+                }
+            else:
+                origin = {
+                    "kind": "unknown",
+                    "import_id": None,
+                    "sheet": None,
+                    "external_record_id": s.id,
+                    "connector_instance_id": None
+                }
+
         result.append({
             "decision": dec,
             "id": s.id,
+            "origin": origin,
             "source": s.source,
             "type": s.type,
             "message": s.message,
@@ -265,7 +296,10 @@ def retrieve_signal_evidence(signal_id: str, db: Session = Depends(get_db),
 @router.on_event("startup")
 async def startup_event():
     from app.core.config import settings
-    if getattr(settings, "SYNTHETIC_TEST_ENABLED", False) and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION":
+    if (getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+            and getattr(settings, "ENABLE_PRACTICE_FUSION", False)
+            and getattr(settings, "SOURCE_PROFILE", "") != "workbook"
+            and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION"):
         simulation_engine.start()
 
 
@@ -285,6 +319,10 @@ _STREAM_ROLES = {UserRole.CLINIC_MANAGER.value, UserRole.ORGANIZATION_ADMINISTRA
 
 def _stream_visible_to(actor, message: str) -> bool:
     """Same scope rule as the signals list: the actor's organization (and clinic for clinic-scoped roles)."""
+    from app.core.config import settings
+    if getattr(settings, "SOURCE_PROFILE", "") == "workbook" or not getattr(settings, "ENABLE_PRACTICE_FUSION", False):
+        if "practice fusion" in message.lower():
+            return False
     if actor["role"] == UserRole.SYSTEM_ADMINISTRATOR.value:
         return True
     try:

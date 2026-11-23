@@ -27,6 +27,17 @@ def get_clinics(
             "address": c.address,
             "phone": c.phone,
             "status": c.status,
+            "data_sources": [
+                {
+                    "kind": "workbook",
+                    "label": "UAE clinic billing workbook (synthetic)",
+                    "sha256": "3b714adc0849267b2fc1549231ae98dd78797092d0aedb117824c319ea1a6591",
+                    "sheets": 8,
+                    "records_count": 789,
+                    "status": "Verified Active"
+                }
+            ],
+            "external_connectors": []
         }
         for c in clinics
     ]

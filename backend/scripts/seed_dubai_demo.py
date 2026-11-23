@@ -88,6 +88,10 @@ def seed_dubai_data():
         seed_exact()
         return
     except Exception as e:
+        from app.core.config import settings
+        if getattr(settings, "SOURCE_PROFILE", "") == "workbook":
+            print(f"Error seeding exact workbook data: {e}. Procedural fallback disabled in workbook profile.")
+            raise
         print(f"Notice: seed_exact_excel not available, falling back to procedural seeder ({e})")
 
     print("===================================================================")

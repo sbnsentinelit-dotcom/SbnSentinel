@@ -38,12 +38,13 @@ class Settings(BaseSettings):
     # SESR-012 Configuration Integrity
     ENVIRONMENT: str = "DEVELOPMENT"
     DEPLOYMENT_REGION: str = "US"  # G6: "US" | "UAE" regional deployment scope
+    SOURCE_PROFILE: str = "workbook"  # "workbook" | "connector" | "hybrid"
     CLINIC_TIMEZONE: str = "UTC"
     SYNTHETIC_TEST_ENABLED: bool = False
     BUILD_ID: str = "unknown"
     BOOTSTRAP_ADMIN_PASSWORD: str = ""
 
-    ENABLE_PRACTICE_FUSION: bool = True
+    ENABLE_PRACTICE_FUSION: bool = False
 
     # JWT / JWKS — System App (SMART Backend Services)
     # JWT_PRIVATE_KEY must be a PEM-encoded RSA private key.
@@ -60,7 +61,7 @@ class Settings(BaseSettings):
 
     # Connectors that must be ready for /health/ready to pass, in every environment.
     # Set as a JSON list, e.g. REQUIRED_CONNECTORS='[]' for a deployment with no live EHR connector.
-    REQUIRED_CONNECTORS: list[str] = ["PRACTICE_FUSION"]
+    REQUIRED_CONNECTORS: list[str] = []
 
     @model_validator(mode='after')
     def validate_sesr012_config(self) -> 'Settings':

@@ -185,7 +185,7 @@ export const ConnectorsView: React.FC = () => {
     if (lowerUser.includes('wrong') || lowerUser.includes('invalid') || lowerUser.includes('fake') || lowerUser.includes('test') || lowerPass.length < 6 || lowerPass.includes('wrong') || lowerPass.includes('1234') || lowerPass.includes('error')) {
       await new Promise(r => setTimeout(r, 800));
       setIsSubmitting(false);
-      setConnectError("🔴 401 Unauthorized: Invalid Practice Fusion Practice ID or Password. Authentication rejected by EHR OAuth Gateway.");
+      setConnectError("🔴 401 Unauthorized: Invalid EHR Credentials or Practice ID. Authentication rejected by OAuth Gateway.");
       return;
     }
 
@@ -468,7 +468,7 @@ export const ConnectorsView: React.FC = () => {
                 
                 <div className="space-y-3 mb-6">
                    {[
-                     { name: 'Practice Fusion EHR', type: 'EHR System' },
+                     { name: 'Standard FHIR R4 EHR', type: 'EHR System' },
                      { name: 'Cerner Millennium', type: 'EHR System' },
                      { name: 'AthenaHealth API', type: 'EHR API' },
                      { name: 'Salesforce Health Cloud', type: 'CRM' },

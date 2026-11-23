@@ -248,7 +248,9 @@ def get_all_encounters(
         return query.all(), total
 
     encounters, total_count = fetch_page()
-    if not encounters and total_count == 0:
+    from app.core.config import settings
+    is_workbook_mode = getattr(settings, "SOURCE_PROFILE", "") == "workbook"
+    if not encounters and total_count == 0 and not is_workbook_mode:
         try:
             from app.services.dubai_seed_service import auto_seed_dubai_if_empty
             auto_seed_dubai_if_empty(db)

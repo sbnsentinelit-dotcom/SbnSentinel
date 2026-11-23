@@ -203,9 +203,14 @@ def revoke_team_member(user_id: int, db: Session = Depends(get_db), current_user
 @router.get("/integrations", dependencies=[Depends(RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value, UserRole.CLINIC_MANAGER.value]))])
 def get_integrations(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> List[Dict[str, Any]]:
     """Get clinic integrations status based on actual connector runtime state."""
+    from app.core.config import settings
+    if getattr(settings, "SOURCE_PROFILE", "") == "workbook" or not getattr(settings, "ENABLE_PRACTICE_FUSION", False):
+        return []
     from app.services.connector_manager import connector_runtime_state
 
     pf_state = connector_runtime_state.get("PRACTICE_FUSION")
+    if not pf_state:
+        return []
     return [
         {
             "id": "PRACTICE_FUSION",

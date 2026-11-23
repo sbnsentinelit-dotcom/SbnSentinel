@@ -269,11 +269,10 @@ class EvidenceEngine(BaseService):
                         f"PRODUCTION_ADMISSION_REJECTED: Source {source} is not in AUTHORIZED_READY state."
                     )
             else:
-                if "practice_fusion" not in source.lower() and "practicefusion" not in source.lower() and source != "PF":
-                    self.logger.error(
-                        f"[EvidenceEngine] Production admission blocked: Source {source} is not registered or authorized.")
-                    raise ValueError(
-                        "PRODUCTION_ADMISSION_REJECTED: Only authorized sources are permitted in V1 production.")
+                self.logger.error(
+                    f"[EvidenceEngine] Production admission blocked: Source {source} is not registered or authorized.")
+                raise ValueError(
+                    "PRODUCTION_ADMISSION_REJECTED: Only authorized sources are permitted in V1 production.")
 
         evidence_items = []
         now = datetime.utcnow()

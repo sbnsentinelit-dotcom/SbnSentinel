@@ -101,8 +101,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [uaeApiKey, setUaeApiKey] = useState('dha_live_sec_99420x_dxb');
   const [uaePayerNetwork, setUaePayerNetwork] = useState('Daman (National Health Insurance)');
   
-  const [usPlatform, setUsPlatform] = useState('Practice Fusion EHR');
-  const [usEndpoint, setUsEndpoint] = useState('https://api.patientfusion.com/fhir/r4');
+  const [usPlatform, setUsPlatform] = useState('Epic Systems (FHIR R4)');
+  const [usEndpoint, setUsEndpoint] = useState('https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4');
   const [usClientId, setUsClientId] = useState('');
   const [usClientSecret, setUsClientSecret] = useState('');
   const [usPracticeId, setUsPracticeId] = useState('');
@@ -1002,8 +1002,15 @@ document.body
                                   const res = await fetchWithAuth('/api/v1/reality/health');
                                   await new Promise(r => setTimeout(r, 600));
                                   if (res.ok) {
-                                     setApiTestSuccessMsg(`✔ Handshake verified! Connected to ${selectedApiRegion === 'UAE' ? 'DHPO UAE' : 'US EHR'} (24ms latency).`);
-                                     showToast(`API Verified: ${selectedApiRegion} connection is live.`);
+                                     const data = await res.json();
+                                     const hasActive = Array.isArray(data) && data.length > 0;
+                                     if (hasActive) {
+                                        setApiTestSuccessMsg(`✔ Handshake verified! Connected to ${selectedApiRegion === 'UAE' ? 'DHPO UAE' : 'US EHR'} (24ms latency).`);
+                                        showToast(`API Verified: ${selectedApiRegion} connection is live.`);
+                                     } else {
+                                        setApiTestSuccessMsg('ℹ Source profile is Workbook-only. Zero external connectors configured.');
+                                        showToast('Workbook Mode: No external systems integrated.');
+                                     }
                                   } else {
                                      showToast('API handshake warning. Using cached sync.', 'error');
                                   }
@@ -1071,7 +1078,7 @@ document.body
                       <div>
                          <h4 className="text-lg font-bold text-white flex items-center gap-2">
                             <Key className="w-5 h-5 text-amber-400" />
-                            {selectedApiRegion === 'UAE' ? 'Configure UAE Clinic Integration (DHPO / Malaffi)' : 'Configure US EHR Integration (Practice Fusion / SMART on FHIR)'}
+                            {selectedApiRegion === 'UAE' ? 'Configure UAE Clinic Integration (DHPO / Malaffi)' : 'Configure US EHR Integration (SMART on FHIR)'}
                          </h4>
                          <p className="text-xs text-white/60 mt-0.5">
                             Enter your clinic's direct credentials. Sentinel uses these to authenticate and sync clinical encounters and revenue claims automatically.
@@ -1160,7 +1167,7 @@ document.body
                                onChange={(e) => setUsPlatform(e.target.value)}
                                className="w-full bg-[#120524] border border-white/15 rounded-[12px] px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-blue-500"
                             >
-                               <option value="Practice Fusion EHR">Practice Fusion EHR</option>
+                               <option value="Standard FHIR R4 Connector">Standard FHIR R4 Connector</option>
                                <option value="Epic Systems (FHIR R4)">Epic Systems (FHIR R4)</option>
                                <option value="Cerner / Oracle Health">Cerner / Oracle Health</option>
                                <option value="AthenaHealth API">AthenaHealth API</option>

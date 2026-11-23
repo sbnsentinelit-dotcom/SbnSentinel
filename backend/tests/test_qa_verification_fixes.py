@@ -666,6 +666,71 @@ def test_signal_model_exposure_attributes():
     assert sig.exposure_currency == "AED"
 
 
+def test_workbook_profile_isolation_and_no_practice_fusion():
+    from app.core.config import settings
+    from app.api.v1.endpoints.settings import get_integrations
+    from unittest.mock import MagicMock
+
+    assert settings.SOURCE_PROFILE == "workbook"
+    assert settings.ENABLE_PRACTICE_FUSION is False
+    assert settings.REQUIRED_CONNECTORS == []
+
+    mock_user = MagicMock()
+    mock_user.clinic_id = "DXB-CLINIC-01"
+    mock_db = MagicMock()
+
+    # In workbook profile, integrations must be empty
+    integrations = get_integrations(current_user=mock_user, db=mock_db)
+    assert integrations == [], f"Expected empty integrations in workbook profile, got {integrations}"
+
+
+def test_workbook_clinics_endpoint_receipt_and_connectors():
+    from app.api.v1.endpoints.clinics import get_clinics
+    from app.models.clinic import ClinicModel
+    from unittest.mock import MagicMock
+
+    mock_user = MagicMock()
+    mock_user.clinic_id = "DXB-CLINIC-01"
+    mock_user.role = "System Administrator"
+
+    with SessionLocal() as db:
+        if not db.query(ClinicModel).filter(ClinicModel.id == "DXB-CLINIC-01").first():
+            db.add(ClinicModel(id="DXB-CLINIC-01", name="Dubai Clinic 01", status="Active"))
+            db.commit()
+        clinics = get_clinics(db=db, current_user=mock_user)
+        assert len(clinics) > 0
+        clinic = clinics[0]
+        assert clinic.get("external_connectors") == []
+        assert isinstance(clinic.get("data_sources"), list)
+        assert len(clinic["data_sources"]) > 0
+        ds = clinic["data_sources"][0]
+        assert ds.get("kind") == "workbook"
+        assert ds.get("records_count") == 789
+        assert "sha256" in ds
+
+
+def test_signals_verifiable_origin_in_workbook_profile():
+    from app.api.v1.endpoints.signals import get_historical_signals
+    from unittest.mock import MagicMock
+
+    mock_user = MagicMock()
+    mock_user.clinic_id = "DXB-CLINIC-01"
+    mock_user.role = "System Administrator"
+
+    with SessionLocal() as db:
+        signals = get_historical_signals(db=db, current_user=mock_user)
+        # Any signal present must not have Practice Fusion as source
+        for sig in signals:
+            source = sig.get("source", "") if isinstance(sig, dict) else getattr(sig, "source", "")
+            assert "practice" not in source.lower(), f"Unexpected practice source in signal: {source}"
+            origin = sig.get("origin") if isinstance(sig, dict) else getattr(sig, "origin", None)
+            if origin:
+                assert origin.get("kind") in ("workbook", "rule_engine", "synthetic")
+                if origin.get("kind") == "workbook":
+                    assert origin.get("import_id") == "REC-WB-DXB-01"
+                    assert origin.get("connector_instance_id") is None
+
+
 if __name__ == "__main__":
     test_currency_mapping_no_db_sniffing()
     test_gender_authoritative_source_preservation()
@@ -681,4 +746,7 @@ if __name__ == "__main__":
     test_owner_summary_default_currency_from_deployment()
     test_reconciliation_report_default_currency()
     test_signal_model_exposure_attributes()
+    test_workbook_profile_isolation_and_no_practice_fusion()
+    test_workbook_clinics_endpoint_receipt_and_connectors()
+    test_signals_verifiable_origin_in_workbook_profile()
     print("All QA verification fix tests passed successfully!")

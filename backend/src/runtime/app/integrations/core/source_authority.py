@@ -105,15 +105,17 @@ class ConnectorAuthorityStore:
         except Exception:
             pass
 
-        # Fallback for synthetic / round2 acceptance test connectors
-        if instance_id.startswith(("PF-", "BULK-", "CONN-", "conn_ehr_01")):
-            return ConnectorBinding(
-                connector_instance_id=instance_id,
-                vendor_id="practice_fusion",
-                allowed_clinic_id="default",
-                state="AUTHORIZED_READY",
-                permitted_resources={"Patient", "Encounter", "Coverage", "Claim", "Remittance", "Appointment"},
-            )
+        # Fallback for synthetic test connectors only when vendor is explicitly enabled
+        from app.core.config import settings
+        if getattr(settings, "ENABLE_PRACTICE_FUSION", False) and getattr(settings, "SOURCE_PROFILE", "") != "workbook":
+            if instance_id.startswith(("PF-", "BULK-", "CONN-", "conn_ehr_01")):
+                return ConnectorBinding(
+                    connector_instance_id=instance_id,
+                    vendor_id="practice_fusion",
+                    allowed_clinic_id="default",
+                    state="AUTHORIZED_READY",
+                    permitted_resources={"Patient", "Encounter", "Coverage", "Claim", "Remittance", "Appointment"},
+                )
 
         return None
 
