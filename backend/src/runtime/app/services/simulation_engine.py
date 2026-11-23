@@ -79,6 +79,7 @@ def synthetic_ehr_risk_inputs(status, rng=random):
 class SimulationEngine:
     def __init__(self):
         self.running = False
+        self.visit_generator_running = False
         self.clients = []
         self._used_claim_ids = None
 
@@ -297,61 +298,23 @@ class SimulationEngine:
             logging.getLogger(__name__).error(f"[SimEngine] Pipeline error: {e}")
 
     async def generate_dynamic_encounters(self):
+        """Plays the clinic's queue feed while none is connected: stores the synthetic visit events
+        whose time has passed (services/visit_generator.py). It writes events only; the Patient Flow
+        screen calculates every status, wait and count from them."""
         from app.db.database import SessionLocal
-        from app.models.encounter import EncounterModel
-        while self.running:
-            await asyncio.sleep(10)  # Every 10 seconds, move someone or create someone
+        from app.models.clinic import ClinicModel
+        from app.services.visit_generator import sync_generated_events
+        while self.visit_generator_running:
+            await asyncio.sleep(20)
+            db = SessionLocal()
             try:
-                db = SessionLocal()
-                # 1. Move "Waiting" -> "In Room"
-                waiting = db.query(EncounterModel).filter(EncounterModel.status == "Waiting").all()
-                if waiting and random.random() > 0.3:
-                    p = random.choice(waiting)
-                    p.status = "In Room"
-                    p.wait_time = f"{random.randint(5, 45)} mins"
-
-                # 2. Move "In Room" -> "Completed"
-                in_room = db.query(EncounterModel).filter(EncounterModel.status == "In Room").all()
-                if in_room and random.random() > 0.5:
-                    p = random.choice(in_room)
-                    p.status = "Completed"
-                    p.billing_status = "Pending"
-
-                # 3. Move "Completed" -> "Billed" -> "Paid"
-                completed = db.query(EncounterModel).filter(
-                    EncounterModel.status == "Completed").all()
-                for c in completed:
-                    if c.billing_status == "Pending" and random.random() > 0.7:
-                        c.billing_status = "Billed"
-                    elif c.billing_status == "Billed" and random.random() > 0.7:
-                        c.billing_status = "Paid"
-
-                # 4. Chance to spawn new patient
-                if random.random() > 0.6:
-                    new_id = f"enc_{random.randint(1000, 99999)}"
-                    new_enc = EncounterModel(
-                        id=new_id,
-                        clinic_id="DXB-CLINIC-01",
-                        patient_id=random.choice(["Alex M.", "Brian K.", "Chloe T.", "Daniel S.", "Eva R.", "Fiona W.", "Liam H.", "Zoe P."]),
-                        provider_id=random.choice(["Dr. Smith", "Dr. Patel", "Dr. Chen", "Dr. Sarah Jenkins"]),
-                        date=datetime.now().strftime("%Y-%m-%d"),
-                        diagnosis=random.choice(["Routine checkup", "Mild fever", "Back pain", "Hypertension followup", "Allergy evaluation"]),
-                        type=random.choice(["Checkup", "Consultation", "Urgent Care"]),
-                        status="Waiting",
-                        billing_status="Pending",
-                        copay=float(random.choice([20, 30, 45, 50, 100])),
-                        priority=random.choice(["Normal", "Urgent"]),
-                        wait_time="15 mins",
-                        department=random.choice(["General Practice", "Cardiology", "Radiology"]),
-                        avatar=None
-                    )
-                    db.add(new_enc)
-
-                db.commit()
-                db.close()
+                for (clinic_id,) in db.query(ClinicModel.id).all():
+                    sync_generated_events(db, clinic_id, days=1)
             except Exception as e:
                 import logging
-                logging.getLogger(__name__).error(f"[Encounter Sim] Error: {e}")
+                logging.getLogger(__name__).error(f"[Visit generator] Error: {e}")
+            finally:
+                db.close()
 
     async def broadcast(self, event: SignalEvent):
         # Push to all connected WebSocket clients
@@ -368,10 +331,21 @@ class SimulationEngine:
         if not self.running:
             self.running = True
             asyncio.create_task(self.generate_realistic_data())
+
+    def start_visit_generator(self):
+        """The synthetic visit generator (Patient Flow queue feed) runs in synthetic mode outside
+        production, independent of the signal simulator and of any vendor connector."""
+        from app.core.config import settings
+        if (not getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+                or getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION"):
+            return
+        if not self.visit_generator_running:
+            self.visit_generator_running = True
             asyncio.create_task(self.generate_dynamic_encounters())
 
     def stop(self):
         self.running = False
+        self.visit_generator_running = False
 
     def add_client(self, queue: asyncio.Queue):
         self.clients.append(queue)

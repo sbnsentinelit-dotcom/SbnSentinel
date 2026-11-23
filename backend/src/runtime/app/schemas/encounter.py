@@ -45,6 +45,8 @@ class EncounterUpdate(BaseModel):
 class EncounterResponse(BaseModel):
     id: str
     patient_name: Optional[str] = "Patient"
+    patient_ref: Optional[str] = None
+    mrn: Optional[str] = None
     provider_name: Optional[str] = "Provider"
     clinic_id: Optional[str] = None
     date: Optional[str] = "2026-01-01"

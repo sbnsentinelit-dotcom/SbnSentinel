@@ -527,6 +527,8 @@ async def startup_event():
             and getattr(settings, "SOURCE_PROFILE", "") != "workbook"
             and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION"):
         simulation_engine.start()
+    # Patient Flow's synthetic visit events (synthetic mode only; checks its own conditions).
+    simulation_engine.start_visit_generator()
 
 
 @router.on_event("shutdown")

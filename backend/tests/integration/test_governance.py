@@ -843,6 +843,12 @@ def test_a026b_practice_fusion_readiness(monkeypatch):
     - PF status is Warning -> 503
     - Properly configured, real Healthy PF connector -> 200, pf=true
     """
+    # Connector deployment profile: Practice Fusion enabled and required for readiness (the default
+    # is now the workbook profile with no required connector).
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "ENABLE_PRACTICE_FUSION", True)
+    monkeypatch.setattr(settings, "SOURCE_PROFILE", "connector")
+    monkeypatch.setattr(settings, "REQUIRED_CONNECTORS", ["PRACTICE_FUSION"])
     from app.db.database import SessionLocal
     from app.models.user import User, UserRole
     from app.core.security import get_password_hash
