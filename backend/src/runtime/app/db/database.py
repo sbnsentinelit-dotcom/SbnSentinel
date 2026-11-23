@@ -91,6 +91,25 @@ def ensure_schema_compatibility():
     except Exception:
         pass
 
+    # Ensure signals table has new exposure columns
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            is_sqlite = engine.url.drivername.startswith("sqlite")
+            if is_sqlite:
+                cols = [r[1] for r in conn.execute(text("PRAGMA table_info(signals)")).fetchall()]
+                if cols:
+                    if "exposure_amount" not in cols:
+                        conn.execute(text("ALTER TABLE signals ADD COLUMN exposure_amount FLOAT"))
+                    if "exposure_currency" not in cols:
+                        conn.execute(text("ALTER TABLE signals ADD COLUMN exposure_currency VARCHAR(8)"))
+            else:
+                conn.execute(text("ALTER TABLE signals ADD COLUMN IF NOT EXISTS exposure_amount FLOAT"))
+                conn.execute(text("ALTER TABLE signals ADD COLUMN IF NOT EXISTS exposure_currency VARCHAR(8)"))
+            conn.commit()
+    except Exception:
+        pass
+
     # Ensure default connectors exist with operational state
     try:
         from app.models.connector import ConnectorModel
