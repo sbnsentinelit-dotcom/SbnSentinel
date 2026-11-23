@@ -7,6 +7,8 @@ interface ProgressiveSectionProps {
   title: React.ReactNode;
   icon?: React.ReactNode;
   defaultExpanded?: boolean;
+  isExpandedProp?: boolean;
+  onToggle?: (expanded: boolean) => void;
   dataState?: 'loading' | 'unavailable' | 'unauthorized' | 'ready' | 'empty';
   dataStateMessage?: string;
   children: React.ReactNode;
@@ -19,20 +21,27 @@ export const ProgressiveSection: React.FC<ProgressiveSectionProps> = ({
   title,
   icon,
   defaultExpanded = false,
+  isExpandedProp,
+  onToggle,
   dataState = 'ready',
   dataStateMessage,
   children,
   className = '',
   headerClassName = ''
 }) => {
-  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const [internalExpanded, setInternalExpanded] = useState(defaultExpanded);
+  const isExpanded = isExpandedProp !== undefined ? isExpandedProp : internalExpanded;
 
-  const toggle = () => setIsExpanded(prev => !prev);
+  const toggle = () => {
+    const next = !isExpanded;
+    if (onToggle) onToggle(next);
+    setInternalExpanded(next);
+  };
 
   const isBlocked = ['unavailable', 'unauthorized'].includes(dataState);
 
   return (
-    <div className={`bg-white/5 border border-white/10 rounded-[18px] overflow-hidden ${className}`}>
+    <div id={id} className={`bg-white/5 border border-white/10 rounded-[18px] overflow-hidden ${className}`}>
       <button
         id={`header-${id}`}
         aria-expanded={isExpanded}

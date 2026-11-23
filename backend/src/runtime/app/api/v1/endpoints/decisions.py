@@ -152,7 +152,14 @@ async def get_recommendation_review(
         # The signal's evaluated risk level (from the source data) when it has one; else the stored one.
         "priority": current_level(authoritative_rec.priority, metadata) if metadata.get("risk_kind")
         else authoritative_rec.priority,
-        "generated_at": authoritative_rec.generated_at
+        "generated_at": (
+            authoritative_rec.generated_at if isinstance(authoritative_rec.generated_at, str) and (
+                authoritative_rec.generated_at.endswith("Z") or "+" in authoritative_rec.generated_at or "-" in authoritative_rec.generated_at[10:]
+            ) else (
+                f"{authoritative_rec.generated_at}Z" if isinstance(authoritative_rec.generated_at, str)
+                else (authoritative_rec.generated_at.isoformat() if hasattr(authoritative_rec.generated_at, "isoformat") else str(authoritative_rec.generated_at))
+            )
+        )
     }
 
     # 2. Extract Authority (D5-06, D5-07)

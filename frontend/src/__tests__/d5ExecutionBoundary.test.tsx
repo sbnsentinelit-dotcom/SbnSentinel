@@ -81,8 +81,8 @@ describe('T14: D5 Execution Boundary Validation', () => {
 
     render(<RecommendationReview signalId="test-sig-1" />);
 
-    // Wait for data to load and APPROVED option to appear
-    const approveOption = await screen.findByText('APPROVED');
+    // Wait for data to load and Approve option to appear
+    const approveOption = await screen.findByText(/approve/i);
     expect(approveOption).toBeDefined();
 
     // Click Approved radio option

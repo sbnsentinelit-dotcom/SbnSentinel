@@ -14,6 +14,19 @@ import {
   submitHumanDecision 
 } from '@/utils/decisionApi';
 
+import { formatDateTimeWithZone } from '@/utils/dateFormatter';
+
+const formatDecisionLabel = (type: string) => {
+  switch (type) {
+    case 'APPROVED': return 'Approve';
+    case 'REJECTED': return 'Reject';
+    case 'RETURNED_FOR_REVIEW': return 'Return for review';
+    case 'DEFERRED': return 'Defer';
+    case 'OVERRIDDEN': return 'Override';
+    default: return type.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c: string) => c.toUpperCase());
+  }
+};
+
 interface RecommendationReviewProps {
   signalId: string;
   signal?: any;
@@ -70,23 +83,46 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
     
     setSubmitting(true);
     setSubmitError(null);
+    let writeReceipt: any = null;
     try {
-      await submitHumanDecision({
+      writeReceipt = await submitHumanDecision({
         recommendationId: data.recommendation.recommendation_id,
         decisionType: selectedDecision,
         reason: reason
       });
-      // Re-fetch to get authoritative receipt
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : 'Decision submission rejected by server.');
+      setSubmitting(false);
+      return;
+    }
+
+    // Retain returned decision ID immediately from write receipt (Report 03 §03.8)
+    if (writeReceipt?.decision_id) {
+      setData(prev => prev ? ({
+        ...prev,
+        current_decision: {
+          decision_id: writeReceipt.decision_id,
+          recommendation_id: writeReceipt.recommendation_id || data?.recommendation?.recommendation_id || '',
+          decision_type: writeReceipt.decision_type || selectedDecision,
+          status: writeReceipt.status || 'RECORDED',
+          decision_timestamp: writeReceipt.decision_timestamp || new Date().toISOString()
+        }
+      }) : prev);
+      if (onDecisionChange) {
+        onDecisionChange(writeReceipt.decision_id);
+      }
+    }
+
+    try {
+      // Re-fetch to get complete authoritative receipt details
       const refreshed = await fetchRecommendationReview(signalId);
       setData(refreshed);
-      // D6.10: Propagate updated decision_id to parent after submit
       if (onDecisionChange) {
-        onDecisionChange(refreshed?.current_decision?.decision_id ?? null);
+        onDecisionChange(refreshed?.current_decision?.decision_id ?? writeReceipt?.decision_id ?? null);
       }
-    } catch (err: unknown) {
-      // SDS-007: After rejection, show the rejection.
-      // Display Recorded only with the persisted receipt.
-      setSubmitError(err instanceof Error ? err.message : 'Decision submission rejected by server.');
+    } catch (refreshErr) {
+      console.warn("Failed to refresh decision review after successful submission:", refreshErr);
+      // Keep confirmed state from writeReceipt, DO NOT treat as submission failure
     } finally {
       setSubmitting(false);
     }
@@ -177,7 +213,7 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
           
           <div className="flex items-center gap-2 text-xs text-white/40">
             <Clock className="w-3.5 h-3.5" />
-            <span>Generated: {new Date(recommendation.generated_at).toLocaleString()}</span>
+            <span>Generated: {formatDateTimeWithZone(recommendation.generated_at)}</span>
             <span className="mx-2">•</span>
             <span className="font-mono text-[10px]">ID: {recommendation.recommendation_id.substring(0,8)}...</span>
           </div>
@@ -195,7 +231,7 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
           <div className="space-y-3">
             <div className="flex justify-between items-center py-2 border-b border-white/5">
               <span className="text-white/50 text-sm">Decision Type</span>
-              <span className="text-white font-medium">{current_decision.decision_type}</span>
+              <span className="text-white font-medium">{formatDecisionLabel(current_decision.decision_type)}</span>
             </div>
             <div className="flex justify-between items-center py-2 border-b border-white/5">
               <span className="text-white/50 text-sm">Status</span>
@@ -204,7 +240,7 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
             {current_decision.decision_timestamp && (
               <div className="flex justify-between items-center py-2">
                 <span className="text-white/50 text-sm">Recorded At</span>
-                <span className="text-white text-sm">{new Date(current_decision.decision_timestamp).toLocaleString()}</span>
+                <span className="text-white text-sm">{formatDateTimeWithZone(current_decision.decision_timestamp)}</span>
               </div>
             )}
           </div>
@@ -274,7 +310,7 @@ export const RecommendationReview: React.FC<RecommendationReviewProps> = ({
                       }`}>
                         {selectedDecision === type && <div className="w-2 h-2 rounded-full bg-[var(--color-accent)]" />}
                       </div>
-                      <span className="text-white font-medium text-sm">{type}</span>
+                      <span className="text-white font-medium text-sm">{formatDecisionLabel(type)}</span>
                     </label>
                   ))}
                 </div>

@@ -30,7 +30,7 @@ def send_email(to_email: str, subject: str, body: str, is_html: bool = False):
 
         req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=3) as response:
                 return response.status in [200, 201, 202]
         except Exception as e:
             logger.error(f"Failed to send email via Brevo to {to_email}: {str(e)}")

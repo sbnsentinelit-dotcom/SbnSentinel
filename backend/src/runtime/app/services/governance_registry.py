@@ -673,11 +673,63 @@ class GovernanceRegistry:
         finally:
             db.close()
 
+    def _init_default_authority_configs(self):
+        from app.core.config import settings
+        is_demo = getattr(settings, "ENVIRONMENT", "").upper() == "DEMO"
+
+        self.register_authority_config(
+            AuthorityConfiguration(
+                role="Clinic Manager",
+                allowed_decisions=[
+                    DecisionType.APPROVED,
+                    DecisionType.REJECTED,
+                    DecisionType.OVERRIDDEN,
+                    DecisionType.RETURNED_FOR_REVIEW],
+                can_override=True,
+                requires_reason_for=[
+                    DecisionType.REJECTED,
+                    DecisionType.OVERRIDDEN]))
+
+        if is_demo:
+            # DEMO: Organization Administrator temporarily holds demo override authority (SESR-005 HDA-004)
+            self.register_authority_config(
+                AuthorityConfiguration(
+                    role="Organization Administrator",
+                    allowed_decisions=[
+                        DecisionType.APPROVED,
+                        DecisionType.REJECTED,
+                        DecisionType.OVERRIDDEN,
+                        DecisionType.RETURNED_FOR_REVIEW],
+                    can_override=True,
+                    requires_reason_for=[
+                        DecisionType.REJECTED,
+                        DecisionType.OVERRIDDEN]))
+        else:
+            # Approved production role policy (SESR-005 HDA-004, SDS-007 §3)
+            self.register_authority_config(
+                AuthorityConfiguration(
+                    role="Organization Administrator",
+                    allowed_decisions=[
+                        DecisionType.APPROVED,
+                        DecisionType.RETURNED_FOR_REVIEW],
+                    can_override=False,
+                    requires_reason_for=[
+                        DecisionType.RETURNED_FOR_REVIEW]))
+
+        self.register_authority_config(AuthorityConfiguration(
+            role="Front Desk",
+            allowed_decisions=[DecisionType.APPROVED, DecisionType.REJECTED],
+            can_override=False,
+            requires_reason_for=[DecisionType.REJECTED]
+        ))
+
     def register_authority_config(self, config: AuthorityConfiguration):
         self._authority_configs[config.role] = config
         self._save()
 
     def get_authority_config(self, role: str) -> Optional[AuthorityConfiguration]:
+        if not self._authority_configs:
+            self._init_default_authority_configs()
         return self._authority_configs.get(role)
 
     def record_human_decision(self, decision: HumanDecisionRecord) -> HumanDecisionRecord:
@@ -1602,37 +1654,4 @@ def initialize_registry_seeds():
         ))
 
     # 6. Authority Configurations (SESR-005)
-    governance_registry.register_authority_config(
-        AuthorityConfiguration(
-            role="Clinic Manager",
-            allowed_decisions=[
-                DecisionType.APPROVED,
-                DecisionType.REJECTED,
-                DecisionType.OVERRIDDEN,
-                DecisionType.RETURNED_FOR_REVIEW],
-            can_override=True,
-            requires_reason_for=[
-                DecisionType.REJECTED,
-                DecisionType.OVERRIDDEN]))
-
-    # DEMO: Organization Administrator temporarily holds the same decision authority as
-    # Clinic Manager, so the demo account can record decisions. Review role permissions after the demo.
-    governance_registry.register_authority_config(
-        AuthorityConfiguration(
-            role="Organization Administrator",
-            allowed_decisions=[
-                DecisionType.APPROVED,
-                DecisionType.REJECTED,
-                DecisionType.OVERRIDDEN,
-                DecisionType.RETURNED_FOR_REVIEW],
-            can_override=True,
-            requires_reason_for=[
-                DecisionType.REJECTED,
-                DecisionType.OVERRIDDEN]))
-
-    governance_registry.register_authority_config(AuthorityConfiguration(
-        role="Front Desk",
-        allowed_decisions=[DecisionType.APPROVED, DecisionType.REJECTED],
-        can_override=False,
-        requires_reason_for=[DecisionType.REJECTED]
-    ))
+    governance_registry._init_default_authority_configs()

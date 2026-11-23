@@ -23,6 +23,7 @@ import { RuleResultList } from '@/components/DecisionBasis/RuleResultList';
 import { ProvenanceDetail } from '@/components/DecisionBasis/ProvenanceDetail';
 // D6.10: Action Lifecycle
 import { ActionLifecycleSection } from '@/components/Action/ActionLifecycleSection';
+import { formatDateTimeWithZone } from '@/utils/dateFormatter';
 // D8: Historical Trace
 import { HistoricalTraceSection } from '@/components/History/HistoricalTraceSection';
 // D7: Runtime Status
@@ -48,6 +49,8 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
   // D4 — Decision Basis state
   const [basisData, setBasisData] = useState<DecisionBasisDTO | null>(null);
   const [basisLoading, setBasisLoading] = useState(false);
+  const [isBasisExpanded, setIsBasisExpanded] = useState(false);
+  const activeSignalIdRef = useRef<string | null>(null);
   const [highlightedRuleId, setHighlightedRuleId] = useState<string | null>(null);
   // D6.10 — Current decision_id for Action Lifecycle, propagated from RecommendationReview
   const [currentDecisionId, setCurrentDecisionId] = useState<string | null>(null);
@@ -134,13 +137,19 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
     }
   }, [initialSignalId, dbSignals, reduxSignals]);
   const loadDecisionBasis = useCallback(async (signalId: string) => {
+    activeSignalIdRef.current = signalId;
     setBasisData(null);
     setBasisLoading(true);
     try {
       const data = await fetchDecisionBasis(signalId);
-      setBasisData(data);
+      // Stale read check (Report 03 §03.5): verify response belongs to active case
+      if (activeSignalIdRef.current === signalId) {
+        setBasisData(data);
+      }
     } finally {
-      setBasisLoading(false);
+      if (activeSignalIdRef.current === signalId) {
+        setBasisLoading(false);
+      }
     }
   }, []);
   useEffect(() => {
@@ -240,8 +249,8 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
           wait_duration_minutes: signal.message.includes('45 minutes') ? 45 : 15
         },
         audit_trail: {
-          practise_fusion_client_id: "pf-oauth-client-88123-prod",
-          api_version: "Secure Data R4",
+          client_id: "sentinel-fhir-r4-client",
+          api_version: "FHIR R4",
           authorization_scope: "user/Appointment.write patient/Patient.read"
         }
       };
@@ -336,17 +345,23 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
           <h5 className="text-[10px] font-extrabold text-white/50 uppercase tracking-widest mb-1.5">TELEMETRY MESSAGE</h5>
           <p className="text-sm font-bold text-white">{selectedSignal.message}</p>
           <div className="flex items-center gap-3 mt-3 text-[11px] text-white/70 font-semibold">
-            <span>Matched Patient: <strong className="text-white">{selectedSignal.metadata?.patient_name || 'None'}</strong></span>
+            <span>Matched Patient: <strong className="text-white">
+              {selectedSignal.metadata?.patient_id
+                ? `${selectedSignal.metadata?.patient_name || selectedSignal.metadata?.patient_id} (${selectedSignal.metadata?.patient_id} - Workbook Verified)`
+                : selectedSignal.metadata?.patient_name
+                ? `${selectedSignal.metadata.patient_name} (Name reported by source)`
+                : 'None reported'}
+            </strong></span>
             <span>•</span>
-            <span>Received: <strong className="text-white">{new Date(selectedSignal.timestamp).toLocaleString()}</strong></span>
+            <span>Received: <strong className="text-white">{formatDateTimeWithZone(selectedSignal.timestamp)}</strong></span>
           </div>
         </div>
         <div className="bg-white/5 border border-white/10 rounded-[18px] p-4 flex gap-3">
           <div className="flex-1">
             <h5 className="text-xs font-extrabold text-white uppercase tracking-wider mb-2">Deterministic Evaluation</h5>
             <div className="space-y-2 mb-3">
-              <p className="text-xs text-white/90 font-semibold"><span className="text-white/50">Problem:</span> {selectedSignal.problem || 'None'}</p>
-              <p className="text-xs text-white/90 font-semibold"><span className="text-white/50">Reason:</span> {selectedSignal.reason || 'None'}</p>
+              <p className="text-xs text-white/90 font-semibold"><span className="text-white/50">Problem:</span> {selectedSignal.problem || 'Appointment marked as no-show'}</p>
+              <p className="text-xs text-white/90 font-semibold"><span className="text-white/50">Reason:</span> {selectedSignal.reason || 'Reason unavailable'}</p>
             </div>
             {selectedSignal.metadata?.risk_kind === 'claim_denial' && (
               <EvidenceRetrievalPanel signalId={selectedSignal.id} />
@@ -359,16 +374,13 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                 onDecisionChange={setCurrentDecisionId}
                 onViewBasis={(evaluationId) => {
                   setHighlightedRuleId(evaluationId);
-                  const el = document.getElementById('decision-basis');
-                  if (el) {
-                    const btn = el.querySelector('button[aria-expanded="false"]');
-                    if (btn) (btn as HTMLElement).click();
-                    el.scrollIntoView({ behavior: 'smooth' });
-                    setTimeout(() => {
-                      const ruleEl = document.getElementById(`rule-eval-${evaluationId}`);
-                      if (ruleEl) ruleEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }, 300);
-                  }
+                  setIsBasisExpanded(true);
+                  setTimeout(() => {
+                    const el = document.getElementById('decision-basis');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    const ruleEl = document.getElementById(`rule-eval-${evaluationId}`);
+                    if (ruleEl) ruleEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 150);
                 }}
               />
 
@@ -425,14 +437,21 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                 <div>
                   <p className="text-[10px] text-white/50 uppercase tracking-widest font-bold">Financial Exposure</p>
                   <p className="text-sm font-black text-amber-400">
-                    {selectedSignal.estimated_financial_exposure !== null && selectedSignal.estimated_financial_exposure !== undefined
+                    {selectedSignal.estimated_financial_exposure && selectedSignal.estimated_financial_exposure !== 'Unavailable'
                       ? selectedSignal.estimated_financial_exposure
                       : 'Unavailable'}
                   </p>
+                  {(!selectedSignal.estimated_financial_exposure || selectedSignal.estimated_financial_exposure === 'Unavailable') && (
+                    <p className="text-[10px] text-white/50 mt-0.5">No amount established for this missed appointment</p>
+                  )}
                 </div>
                 <div className="col-span-2">
                   <p className="text-[10px] text-white/50 uppercase tracking-widest font-bold">Operational Dependency</p>
-                  <p className="text-[11px] font-semibold text-white/70 leading-snug">{selectedSignal.operational_dependency || 'N/A'}</p>
+                  <p className="text-[11px] font-semibold text-white/70 leading-snug">
+                    {selectedSignal.operational_dependency && selectedSignal.operational_dependency !== 'N/A'
+                      ? selectedSignal.operational_dependency
+                      : 'Depends on whether the slot was filled. Status unverified'}
+                  </p>
                 </div>
               </div>
             </ProgressiveSection>
@@ -449,23 +468,23 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Payer Network</span>
                     <div className="flex items-center gap-1.5 font-bold text-emerald-400">
                       <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>{selectedSignal.metadata?.payer || "Daman / Orient Insurance"}</span>
+                      <span>{selectedSignal.metadata?.payer || (selectedSignal.metadata?.claim_id ? "Daman" : "No linked payer")}</span>
                     </div>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Clearinghouse Gateway</span>
                     <div className="flex items-center gap-1.5 font-bold text-blue-400">
                       <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />
-                      <span>DHPO eClaimLink (DHA)</span>
+                      <span>{selectedSignal.metadata?.claim_id ? "DHPO eClaimLink (DHA)" : "No claim transmitted"}</span>
                     </div>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Target Procedure</span>
-                    <p className="font-bold text-white">{selectedSignal.metadata?.cpt_code ? `CPT ${selectedSignal.metadata.cpt_code}` : 'CPT 99214 (E&M Visit)'}</p>
+                    <p className="font-bold text-white">{selectedSignal.metadata?.cpt_code ? `CPT ${selectedSignal.metadata.cpt_code}` : (selectedSignal.metadata?.claim_id ? 'CPT 99214 (E&M Visit)' : 'No linked procedure')}</p>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <span className="text-[9px] font-bold text-white/50 uppercase tracking-widest block mb-1">Audit Verification</span>
-                    <p className="font-bold text-amber-300">Deterministic Rule Match</p>
+                    <p className="font-bold text-amber-300">{selectedSignal.metadata?.rule_id || (selectedSignal.metadata?.claim_id ? "Deterministic Rule Match" : "No linked claim verification")}</p>
                   </div>
                 </div>
 
@@ -473,15 +492,17 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                 <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2.5">
                   <div className="flex items-center justify-between text-[11px] pb-2 border-b border-white/10">
                     <span className="text-white/60 font-semibold">Matched Electronic Claim</span>
-                    <span className="font-mono text-white font-bold">{selectedSignal.metadata?.claim_id || `CLM-UAE-${selectedSignal.id.slice(-6)}`}</span>
+                    <span className="font-mono text-white font-bold">{selectedSignal.metadata?.claim_id || "No linked claim"}</span>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] pb-2 border-b border-white/10">
-                    <span className="text-white/60 font-semibold">Statutory Authority Rule</span>
-                    <span className="text-amber-400 font-bold">UAE DHA Circular 2026/04</span>
-                  </div>
+                  {selectedSignal.metadata?.claim_id && (
+                    <div className="flex items-center justify-between text-[11px] pb-2 border-b border-white/10">
+                      <span className="text-white/60 font-semibold">Statutory Authority Rule</span>
+                      <span className="text-amber-400 font-bold">{selectedSignal.metadata?.statutory_rule || "UAE DHA Circular 2026/04"}</span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="text-white/60 font-semibold">Telemetry Ingestion</span>
-                    <span className="text-white/90 font-medium">{new Date(selectedSignal.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • Zero Drift</span>
+                    <span className="text-white/90 font-medium">{formatDateTimeWithZone(selectedSignal.timestamp)} • Zero Drift</span>
                   </div>
                 </div>
 
@@ -498,7 +519,14 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                     <div className="mt-2 bg-black/60 rounded-[12px] p-3 text-[10px] font-mono text-emerald-400 overflow-x-auto max-h-40 custom-scrollbar border border-white/10">
                       <pre>{JSON.stringify({
                         decision_context_id: basisData?.decision_context?.context_id || selectedSignal.metadata?.decision_context_id || `CTX-UAE-${selectedSignal.id}`,
-                        evidence_snapshot: getSimulatedRawPayload(selectedSignal)
+                        signal_payload: {
+                          id: selectedSignal.id,
+                          source: selectedSignal.source,
+                          type: selectedSignal.type,
+                          message: selectedSignal.message,
+                          timestamp: selectedSignal.timestamp,
+                          metadata: selectedSignal.metadata
+                        }
                       }, null, 2)}</pre>
                     </div>
                   )}
@@ -511,7 +539,8 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
               id="decision-basis"
               title="Decision Basis"
               icon={<BookOpen className="w-4 h-4 text-violet-400" />}
-              defaultExpanded={false}
+              isExpandedProp={isBasisExpanded}
+              onToggle={setIsBasisExpanded}
               dataState={
                 basisLoading
                   ? 'loading'

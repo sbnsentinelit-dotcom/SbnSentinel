@@ -60,25 +60,25 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
   // The summary cards count only signals still waiting for a decision, so approving one
   // (by a person or by Autopilot) lowers Critical Risks and Total Financial Exposure.
   const pendingEvents = actionableEvents.filter(isPendingDecision);
-  const [selectedEventIndex, setSelectedEventIndex] = useState<number>(0);
+  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
   // Clock for the time-left badge: it counts down live while the screen is open.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 30000);
     return () => clearInterval(timer);
   }, []);
-  const selectedEvent = actionableEvents.length > 0 && selectedEventIndex < actionableEvents.length ? actionableEvents[selectedEventIndex] : (actionableEvents.length > 0 ? actionableEvents[0] : null);
+  const selectedEvent = (selectedSignalId ? actionableEvents.find(e => e.id === selectedSignalId) : null) || (actionableEvents.length > 0 ? actionableEvents[0] : null);
   const handleDismiss = async () => {
     if (selectedEvent) {
       const ok = await recordSignalReview(selectedEvent.id, 'dismiss');
       if (ok) {
         dispatch(removeSignal(selectedEvent.id));
-        setSelectedEventIndex(0);
+        setSelectedSignalId(null);
       }
     }
   };
   const handleApply = () => {
-    // Execute goes through the governed review, where the decision and action are stored.
+    // Review goes through governed recommendation review, where the decision is stored.
     if (selectedEvent && onExecute) {
       onExecute(selectedEvent.id);
     }
@@ -174,9 +174,9 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
             <div className="space-y-3 overflow-y-auto custom-scrollbar max-h-[600px] pr-2">
               {actionableEvents.length > 0 ? actionableEvents.map((evt, idx) => (
                 <button
-                  key={idx}
-                  onClick={() => setSelectedEventIndex(idx)}
-                  className={`w-full text-left p-4 rounded-2xl transition-all duration-300 border ${selectedEventIndex === idx
+                  key={evt.id || idx}
+                  onClick={() => setSelectedSignalId(evt.id)}
+                  className={`w-full text-left p-4 rounded-2xl transition-all duration-300 border ${selectedEvent?.id === evt.id
                     ? 'bg-white/20 border-white/40 ring-2 ring-white/20 shadow-md'
                     : 'bg-white/5 border-white/10 hover:border-white/30 hover:bg-white/10'
                     }`}
@@ -371,7 +371,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                   </div>
                 ) : (
                   <button onClick={handleApply} className="px-8 py-3 rounded-2xl font-bold text-white bg-emerald-500 hover:bg-emerald-600 shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:shadow-lg hover:-translate-y-0.5 transition-all flex items-center gap-2">
-                    Execute Action <ArrowRight className="w-5 h-5" />
+                    Review recommendation <ArrowRight className="w-5 h-5" />
                   </button>
                 )}
               </div>

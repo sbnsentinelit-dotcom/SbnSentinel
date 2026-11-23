@@ -854,6 +854,58 @@ def test_report_01_check_3_trend_and_freshness():
             db.commit()
 
 
+def test_report_03_problem_reason_and_operational_dependency_defaults():
+    from app.api.v1.endpoints.signals import get_historical_signals
+    from app.models.signal import SignalModel
+    from unittest.mock import MagicMock
+
+    clinic = "DXB-CLINIC-R03"
+    with SessionLocal() as db:
+        try:
+            db.query(SignalModel).filter(SignalModel.clinic_id == clinic).delete()
+            db.commit()
+
+            sig = SignalModel(
+                id="sig_test_r03_01",
+                clinic_id=clinic,
+                org_id="ORG-TEST",
+                source="Test",
+                type="EHR",
+                message="Patient appointment missed",
+                problem=None,
+                reason=None,
+                operational_dependency=None,
+                metadata_data={"review_state": {"status": "active"}}
+            )
+            db.add(sig)
+            db.commit()
+
+            mock_user = MagicMock()
+            mock_user.clinic_id = clinic
+            mock_user.org_id = "ORG-TEST"
+            mock_user.role = "Clinic Manager"
+
+            signals = get_historical_signals(db=db, current_user=mock_user)
+            found = [s for s in signals if s.get("id") == "sig_test_r03_01"]
+            assert len(found) == 1
+            s = found[0]
+            # Problem and reason must not be None or 'None' (Report 03 §03.3 & §03D.1)
+            assert s.get("problem") == "Appointment marked as no-show"
+            assert s.get("reason") == "Reason unavailable"
+            assert s.get("operational_dependency") == "Depends on whether the slot was filled. Status unverified"
+        finally:
+            db.query(SignalModel).filter(SignalModel.clinic_id == clinic).delete()
+            db.commit()
+
+
+def test_report_03_organization_admin_authority_policy():
+    from app.services.governance_registry import governance_registry, DecisionType
+    config = governance_registry.get_authority_config("Organization Administrator")
+    assert config is not None
+    assert DecisionType.APPROVED in config.allowed_decisions
+    assert DecisionType.RETURNED_FOR_REVIEW in config.allowed_decisions
+
+
 if __name__ == "__main__":
     test_currency_mapping_no_db_sniffing()
     test_gender_authoritative_source_preservation()
@@ -875,4 +927,6 @@ if __name__ == "__main__":
     test_report_01_simulator_opt_in()
     test_report_01_check_2_provider_scope_and_date_cutoff()
     test_report_01_check_3_trend_and_freshness()
+    test_report_03_problem_reason_and_operational_dependency_defaults()
+    test_report_03_organization_admin_authority_policy()
     print("All QA verification fix tests passed successfully!")
