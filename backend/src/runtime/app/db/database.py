@@ -50,7 +50,7 @@ _TABLE_MODULES = (
     "audit", "telemetry", "settings", "rule", "evidence", "financial_reporting",
     "collaboration_models", "decision_context_models", "decision_record",
     "evidence_evaluation_models", "explainability_models",
-    "integration", "recommendation_generation_models",
+    "integration", "recommendation_generation_models", "patient_flow",
     # models/governance.py is not listed: it is unused and redefines the "rules" table of models/rule.py.
 )
 
@@ -84,9 +84,15 @@ def ensure_schema_compatibility():
                     conn.execute(text("ALTER TABLE encounters ADD COLUMN journey_stage VARCHAR DEFAULT 'Check In'"))
                 if "stage_timestamps" not in cols:
                     conn.execute(text("ALTER TABLE encounters ADD COLUMN stage_timestamps JSON"))
+                if cols and "patient_ref" not in cols:
+                    conn.execute(text("ALTER TABLE encounters ADD COLUMN patient_ref VARCHAR"))
+                if cols and "mrn" not in cols:
+                    conn.execute(text("ALTER TABLE encounters ADD COLUMN mrn VARCHAR"))
             else:
                 conn.execute(text("ALTER TABLE encounters ADD COLUMN IF NOT EXISTS journey_stage VARCHAR DEFAULT 'Check In'"))
                 conn.execute(text("ALTER TABLE encounters ADD COLUMN IF NOT EXISTS stage_timestamps JSON"))
+                conn.execute(text("ALTER TABLE encounters ADD COLUMN IF NOT EXISTS patient_ref VARCHAR"))
+                conn.execute(text("ALTER TABLE encounters ADD COLUMN IF NOT EXISTS mrn VARCHAR"))
             conn.commit()
     except Exception:
         pass

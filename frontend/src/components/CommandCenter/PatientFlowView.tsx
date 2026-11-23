@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
+import { FlowActionResult, FlowRow, FlowSnapshot, clinicTime, newIdempotencyKey, postFlow, sparkPath, trendClass } from '@/utils/patientFlow';
 import { Users, UserCheck, Clock, AlertCircle, Search, Filter, Download, Calendar, Activity, ChevronLeft, ChevronRight, LayoutGrid, Stethoscope, Check, CreditCard, ShieldCheck, ShieldAlert, Camera, RefreshCw, Scan, Sparkles, Phone, X, FileText } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store';
@@ -26,6 +28,11 @@ const parseSOAPNotes = (noteStr: string) => {
   return result;
 };
 
+// Popups render on the page body, above the sidebar and header: a parent with an animation
+// (transform) would otherwise make "fixed" relative to that parent and cut the popup off.
+const ModalPortal: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+  typeof document === 'undefined' ? null : createPortal(children, document.body);
+
 export const PatientFlowView: React.FC = () => {
   const stats = useSelector((state: RootState) => state.signals.stats);
   const events = useSelector((state: RootState) => state.signals.events);
@@ -48,7 +55,41 @@ export const PatientFlowView: React.FC = () => {
   const [journeysByEncounter, setJourneysByEncounter] = useState<Record<string, any>>({});
   const [isLoadingEncounters, setIsLoadingEncounters] = useState(true);
 
-  const getInitials = (name?: string) => {
+  // Live Patient Flow snapshot: queue, cards, trends, rooms and suggestions, all calculated on the
+  // server from the clinic's visit events for the selected period and filter.
+  const [flow, setFlow] = useState<FlowSnapshot | null>(null);
+  const [flowError, setFlowError] = useState(false);
+  const flowRequest = useRef(0);
+  const flowParams = useMemo(() => {
+    const params = new URLSearchParams({ period: dateFilter });
+    if (activeFilter === 'High Priority') params.append('priority', 'Urgent');
+    else if (activeFilter) params.append('department', activeFilter);
+    return params.toString();
+  }, [dateFilter, activeFilter]);
+  const fetchFlow = useCallback(async () => {
+    const request = ++flowRequest.current;
+    try {
+      const res = await fetchWithAuth(`/api/v1/patient-flow?${flowParams}`);
+      if (!res.ok) throw new Error(String(res.status));
+      const data: FlowSnapshot = await res.json();
+      // A late answer for an earlier period or filter is ignored.
+      if (request === flowRequest.current) {
+        setFlow(data);
+        setFlowError(false);
+      }
+    } catch {
+      if (request === flowRequest.current) setFlowError(true);
+    }
+  }, [flowParams]);
+  useEffect(() => {
+    fetchFlow();
+    const timer = setInterval(fetchFlow, 20000);
+    return () => clearInterval(timer);
+  }, [fetchFlow]);
+  const toast = (message: string, type: 'success' | 'info' | 'error' = 'success') =>
+    window.dispatchEvent(new CustomEvent('show-sentinel-toast', { detail: { message, type } }));
+
+  const getInitials = (name?: string | null) => {
     if (!name) return 'PT';
     const parts = name.trim().split(/\s+/);
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
@@ -91,8 +132,6 @@ export const PatientFlowView: React.FC = () => {
   const [soapA, setSoapA] = useState('');
   const [soapP, setSoapP] = useState('');
   const [modalActiveTab, setModalActiveTab] = useState<'soap' | 'rx' | 'vitals'>('soap');
-  // Report 05 §05.1 & §05.3: Separate Live Waiting Queue (open visits) from Historical Encounters
-  const [queueTab, setQueueTab] = useState<'live' | 'history'>('live');
 
   const fetchEncounters = async () => {
     try {
@@ -184,26 +223,29 @@ export const PatientFlowView: React.FC = () => {
   const [verificationResult, setVerificationResult] = useState<any>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Clinic Rooms State & Sync
-  const [roomAssignments, setRoomAssignments] = useState<Record<string, { status: string, encounterId: string | null, doctorId: string | null }>>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('roomAssignments');
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch (e) {
-          console.error("Failed to parse roomAssignments from localStorage:", e);
-        }
-      }
-    }
-    return {
-      'Room 1': { status: 'Available', encounterId: null, doctorId: null },
-      'Room 2': { status: 'Available', encounterId: null, doctorId: null },
-      'Room 3': { status: 'Cleaning', encounterId: null, doctorId: null },
-      'Lab': { status: 'Available', encounterId: null, doctorId: null }
-    };
-  });
-  const [pendingAssignments, setPendingAssignments] = useState<Array<{ encounterId: string, roomName: string, patientName: string }>>([]);
+  // Clinic rooms: state calculated on the server from the visit events (occupied while a
+  // consultation runs, cleaning afterwards, or as staff set it), keyed by room name.
+  const roomAssignments = useMemo(() => {
+    const out: Record<string, { id: number, kind: string, status: string, encounterId: string | null, doctorId: string | null, availableIn: number | null, patientName: string | null, provider: string | null, department: string | null, waitMinutes: number | null, patientsInLab: number }> = {};
+    (flow?.rooms || []).forEach(r => {
+      out[r.name] = {
+        id: r.id, kind: r.kind, status: r.status, encounterId: r.visit_id, doctorId: r.doctor,
+        availableIn: r.available_in_minutes, patientName: r.patient_name, provider: r.provider,
+        department: r.department, waitMinutes: r.wait_minutes, patientsInLab: r.patients_in_lab,
+      };
+    });
+    return out;
+  }, [flow]);
+  const [rejectedAssignments, setRejectedAssignments] = useState<string[]>([]);
+  // Consultations that started without a room: the closest free room is recommended to staff.
+  const pendingAssignments = useMemo(() => {
+    const free = (flow?.rooms || []).filter(r => r.kind === 'consult' && r.status === 'Available').map(r => r.name);
+    return (flow?.queue || [])
+      .filter(r => r.journey_stage === 'Consultation' && !r.room && !rejectedAssignments.includes(r.id))
+      .slice(0, free.length)
+      .map((r, i) => ({ encounterId: r.id, roomName: free[i], patientName: r.patient_name || 'Patient' }));
+  }, [flow, rejectedAssignments]);
+  const recommendedRoom = (flow?.rooms || []).find(r => r.kind === 'consult' && r.status === 'Available')?.name || null;
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [assignTargetPatient, setAssignTargetPatient] = useState<string>('');
   const [assignTargetDoctor, setAssignTargetDoctor] = useState<string>('');
@@ -211,105 +253,63 @@ export const PatientFlowView: React.FC = () => {
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomDoctor, setNewRoomDoctor] = useState<string | null>(null);
 
-  const handleApproveAssignment = (encounterId: string, roomName: string) => {
-    setRoomAssignments(prev => {
-      const next = { ...prev };
-      if (next[roomName]) {
-        next[roomName] = { ...next[roomName], status: 'Occupied', encounterId };
-        localStorage.setItem('roomAssignments', JSON.stringify(next));
-      }
-      return next;
-    });
-    setPendingAssignments(prev => prev.filter(p => p.encounterId !== encounterId));
+  const assignRoom = async (visitId: string, roomName: string, patientName?: string | null) => {
+    try {
+      await postFlow(`/visits/${encodeURIComponent(visitId)}/room`, { room: roomName });
+      toast(`🏥 ${patientName || 'Patient'} assigned to ${roomName}.`);
+    } catch (e) {
+      toast(`Room not assigned: ${(e as Error).message}`, 'error');
+    } finally {
+      fetchFlow();
+      fetchEncounters();
+    }
+  };
 
-    window.dispatchEvent(new CustomEvent('show-sentinel-toast', {
-      detail: { message: `✅ Governance Check Passed: Room assignment approved.`, type: 'success' }
-    }));
+  const handleApproveAssignment = (encounterId: string, roomName: string) => {
+    const row = flow?.queue.find(r => r.id === encounterId);
+    assignRoom(encounterId, roomName, row?.patient_name);
   };
 
   const handleRejectAssignment = (encounterId: string) => {
-    setPendingAssignments(prev => prev.filter(p => p.encounterId !== encounterId));
-    window.dispatchEvent(new CustomEvent('show-sentinel-toast', {
-      detail: { message: `❌ Assignment rejected by staff.`, type: 'info' }
-    }));
+    setRejectedAssignments(prev => [...prev, encounterId]);
+    toast(`❌ Assignment rejected by staff.`, 'info');
   };
 
-  // Available Doctors (fetched from encounters or static roster)
-  const CLINIC_DOCTORS = [
-    { id: 'dr_001', name: 'Dr. Sarah Mitchell', specialty: 'Internal Medicine', available: true },
-    { id: 'dr_002', name: 'Dr. James Okafor', specialty: 'Family Medicine', available: true },
-    { id: 'dr_003', name: 'Dr. Priya Sharma', specialty: 'Urgent Care', available: true },
-    { id: 'dr_004', name: 'Dr. Carlos Rivera', specialty: 'Pediatrics', available: true },
-    { id: 'dr_005', name: 'Dr. Emily Chen', specialty: 'Cardiology', available: false },
-  ];
+  const setRoomStatus = async (roomName: string, status: string) => {
+    const room = roomAssignments[roomName];
+    if (!room) return;
+    try {
+      await postFlow(`/rooms/${room.id}/status`, { status });
+    } catch (e) {
+      toast(`${roomName}: ${(e as Error).message}`, 'error');
+    } finally {
+      fetchFlow();
+    }
+  };
+
+  const setRoomDoctor = async (roomName: string, doctor: string | null) => {
+    const room = roomAssignments[roomName];
+    if (!room) return;
+    try {
+      await postFlow(`/rooms/${room.id}/doctor`, { doctor });
+    } catch (e) {
+      toast(`${roomName}: ${(e as Error).message}`, 'error');
+    } finally {
+      fetchFlow();
+    }
+  };
+
+  // The clinic's providers as recorded in its patient data (available = not in a consultation now).
+  const CLINIC_DOCTORS = (flow?.doctors || []).map(d => ({ id: d.name, name: d.name, specialty: d.specialty || '', available: d.available }));
 
   useEffect(() => {
-    if (encounters.length === 0) return;
-
-    setRoomAssignments(prev => {
-      let changed = false;
-      const next = { ...prev };
-
-      // Free rooms whose patients are no longer "In Room"
-      Object.keys(next).forEach(roomName => {
-        const encId = next[roomName].encounterId;
-        if (encId) {
-          const enc = encounters.find(e => e.id === encId);
-          if (!enc || (enc.status && enc.status.toLowerCase() !== 'in room')) {
-            next[roomName] = {
-              status: next[roomName].status === 'Occupied' ? 'Available' : next[roomName].status,
-              encounterId: null,
-              doctorId: next[roomName].doctorId ?? null
-            };
-            changed = true;
-          }
-        }
-      });
-
-      if (changed) {
-        localStorage.setItem('roomAssignments', JSON.stringify(next));
-        return next;
-      }
-      return prev;
-    });
-  }, [encounters]);
-
-  // Governance Boundary: Generate Recommendations instead of auto-executing
-  useEffect(() => {
-    if (encounters.length === 0) return;
-
-    setPendingAssignments(prevPending => {
-      const assignedEncIds = Object.values(roomAssignments).map(r => r.encounterId).filter(Boolean);
-      const unassignedInRoom = encounters.filter(e => e.status && e.status.toLowerCase() === 'in room' && !assignedEncIds.includes(e.id));
-
-      let newPending = [...prevPending];
-      let changed = false;
-
-      // Remove pending items if they are no longer "In Room" or already assigned
-      const validPending = newPending.filter(p => unassignedInRoom.some(u => u.id === p.encounterId));
-      if (validPending.length !== newPending.length) {
-        newPending = validPending;
-        changed = true;
-      }
-
-      unassignedInRoom.forEach(enc => {
-        if (newPending.some(p => p.encounterId === enc.id)) return;
-
-        const availableRoom = Object.keys(roomAssignments).find(roomName =>
-          roomAssignments[roomName].status === 'Available' &&
-          !roomAssignments[roomName].encounterId &&
-          !newPending.some(p => p.roomName === roomName)
-        );
-
-        if (availableRoom) {
-          newPending.push({ encounterId: enc.id, roomName: availableRoom, patientName: enc.patient_name });
-          changed = true;
-        }
-      });
-
-      return changed ? newPending : prevPending;
-    });
-  }, [encounters, roomAssignments]);
+    if (!selectedRoom) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setSelectedRoom(null); setAssignTargetPatient(''); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedRoom]);
 
   // Sync editing fields when a room is clicked
   useEffect(() => {
@@ -365,32 +365,32 @@ export const PatientFlowView: React.FC = () => {
     }
   };
   const [callingPatient, setCallingPatient] = useState<any | null>(null);
-  const [callingStatus, setCallingStatus] = useState<'dialing' | 'connected' | 'completed' | null>(null);
+  const [callingStatus, setCallingStatus] = useState<'dialing' | 'connected' | 'completed' | 'failed' | null>(null);
+  const [callResult, setCallResult] = useState<FlowActionResult | null>(null);
 
-  const handleCallPatient = (patient: any) => {
+  // Places the call through the clinic's telephony connector; the screen shows the recorded result.
+  const handleCallPatient = async (patient: any) => {
     setCallingPatient(patient);
+    setCallResult(null);
     setCallingStatus('dialing');
-
-    // Simulate Twilio API outbound call
-    setTimeout(() => {
-      setCallingStatus('connected');
-    }, 1500);
-
-    setTimeout(() => {
-      setCallingStatus('completed');
-    }, 3800);
-
-    setTimeout(() => {
-      setCallingPatient(null);
-      setCallingStatus(null);
-    }, 5500);
+    try {
+      const result = await postFlow<FlowActionResult>(`/visits/${encodeURIComponent(patient.id)}/call`, {
+        idempotency_key: newIdempotencyKey(`call:${patient.id}`),
+      });
+      setCallResult(result);
+      setCallingStatus(result.status === 'COMPLETED' ? 'completed' : 'failed');
+    } catch (e) {
+      setCallResult({ action_id: '', action_type: 'CALL_PATIENT', status: 'FAILED', receipt_ref: null,
+        detail: (e as Error).message, recipient: null, connector: null });
+      setCallingStatus('failed');
+    }
   };
 
-  const eLen = events.length;
-
-  // Open Health Card Modal and fetch existing record
-  const handleOpenHealthCard = async (patientName: string) => {
+  // Open Health Card Modal and fetch the patient's record by identifier (several patients share a name)
+  const [selectedPatientRef, setSelectedPatientRef] = useState<string | null>(null);
+  const handleOpenHealthCard = async (patientName: string, patientRef?: string | null) => {
     setSelectedPatient(patientName);
+    setSelectedPatientRef(patientRef || null);
     setProviderName('');
     setMemberId('');
     setGroupNumber('');
@@ -402,7 +402,26 @@ export const PatientFlowView: React.FC = () => {
     setIsHealthCardModalOpen(true);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/insurance/patient/${encodeURIComponent(patientName)}`);
+      if (patientRef) {
+        const response = await fetchWithAuth(`/api/v1/insurance/patient-ref/${encodeURIComponent(patientRef)}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data?.stored) {
+            setProviderName(data.stored.provider_name);
+            setMemberId(data.stored.member_id);
+            setGroupNumber(data.stored.group_number || '');
+            setPayerId(data.stored.payer_id || '');
+            setVerificationResult(data.stored);
+            setOcrText(data.stored.ocr_raw_text || '');
+          } else if (data?.on_file) {
+            // Payer and member ID on file in the patient's record; not verified until checked.
+            setProviderName(data.on_file.payer || '');
+            setMemberId(data.on_file.member_id || '');
+          }
+        }
+        return;
+      }
+      const response = await fetchWithAuth(`/api/v1/insurance/patient/${encodeURIComponent(patientName)}`);
       if (response.ok) {
         const data = await response.json();
         if (data) {
@@ -457,15 +476,15 @@ export const PatientFlowView: React.FC = () => {
 
   // Verify Eligibility
   const handleVerifyEligibility = async () => {
-    const prov = providerName || "BlueCross BlueShield";
-    const mem = memberId || "BCBS-9940251";
-    const grp = groupNumber || "GRP44910";
-    const pyr = payerId || "PYR9910";
-
-    if (!providerName) setProviderName(prov);
-    if (!memberId) setMemberId(mem);
-    if (!groupNumber) setGroupNumber(grp);
-    if (!payerId) setPayerId(pyr);
+    const prov = providerName.trim();
+    const mem = memberId.trim();
+    const grp = groupNumber.trim() || null;
+    const pyr = payerId.trim() || null;
+    if (!prov || !mem) {
+      // No invented card details: the payer and member ID must come from the card or the record.
+      setValidationError('Enter the payer and member ID (or scan the card) before verifying.');
+      return;
+    }
 
     setValidationError(null);
     setIsVerifying(true);
@@ -474,7 +493,8 @@ export const PatientFlowView: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          patient_name: selectedPatient || "Zoe P.",
+          // Stored under the patient's identifier when known (names are not unique).
+          patient_name: selectedPatientRef || selectedPatient,
           provider_name: prov,
           member_id: mem,
           group_number: grp,
@@ -495,8 +515,9 @@ export const PatientFlowView: React.FC = () => {
 
   const handleExport = () => {
     setIsExporting(true);
+    // Exactly the rows of the current snapshot (same period, filter and cutoff as the screen).
     let csvContent = "Patient Name,Provider,Department,Priority,Wait Time,Status\n";
-    encounters.forEach(e => {
+    (flow?.queue || []).forEach(e => {
       const waitVal = e.wait_time != null && e.wait_time !== '' ? e.wait_time : 'Unavailable';
       csvContent += `${e.patient_name || 'N/A'},${e.provider_name || 'N/A'},${e.department || 'N/A'},${e.priority || 'N/A'},${waitVal},${e.status || 'N/A'}\n`;
     });
@@ -821,35 +842,9 @@ export const PatientFlowView: React.FC = () => {
     printWindow.document.close();
   };
 
-  const filteredEncounters = encounters.filter(enc => {
-    if (activeFilter === 'Cardiology' && enc.department !== 'Cardiology') return false;
-    if (activeFilter === 'General Practice' && enc.department !== 'General Practice') return false;
-    if (activeFilter === 'Pediatrics' && enc.department !== 'Pediatrics') return false;
-    // Report 05 §05.8: High filter accepts both 'High' and 'Urgent' generated by workbook importer
-    if (activeFilter === 'High Priority' && enc.priority !== 'High' && enc.priority !== 'Urgent') return false;
-    return true;
-  });
-
-  // Report 05 §05.1 & Page 1: Live queue only retains open visits (status !== Completed & status !== Cancelled)
-  const liveQueueEncounters = filteredEncounters.filter(enc => enc.status !== 'Completed' && enc.status !== 'Cancelled');
-  const displayedEncounters = queueTab === 'live' ? liveQueueEncounters : filteredEncounters;
-
-  // Report 05 §05.5 & Screen 05B: Resolve genuine issuer-qualified MRN from patient sheet (MRN-000001 - MRN-000500)
-  const getPatientMRN = (enc: any) => {
-    if (!enc) return 'Unknown';
-    if (enc.mrn && enc.mrn !== 'Unknown' && !String(enc.mrn).startsWith('MRN-ENC')) {
-      return enc.mrn;
-    }
-    const pid = String(enc.patient_id || '');
-    if (pid.startsWith('PAT2026')) {
-      const num = pid.replace('PAT2026', '');
-      return `MRN-${num.padStart(6, '0')}`;
-    }
-    if (enc.patient_name === 'Mariam Ali' || enc.patient_id === 'Mariam Ali') {
-      return 'MRN-000001';
-    }
-    return enc.mrn || 'MRN-000001';
-  };
+  // The queue for the selected period and filter, as the server calculated it (filters apply to
+  // the whole result: rows, cards and export).
+  const filteredEncounters: FlowRow[] = flow?.queue || [];
 
   return (
     <div className="animate-in fade-in duration-500 max-w-[1600px] mx-auto space-y-8">
@@ -1120,9 +1115,9 @@ export const PatientFlowView: React.FC = () => {
 
             {showFilter && (
               <div className="absolute top-12 left-0 w-48 bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] rounded-[16px] shadow-[0_20px_50px_rgba(46,16,85,0.3)] border border-white/10 p-2 z-30 animate-in slide-in-from-top-2">
-                <div onClick={() => {setActiveFilter('Cardiology'); setShowFilter(false); }} className="px-3 py-2 hover:bg-white/10 rounded-[8px] cursor-pointer text-xs font-bold text-white">Cardiology Only</div>
-                <div onClick={() => {setActiveFilter('General Practice'); setShowFilter(false); }} className="px-3 py-2 hover:bg-white/10 rounded-[8px] cursor-pointer text-xs font-bold text-white">General Practice</div>
-                <div onClick={() => {setActiveFilter('Pediatrics'); setShowFilter(false); }} className="px-3 py-2 hover:bg-white/10 rounded-[8px] cursor-pointer text-xs font-bold text-white">Pediatrics</div>
+                {(flow?.departments || []).map(dept => (
+                  <div key={dept} onClick={() => {setActiveFilter(dept); setShowFilter(false); }} className="px-3 py-2 hover:bg-white/10 rounded-[8px] cursor-pointer text-xs font-bold text-white">{dept}</div>
+                ))}
                 <div className="h-px bg-white/10 my-1"></div>
                 <div onClick={() => {setActiveFilter('High Priority'); setShowFilter(false); }} className="px-3 py-2 hover:bg-white/10 rounded-[8px] cursor-pointer text-xs font-bold text-[#2563EB]">High Priority Only</div>
                 {activeFilter && (
@@ -1139,105 +1134,44 @@ export const PatientFlowView: React.FC = () => {
             <button onClick={() => setDateFilter(dateFilter === 'Today' ? 'Yesterday' : dateFilter === 'Yesterday' ? 'Last 7 Days' : 'Today')} className="flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-white font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow whitespace-nowrap shrink-0 hover:bg-white/10 transition-colors active:scale-95">
               <Calendar className="w-4 h-4 text-white/70" /> {dateFilter}
             </button>
-            {/* Report 05 §05.3 & Screen 05A: Identify workbook import; do not claim unconditional live sync */}
-            <div className="flex items-center gap-2 bg-white/5 border border-white/10 text-white/80 font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow">
-              <span className="w-2 h-2 rounded-full bg-blue-400"></span>
-              UAE Clinic Billing Workbook (Imported)
-            </div>
+            {/* Synced only when the queue feed delivered an event recently; otherwise its last update time. */}
+            {(() => {
+              const lastAt = clinicTime(flow?.feed.last_event_at);
+              const synced = !flowError && !!flow?.feed.synced;
+              const label = flowError ? 'Queue unavailable'
+                : synced ? `Live Queue Synced · ${lastAt}`
+                : lastAt ? `Queue last updated ${lastAt}` : 'No queue updates yet';
+              return (
+                <div className={`flex items-center gap-2 font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow border ${synced ? 'bg-[#ECFDF5] text-[var(--color-semantic-positive)] border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'}`}>
+                  <span className={`w-2 h-2 rounded-full ${synced ? 'bg-[var(--color-semantic-positive)] animate-pulse' : 'bg-amber-400'}`}></span>
+                  {label}
+                </div>
+              );
+            })()}
           </div>
 
-          {/* Top Stats */}
+          {/* Top Stats: calculated on the server from the visit events for the selected period and
+              filter; trends compare with the same time yesterday (or the previous 7 days). */}
       {(() => {
-        // Clinic calendar clock for today and previous calendar day (B-74)
-        const getClinicDateStr = (date: Date, daysOffset = 0) => {
-          const region = (process.env.NEXT_PUBLIC_DEPLOYMENT_REGION || 'UAE').toUpperCase();
-          const timeZone = region === 'UAE' ? 'Asia/Dubai' : (region === 'US' ? 'America/New_York' : 'UTC');
-          const target = new Date(date.getTime() + daysOffset * 86400000);
-          return new Intl.DateTimeFormat('en-CA', {
-            timeZone,
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-          }).format(target);
-        };
-        const todayStr = getClinicDateStr(new Date(), 0);
-        const yesterdayStr = getClinicDateStr(new Date(), -1);
-
-        // Group encounters strictly by calendar day (B-74: Today's cards only count today's clinic date)
-        const currentDayEncs = encounters.filter(e => {
-          const raw = e.date || (e.created_at ? e.created_at.slice(0, 10) : null);
-          return raw && String(raw).slice(0, 10) === todayStr;
-        });
-        const priorDayEncs = encounters.filter(e => {
-          const raw = e.date || (e.created_at ? e.created_at.slice(0, 10) : null);
-          return raw && String(raw).slice(0, 10) === yesterdayStr;
-        });
-
-        // Current-day only metrics for top cards (B-74: Today's cards only count today's patients)
-        const checkedInCount = currentDayEncs.filter(e => e.status === 'Waiting').length;
-        const inConsultationCount = currentDayEncs.filter(e => e.status === 'In Room').length;
-        const delayedCount = currentDayEncs.filter(e => e.status === 'Delayed').length;
-
-        const currentWaitTimes = currentDayEncs.map(e => {
-          if (e.wait_time === null || e.wait_time === undefined || e.wait_time === '') return null;
-          const m = String(e.wait_time).match(/(\d+)/);
-          return m ? parseInt(m[1], 10) : null;
-        }).filter((w): w is number => w !== null);
-
-        const currentAvgWait = currentWaitTimes.length > 0
-          ? Math.round(currentWaitTimes.reduce((a, b) => a + b, 0) / currentWaitTimes.length)
-          : null;
-
-        // Prior-day metrics for trend comparison
-        const priorCheckedIn = priorDayEncs.filter(e => e.status === 'Waiting').length;
-        const priorInConsultation = priorDayEncs.filter(e => e.status === 'In Room').length;
-        const priorDelayed = priorDayEncs.filter(e => e.status === 'Delayed').length;
-        const priorWaitTimes = priorDayEncs.map(e => {
-          if (e.wait_time === null || e.wait_time === undefined || e.wait_time === '') return null;
-          const m = String(e.wait_time).match(/(\d+)/);
-          return m ? parseInt(m[1], 10) : null;
-        }).filter((w): w is number => w !== null);
-
-        const priorAvgWait = priorWaitTimes.length > 0
-          ? Math.round(priorWaitTimes.reduce((a, b) => a + b, 0) / priorWaitTimes.length)
-          : null;
-
-        const calcTrend = (curr: number, prev: number | null, isWait = false) => {
-          if (priorDayEncs.length === 0 || prev === null) {
-            return 'Unavailable';
-          }
-          const diff = curr - prev;
-          if (isWait) {
-            return diff >= 0 ? `+${diff}m` : `${diff}m`;
-          }
-          if (prev === 0) {
-            return diff > 0 ? `+${diff}` : `${diff}`;
-          }
-          const pct = Math.round((diff / prev) * 100);
-          return pct >= 0 ? `+${pct}%` : `${pct}%`;
-        };
-
-        const checkedInTrend = calcTrend(checkedInCount, priorDayEncs.length > 0 ? priorCheckedIn : null);
-        const inConsultationTrend = calcTrend(inConsultationCount, priorDayEncs.length > 0 ? priorInConsultation : null);
-        const avgWaitTrend = currentAvgWait !== null && priorAvgWait !== null ? calcTrend(currentAvgWait, priorAvgWait, true) : 'Unavailable';
-        const delayedTrend = calcTrend(delayedCount, priorDayEncs.length > 0 ? priorDelayed : null);
-        // Report 05 §05.4 & Screen 05A: Show "No verified waits" when empty
-        const waitDisplay = currentAvgWait !== null ? `${currentAvgWait}m` : 'No verified waits';
-
+        const cards = flow?.cards;
+        const unavailable = { display: flowError ? 'Unavailable' : '…', trend: null, trend_good: null, spark: [] as Array<number | null> };
         return (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             {[
-              { title: 'Checked In', value: checkedInCount, trend: checkedInTrend, icon: UserCheck, color: 'text-[var(--color-accent)]', bg: 'bg-blue-500/20', line: 'var(--color-accent)' },
-              { title: 'In Consultation', value: inConsultationCount, trend: inConsultationTrend, icon: Stethoscope, color: 'text-[var(--color-semantic-positive)]', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-              { title: 'Avg Wait Time', value: waitDisplay, trend: avgWaitTrend, icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
-              { title: 'Delayed', value: delayedCount, trend: delayedTrend, icon: AlertCircle, color: 'text-[var(--color-semantic-critical)]', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
-            ].map((stat, i) => (
+              { title: 'Checked In', card: cards?.checked_in, icon: UserCheck, color: 'text-[var(--color-accent)]', bg: 'bg-blue-500/20', line: 'var(--color-accent)' },
+              { title: 'In Consultation', card: cards?.in_consultation, icon: Stethoscope, color: 'text-[var(--color-semantic-positive)]', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
+              { title: 'Avg Wait Time', card: cards?.avg_wait, icon: Clock, color: 'text-[var(--color-semantic-attention)]', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
+              { title: 'Delayed', card: cards?.delayed, icon: AlertCircle, color: 'text-[var(--color-semantic-critical)]', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
+            ].map((stat, i) => {
+              const card = stat.card || unavailable;
+              const path = sparkPath(card.spark);
+              return (
               <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover flex justify-between items-center text-white transition-all duration-300">
                 <div>
                   <p className="text-[11px] text-white/70 uppercase font-extrabold tracking-widest mb-1">{stat.title}</p>
                   <div className="flex items-end gap-3">
-                    <p className={`${stat.value === 'No verified waits' ? 'text-lg' : 'text-[28px]'} font-extrabold text-white leading-none transition-all`}>{stat.value}</p>
-                    <span className={`text-[11px] font-bold mb-1 transition-colors ${stat.trend === 'Unavailable' ? 'text-white/40' : stat.trend.startsWith('+') ? 'text-[var(--color-semantic-positive)]' : 'text-[var(--color-semantic-critical)]'}`}>{stat.trend}</span>
+                    <p className="text-[28px] font-extrabold text-white leading-none transition-all">{card.display}</p>
+                    <span className={`text-[11px] font-bold mb-1 transition-colors ${trendClass(card)}`}>{card.trend ?? 'Unavailable'}</span>
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-3">
@@ -1246,57 +1180,55 @@ export const PatientFlowView: React.FC = () => {
                   </div>
                   <div className="w-12 h-6 opacity-60">
                     <svg viewBox="0 0 100 30" className="w-full h-full preserve-aspect-ratio-none">
-                      <path d={stat.value === 'No verified waits' ? "M0,15 L100,15" : "M0,20 C20,10 40,30 60,15 C80,25 100,5 100,5"} fill="none" stroke={stat.line} strokeWidth="3" strokeLinecap="round" />
+                      {path && <path d={path} fill="none" stroke={stat.line} strokeWidth="3" strokeLinecap="round" />}
                     </svg>
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         );
       })()}
 
       {/* Patient Journey Timeline */}
       {(() => {
-        // Report 05 §05.6 & Screen 05A: Selection is explicit. Show neutral timeline until visit is selected.
-        const activeEncounter = selectedPatientEncounter;
+        // Selection is explicit: nothing is shown as a patient's journey until a row is clicked.
+        const selectedRow = selectedPatientEncounter
+          ? (flow?.queue.find(r => r.id === selectedPatientEncounter.id) || selectedPatientEncounter)
+          : null;
+        const activeEncounter = selectedRow;
         const targetEncId = activeEncounter?.id;
         // Key journey data strictly to the active encounter (B-72: prevent cached journey of A appearing under B)
         const verifiedJourney = (targetEncId && journeysByEncounter[targetEncId])
           || ((journeyData && journeyData.encounter_id === targetEncId) ? journeyData : null);
+        // Stages and their times come from the visit's recorded events (the live row is the latest).
+        const stageTimes: Record<string, string> = (selectedRow as FlowRow | null)?.stage_timestamps || verifiedJourney?.stage_timestamps || {};
+        const stageSources: Record<string, string> = verifiedJourney?.stage_sources || {};
         const stageList = ['Check In', 'Waiting', 'Consultation', 'Lab', 'Billing', 'Completed'];
-        const currentStageName = activeEncounter
-          ? (verifiedJourney?.current_stage || activeEncounter?.journey_stage || (activeEncounter?.status === 'In Room' ? 'Consultation' : activeEncounter?.status === 'Completed' ? 'Completed' : 'Waiting'))
+        const currentStageName: string | null = activeEncounter
+          ? ((selectedRow as FlowRow | null)?.journey_stage || verifiedJourney?.current_stage || activeEncounter?.journey_stage || null)
           : null;
-        const activeStageIndex = currentStageName ? (stageList.indexOf(currentStageName) !== -1 ? stageList.indexOf(currentStageName) : -1) : -1;
+        const activeStageIndex = currentStageName ? stageList.indexOf(currentStageName) : -1;
 
         const formatStageTs = (ts?: string | null) => {
           if (!ts) return null;
           const s = String(ts).trim();
-          if (!s.includes('T') && !s.includes(':')) {
-            return s; // If date-only, show full string without slicing into "2026-"
-          }
-          try {
-            const d = new Date(s);
-            if (!isNaN(d.getTime())) {
-              const region = (process.env.NEXT_PUBLIC_DEPLOYMENT_REGION || 'UAE').toUpperCase();
-              const timeZone = region === 'UAE' ? 'Asia/Dubai' : (region === 'US' ? 'America/New_York' : 'UTC');
-              return d.toLocaleTimeString('en-GB', {
-                timeZone,
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false,
-              });
-            }
-          } catch (e) {}
-          if (s.includes('T')) return s.split('T')[1].slice(0, 5);
-          if (s.includes(':')) return s.slice(0, 5);
-          return s;
+          if (!s.includes('T')) return s; // a date without a time is shown as the date
+          return clinicTime(s) || s;
         };
 
+        // Inspecting the timeline never changes the visit: a click shows when and from where a stage was recorded.
         const handleTimelineStageClick = (targetStage: string) => {
-          // Report 05 §05.6: Read-only inspection of documented stage details. No mutation or PUT request.
-          if (!activeEncounter || !targetEncId) return;
+          if (!activeEncounter) return;
+          const at = formatStageTs(stageTimes[targetStage]);
+          if (!at) {
+            toast(`${targetStage}: not recorded for ${activeEncounter.patient_name || 'this visit'}.`, 'info');
+            return;
+          }
+          const source = stageSources[targetStage];
+          const sourceLabel = source === 'manual' ? 'reported by staff' : source ? 'from the queue feed' : 'recorded';
+          toast(`${targetStage} at ${at} ${flow?.timezone || ''} (${sourceLabel}).`, 'info');
         };
 
         return (
@@ -1307,7 +1239,7 @@ export const PatientFlowView: React.FC = () => {
                   Patient Journey: <span className="text-blue-400 font-extrabold">{activeEncounter?.patient_name || 'Select a Patient'}</span>
                 </h3>
                 <p className="text-xs text-white/50">
-                  {activeEncounter ? `MRN: ${getPatientMRN(activeEncounter)} • Provider: ${activeEncounter.provider_name || 'Unknown'} • Department: ${activeEncounter.department || 'Unknown'} • Payer: ${activeEncounter.payer_network || verifiedJourney?.insurance || 'Unknown'}` : 'Click any queue row below to inspect real patient flow'}
+                  {activeEncounter ? `MRN: ${activeEncounter.mrn || 'Unknown'} • Provider: ${activeEncounter.provider_name || 'Unknown'} • Department: ${activeEncounter.department || 'Unknown'} • Payer: ${activeEncounter.payer_network || verifiedJourney?.insurance || 'Unknown'}` : 'Click any queue row below to inspect real patient flow'}
                 </p>
               </div>
               {activeEncounter && (
@@ -1318,14 +1250,12 @@ export const PatientFlowView: React.FC = () => {
             </div>
             <div className="flex items-center justify-between relative">
               <div className="absolute left-8 right-8 top-1/2 -translate-y-1/2 h-1 bg-white/10 -z-10 rounded-full"></div>
-              {activeStageIndex >= 0 && (
-                <div className="absolute left-8 right-1/3 top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-[var(--color-semantic-positive)] to-[var(--color-accent)] -z-10 rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, activeStageIndex * 20)}%` }}></div>
-              )}
+              <div className="absolute left-8 right-1/3 top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-[var(--color-semantic-positive)] to-[var(--color-accent)] -z-10 rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, Math.max(0, activeStageIndex) * 20)}%` }}></div>
 
               {stageList.map((stageName, i) => {
-                const stageTs = verifiedJourney?.stage_timestamps?.[stageName];
+                const stageTs = stageTimes[stageName];
                 let status = 'pending';
-                if (activeEncounter && stageName === currentStageName) {
+                if (stageName === currentStageName) {
                   status = 'current';
                 } else if (stageTs) {
                   // Only marked done if a recorded timestamp entry actually exists! (B-71: skipped stages stay pending)
@@ -1334,10 +1264,10 @@ export const PatientFlowView: React.FC = () => {
 
                 return (
                   <div key={i} onClick={() => handleTimelineStageClick(stageName)} className="flex flex-col items-center gap-3 bg-transparent px-2 relative group cursor-pointer">
-                    {activeEncounter && status === 'current' && (
+                    {status === 'current' && (
                       <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex flex-col items-center animate-bounce">
                         <div className="w-8 h-8 rounded-full bg-[var(--color-accent)] border-2 border-white flex items-center justify-center text-white font-extrabold text-xs premium-shadow">
-                          {getInitials(activeEncounter.patient_name)}
+                          {getInitials(activeEncounter?.patient_name)}
                         </div>
                       </div>
                     )}
@@ -1398,28 +1328,8 @@ export const PatientFlowView: React.FC = () => {
           )}
 
           <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-8 shadow-[0_20px_50px_rgba(46,16,85,0.3)] text-white">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-3">
-              <div className="flex items-center gap-3">
-                <h3 className="text-base font-bold text-white">Live Waiting Queue</h3>
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">
-                  {liveQueueEncounters.length} Active
-                </span>
-              </div>
-              {/* Report 05 §05.1 & Screen 05C: Tab switcher between Live Queue (open visits) and Historical Visits */}
-              <div className="flex items-center gap-2 bg-white/5 p-1 rounded-[12px] border border-white/10 text-xs">
-                <button
-                  onClick={() => setQueueTab('live')}
-                  className={`px-3 py-1 rounded-[8px] font-bold transition-all ${queueTab === 'live' ? 'bg-[var(--color-accent)] text-white shadow' : 'text-white/60 hover:text-white'}`}
-                >
-                  Live Queue ({liveQueueEncounters.length})
-                </button>
-                <button
-                  onClick={() => setQueueTab('history')}
-                  className={`px-3 py-1 rounded-[8px] font-bold transition-all ${queueTab === 'history' ? 'bg-[var(--color-accent)] text-white shadow' : 'text-white/60 hover:text-white'}`}
-                >
-                  Historical Encounters ({filteredEncounters.length})
-                </button>
-              </div>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-base font-bold text-white">Live Waiting Queue</h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -1433,26 +1343,14 @@ export const PatientFlowView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="text-sm font-semibold text-white">
-                  {displayedEncounters.length === 0 && (
+                  {filteredEncounters.length === 0 && (
                     <tr>
                       <td colSpan={5} className="py-12 text-center">
-                        <div className="flex flex-col items-center justify-center max-w-md mx-auto space-y-2">
-                          <Clock className="w-8 h-8 text-white/30 mb-2" />
-                          <p className="text-sm text-white font-bold">Zero open visits in the live queue</p>
-                          <p className="text-xs text-white/50 leading-relaxed">
-                            The current UAE Clinic Billing Workbook contains 789 historical encounters (766 completed, 23 cancellations) dated 1 Jan – 10 Oct 2026. All visits belong in history.
-                          </p>
-                          <button
-                            onClick={() => setQueueTab('history')}
-                            className="mt-3 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-[12px] text-xs font-bold transition-all"
-                          >
-                            View Historical Encounters (789)
-                          </button>
-                        </div>
+                        <p className="text-sm text-white/50 font-bold">No patients currently in the queue. New check-ins will appear here automatically.</p>
                       </td>
                     </tr>
                   )}
-                  {displayedEncounters.map((row, i) => {
+                  {filteredEncounters.map((row, i) => {
                     let sBg = 'bg-orange-500/20';
                     let sText = 'text-[var(--color-semantic-attention)]';
                     if (row.status === 'In Room') {
@@ -1464,13 +1362,7 @@ export const PatientFlowView: React.FC = () => {
                     } else if (row.status === 'Completed') {
                       sBg = 'bg-blue-500/20';
                       sText = 'text-blue-400';
-                    } else if (row.status === 'Cancelled') {
-                      sBg = 'bg-white/10';
-                      sText = 'text-white/50';
                     }
-
-                    const isUrgent = row.priority === 'Urgent' || row.priority === 'High' || row.priority === 'Critical';
-                    const priorityColor = isUrgent ? 'text-rose-400 font-extrabold' : 'text-white/50 font-semibold';
 
                     return (
                       <tr 
@@ -1485,8 +1377,7 @@ export const PatientFlowView: React.FC = () => {
                             </div>
                             <div>
                               <p className="text-sm font-bold text-white leading-tight transition-all">{row.patient_name}</p>
-                              {/* Report 05 §05.8: Muted styling for normal priority, rose for urgent/high */}
-                              <p className={`text-[10px] ${priorityColor} uppercase mt-0.5`}>{row.priority || 'Normal'} Priority</p>
+                              <p className={`text-[10px] font-extrabold uppercase mt-0.5 ${row.priority === 'Urgent' ? 'text-[var(--color-semantic-critical)]' : 'text-white/50'}`}>{row.priority || 'Unknown'} Priority</p>
                             </div>
                           </div>
                         </td>
@@ -1496,33 +1387,53 @@ export const PatientFlowView: React.FC = () => {
                         </td>
                         <td className="py-4 px-2 font-mono text-white/70 transition-all">{row.wait_time != null && row.wait_time !== '' ? row.wait_time : 'Unavailable'}</td>
                         <td className="py-4 px-2">
-                          {/* Report 05 §05.6: Read-only governed status badge; removes inline PUT mutations */}
-                          <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${sBg} ${sText}`}>
-                            {row.status || 'Completed'}
-                          </span>
+                          <select
+                            value={row.status}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={async (e) => {
+                              // Reported by staff: recorded as an event with the actor (Delayed is calculated).
+                              const newStatus = e.target.value;
+                              try {
+                                await postFlow(`/visits/${encodeURIComponent(row.id)}/status`, { status: newStatus });
+                                toast(`${row.patient_name}: status recorded as ${newStatus}.`);
+                              } catch (err) {
+                                toast(`${row.patient_name}: ${(err as Error).message}`, 'error');
+                              } finally {
+                                fetchFlow();
+                                fetchEncounters();
+                              }
+                            }}
+                            className="bg-white/10 border border-white/10 text-[11px] font-bold text-white/70 rounded-[8px] px-2.5 py-1 outline-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors"
+                          >
+                            <option className="bg-[var(--color-surface)] text-white" value="Waiting">Waiting</option>
+                            <option className="bg-[var(--color-surface)] text-white" value="In Room">In Room</option>
+                            <option className="bg-[var(--color-surface)] text-white" value="Completed">Completed</option>
+                            <option className="bg-[var(--color-surface)] text-white" value="Delayed">Delayed</option>
+                          </select>
                         </td>
                         <td className="py-4 px-2 text-right">
                           <div className="flex items-center gap-2 justify-end">
+                            {(row.status === 'Waiting' || row.status === 'Delayed') && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (recommendedRoom) assignRoom(row.id, recommendedRoom, row.patient_name);
+                                }}
+                                disabled={!recommendedRoom}
+                                className="text-[11px] font-bold text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 hover:bg-emerald-500/30 px-3 py-1.5 rounded-[8px] transition-all flex items-center gap-1 active:scale-95 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                                title={recommendedRoom ? `Decision Support Recommendation: ${recommendedRoom} is free now. Staff confirmation starts the consultation.` : 'No consultation room is free right now.'}
+                              >
+                                {recommendedRoom ? `✓ Assign ${recommendedRoom} (Recommended)` : 'No room free'}
+                              </button>
+                            )}
                             <button
-                              onClick={() => handleOpenHealthCard(row.patient_name)}
+                              onClick={(e) => { e.stopPropagation(); handleOpenHealthCard(row.patient_name || '', row.patient_ref); }}
                               className="text-[11px] font-bold text-white/80 bg-white/5 border border-white/10 hover:text-white px-3 py-1.5 rounded-[8px] hover:bg-white/10 transition-all flex items-center gap-1 active:scale-95"
                               title="View comprehensive patient history, active medications, and recent lab results"
                             >
                               <CreditCard className="w-3.5 h-3.5" /> Health Card
                             </button>
-                            {/* Report 05 §05.7: Call button requires authorized telephony capability */}
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                window.dispatchEvent(new CustomEvent('show-sentinel-toast', {
-                                  detail: { message: 'Outbound telephony call requires authorized clinic telephony provider capability (Report 05 §05.7).', type: 'warning' }
-                                }));
-                              }} 
-                              className="text-[11px] font-bold text-white/40 bg-white/5 border border-white/10 px-3 py-1.5 rounded-[8px] cursor-not-allowed hover:bg-white/10 transition-colors" 
-                              title="Outbound telephony call requires authorized clinic telephony provider capability (Report 05 §05.7)"
-                            >
-                              Call
-                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); handleCallPatient(row); }} className="text-[11px] font-bold text-blue-400 bg-blue-500/20 border border-blue-500/30 px-3 py-1.5 rounded-[8px] hover:bg-blue-500/30 transition-colors hover:scale-105 active:scale-95 cursor-pointer" title="Initiate a secure VoIP call to the patient's registered contact number">Call</button>
                           </div>
                         </td>
                       </tr>
@@ -1537,27 +1448,87 @@ export const PatientFlowView: React.FC = () => {
         {/* Heat Map & AI suggestions */}
         <div className="flex flex-col gap-6 self-start sticky top-6">
           <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-8 shadow-[0_20px_50px_rgba(46,16,85,0.3)] text-white flex-1">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-6">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <LayoutGrid className="w-5 h-5 text-[var(--color-accent)]" /> Clinic Heat Map
               </h3>
-              {/* Report 05 §05.8: Facility sensor telemetry offline in workbook profile */}
-              <span className="text-[10px] font-bold text-white/50 bg-white/5 border border-white/10 px-2 py-0.5 rounded-full">
-                Telemetry Offline
-              </span>
+              <button
+                onClick={() => setIsAddRoomModalOpen(true)}
+                className="bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs px-3 py-1.5 rounded-[12px] transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
+              >
+                + Add Room
+              </button>
             </div>
-            <p className="text-[11px] text-white/50 mb-4 leading-relaxed">
-              Real-time room availability and cleaning states require facility sensor feeds (Report 05 §05.8).
-            </p>
             <div className="grid grid-cols-2 gap-4">
               {Object.keys(roomAssignments).map((roomName) => {
+                const room = roomAssignments[roomName];
+
+                let stateLabel = room.status;
+                let colorClass = 'text-emerald-400';
+                let bgClass = 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20';
+
+                if (room.status === 'Occupied') {
+                  stateLabel = room.kind === 'lab' && room.patientsInLab > 1
+                    ? `Occupied (${room.patientsInLab} patients)`
+                    : room.patientName ? `Occupied (${room.patientName})` : 'Occupied';
+                  colorClass = 'text-blue-400';
+                  bgClass = 'bg-blue-500/10 border-blue-500/20 hover:bg-blue-500/20';
+                } else if (room.status === 'Cleaning') {
+                  colorClass = 'text-red-400';
+                  bgClass = 'bg-red-500/10 border-red-500/20 hover:bg-red-500/20';
+                }
+
                 return (
                   <div
                     key={roomName}
-                    className="bg-white/5 border border-white/10 rounded-[16px] p-4 text-center cursor-default transition-all duration-300 premium-shadow relative"
-                  >
-                    <p className="text-[10px] font-extrabold text-white/40 uppercase mb-1 tracking-wider">{roomName}</p>
-                    <p className="text-xs font-bold text-white/60 truncate">Room status unavailable</p>
+                    onClick={() => setSelectedRoom(roomName)}
+                    className={`${bgClass} border rounded-[16px] p-4 text-center cursor-pointer transition-all duration-300 transform hover:scale-[1.03] active:scale-95 premium-shadow relative group`}
+                    >
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!confirm(`Are you sure you want to remove ${roomName}?`)) return;
+                        try {
+                          const res = await fetchWithAuth(`/api/v1/patient-flow/rooms/${room.id}`, { method: 'DELETE' });
+                          const body = await res.json().catch(() => null);
+                          if (!res.ok) throw new Error(body?.detail || `Request failed (${res.status})`);
+                          toast(`🗑️ ${roomName} removed from layout.`, 'info');
+                        } catch (err) {
+                          toast(`${roomName} not removed: ${(err as Error).message}`, 'error');
+                        } finally {
+                          fetchFlow();
+                        }
+                      }}
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-white/60 hover:text-rose-400 text-xs font-bold transition-opacity p-1"
+                      title="Delete Room"
+                    >
+                      ✕
+                    </button>
+                    <p className={`text-[10px] font-extrabold ${colorClass} uppercase mb-1 tracking-wider`}>{roomName}</p>
+                    <p className="text-sm font-bold text-white truncate">{stateLabel}</p>
+                    {room.status === 'Occupied' && room.provider && (
+                      <>
+                        <p className="text-[10px] text-white/70 font-semibold mt-1">
+                          {room.provider} ({room.department || 'General'})
+                        </p>
+                        {room.waitMinutes != null && (
+                          <p className="text-[10px] text-[#2563EB] font-black mt-0.5">
+                            Wait: {room.waitMinutes} mins
+                          </p>
+                        )}
+                      </>
+                    )}
+                    {room.status === 'Cleaning' && room.availableIn != null && (
+                      <p className="text-[10px] text-white/60 font-semibold mt-1">Available in {room.availableIn} min</p>
+                    )}
+                    {room.doctorId && (() => {
+                      const assignedDoc = CLINIC_DOCTORS.find(d => d.id === room.doctorId);
+                      return assignedDoc ? (
+                        <p className="text-[9px] text-purple-300 font-bold mt-1 flex items-center justify-center gap-1">
+                          🩺 {assignedDoc.name}
+                        </p>
+                      ) : null;
+                    })()}
                   </div>
                 );
               })}
@@ -1565,16 +1536,51 @@ export const PatientFlowView: React.FC = () => {
           </div>
 
           <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-8 shadow-[0_20px_50px_rgba(46,16,85,0.3)] relative overflow-hidden text-white">
-            <h3 className="text-base font-bold flex items-center gap-2 mb-3">
-              <Activity className="w-5 h-5 text-white/50" /> Clinical AI Recommendations
+            <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-surface-raised)] rounded-full blur-[50px] opacity-30 animate-pulse"></div>
+            <h3 className="text-base font-bold flex items-center gap-2 mb-4">
+              <Activity className="w-5 h-5 text-[var(--color-accent)]" /> AI Suggestions
             </h3>
-            {/* Report 05 §05.7 & Screen 05C: Zero open visits, recommendations require authorized capabilities */}
-            <p className="text-[12px] font-medium text-white/50 mb-4 leading-relaxed">
-              Automated notifications and room routing require authorized hospital feed capabilities and clinical policy approval. No active workflow recommendations in workbook mode.
-            </p>
-            <div className="flex items-center gap-2 text-xs font-semibold text-white/40 bg-white/5 p-3 rounded-[12px] border border-white/5">
-              <span>Execution Gate: Capability Unconnected (Report 05 §05.7)</span>
-            </div>
+            {(() => {
+              // Calculated from the live queue: a provider running past the consultation slot, or a
+              // patient waiting longer than the clinic's target. Approving sends the notification.
+              const suggestion = flow?.suggestions?.[0] || null;
+              const act = async (decision: 'approve' | 'dismiss') => {
+                if (!suggestion) return;
+                try {
+                  const result = await postFlow<FlowActionResult>(`/suggestions/${encodeURIComponent(suggestion.id)}/${decision}`, { idempotency_key: `suggestion:${suggestion.id}` });
+                  if (decision === 'dismiss') toast('Suggestion dismissed (recorded).', 'info');
+                  else if (result.status === 'SENT') toast(`📨 Notification sent to ${suggestion.patient_name} (receipt ${result.receipt_ref}).`);
+                  else toast(`Notification not sent: ${result.detail || result.status}`, 'error');
+                } catch (e) {
+                  toast((e as Error).message, 'error');
+                } finally {
+                  fetchFlow();
+                }
+              };
+              return (
+                <>
+                  <p className="text-[13px] font-medium text-white/50 mb-6 leading-relaxed transition-all">
+                    {suggestion ? suggestion.text : 'No suggestions right now: no provider is running late and no patient is waiting past the target time.'}
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => act('approve')}
+                      disabled={!suggestion}
+                      className="flex-1 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold py-2.5 rounded-[16px] text-xs transition-colors hover:scale-[1.02] active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      onClick={() => act('dismiss')}
+                      disabled={!suggestion}
+                      className="flex-1 bg-white/5 border border-white/10 hover:bg-white/10 text-white font-bold py-2.5 rounded-[16px] text-xs transition-colors hover:scale-[1.02] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -1583,6 +1589,7 @@ export const PatientFlowView: React.FC = () => {
 
       {/* Health Card / Eligibility Modal */}
       {isHealthCardModalOpen && (
+        <ModalPortal>
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in">
           <div className="bg-[var(--color-surface)] rounded-[32px] w-full max-w-4xl p-8 shadow-[0_30px_90px_rgba(0,0,0,0.9)] border border-white/20 relative animate-in zoom-in-95 duration-300 max-h-[90vh] overflow-y-auto text-white">
             <button
@@ -1629,16 +1636,16 @@ export const PatientFlowView: React.FC = () => {
                   <div className="mt-4 grid grid-cols-2 gap-4 relative z-10">
                     <div>
                       <p className="text-[9px] text-[#C7D2FE] font-bold uppercase tracking-wider">Member ID / Policy</p>
-                      <p className="font-mono text-xs font-bold">{memberId || "MEM000000000"}</p>
+                      <p className="font-mono text-xs font-bold">{memberId || "—"}</p>
                     </div>
                     <div>
                       <p className="text-[9px] text-[#C7D2FE] font-bold uppercase tracking-wider">Group Number</p>
-                      <p className="font-mono text-xs font-bold">{groupNumber || "GRP00000"}</p>
+                      <p className="font-mono text-xs font-bold">{groupNumber || "—"}</p>
                     </div>
                   </div>
 
-                  {/* Footer Logo */}
-                  <div className="absolute bottom-6 right-6 flex items-center gap-1 opacity-70">
+                  {/* Footer Logo (in the card's flow so it never covers the numbers) */}
+                  <div className="mt-3 flex items-center justify-end gap-1 opacity-70 relative z-10">
                     <Sparkles className="w-3.5 h-3.5 text-[#A5B4FC]" />
                     <span className="text-[9px] font-extrabold uppercase tracking-widest text-[#A5B4FC]">Sentinel Core</span>
                   </div>
@@ -1828,9 +1835,11 @@ export const PatientFlowView: React.FC = () => {
             </div>
           </div>
         </div>
+        </ModalPortal>
       )}
 
       {showScannerView && (
+        <ModalPortal>
         <div className="fixed inset-0 z-[110] bg-slate-950/95 flex flex-col items-center justify-center p-6 text-white animate-in fade-in">
           {/* Style Injector for laser scanner translation */}
           <style>{`
@@ -1890,9 +1899,11 @@ export const PatientFlowView: React.FC = () => {
             </div>
           </div>
         </div>
+        </ModalPortal>
       )}
-      {/* Twilio Call Simulation Modal */}
+      {/* Outbound call: placed through the clinic's telephony connector; the result is recorded */}
       {callingPatient && (
+        <ModalPortal>
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-emerald-500/40 backdrop-blur-sm animate-in fade-in">
           <div className="bg-emerald-500 border border-[#1F2937] text-white rounded-[28px] w-full max-w-sm p-6 premium-shadow relative overflow-hidden animate-in zoom-in-95 duration-300">
             {/* Pulsing glow background */}
@@ -1916,55 +1927,63 @@ export const PatientFlowView: React.FC = () => {
                     <Check className="w-6 h-6 text-white" />
                   </div>
                 )}
+                {callingStatus === 'failed' && (
+                  <div className="w-16 h-16 rounded-full bg-rose-600 border-2 border-rose-400 flex items-center justify-center">
+                    <X className="w-6 h-6 text-white" />
+                  </div>
+                )}
               </div>
 
               <div>
-                <span className="text-[9px] font-extrabold uppercase tracking-widest text-[#94A3B8]">Twilio Outbound Voice API</span>
-                <h4 className="text-lg font-extrabold text-white mt-1">Calling {callingPatient.name}</h4>
+                <span className="text-[9px] font-extrabold uppercase tracking-widest text-[#94A3B8]">Outbound Voice Call</span>
+                <h4 className="text-lg font-extrabold text-white mt-1">Calling {callingPatient.patient_name || callingPatient.name}</h4>
                 <p className="text-xs text-[#94A3B8] mt-1 font-mono uppercase font-bold tracking-wider">
-                  {callingStatus === 'dialing' && '☎️ Initializing line...'}
-                  {callingStatus === 'connected' && '🔊 Call Connected (TTS)'}
-                  {callingStatus === 'completed' && '✅ Dispatched Successfully'}
+                  {callingStatus === 'dialing' && '☎️ Placing call...'}
+                  {callingStatus === 'completed' && '✅ Call completed'}
+                  {callingStatus === 'failed' && (callResult?.status === 'NO_ANSWER' ? '📵 No answer' : '⚠️ Call not placed')}
                 </p>
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-[16px] p-4 w-full">
-                <span className="text-[9px] font-bold text-[#94A3B8] uppercase block text-left mb-1">Synthesizing Text-To-Speech</span>
+                <span className="text-[9px] font-bold text-[#94A3B8] uppercase block text-left mb-1">Call record</span>
                 <p className="text-xs text-white text-left leading-relaxed font-medium">
-                  {callingStatus === 'dialing' && 'Connecting to cellular provider network...'}
-                  {callingStatus === 'connected' && `Playing: "Hello, this is the SBN Sentinel automated system. Please proceed to Dr. Smith's office in ${callingPatient.dept}."`}
-                  {callingStatus === 'completed' && 'Call completed. Payer and patient logs successfully synchronized.'}
+                  {callingStatus === 'dialing' && `Calling the number on file for ${callingPatient.patient_name || 'the patient'}...`}
+                  {callingStatus === 'completed' && `Message: "Please proceed to ${callingPatient.provider_name || 'your provider'}${callingPatient.room && callingPatient.journey_stage === 'Consultation' ? ` in ${callingPatient.room}` : ''}." Receipt ${callResult?.receipt_ref || '—'}.`}
+                  {callingStatus === 'failed' && `${callResult?.detail || 'The call could not be placed.'}${callResult?.receipt_ref ? ` Receipt ${callResult.receipt_ref}.` : ''}`}
                 </p>
               </div>
 
               <button
-                onClick={() => { setCallingPatient(null); setCallingStatus(null); }}
+                onClick={() => { setCallingPatient(null); setCallingStatus(null); setCallResult(null); }}
                 className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-[16px] transition-colors"
               >
-                {callingStatus === 'completed' ? 'Close' : 'End Call'}
+                {callingStatus === 'dialing' ? 'End Call' : 'Close'}
               </button>
             </div>
           </div>
         </div>
+        </ModalPortal>
       )}
 
       {/* Clinic Room Interactive Allocation Modal */}
       {selectedRoom && (() => {
         const isOccupied = roomAssignments[selectedRoom]?.status === 'Occupied';
         return (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in">
-            <div className={`bg-[var(--color-surface)] rounded-[32px] w-full p-6 shadow-[0_30px_90px_rgba(0,0,0,0.9)] border border-white/20 relative animate-in zoom-in-95 duration-200 transition-all text-white ${isOccupied ? 'max-w-4xl' : 'max-w-md'}`}>
+          <ModalPortal>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in p-4" onClick={(e) => { if (e.target === e.currentTarget) { setSelectedRoom(null); setAssignTargetPatient(''); } }}>
+            <div className={`bg-[var(--color-surface)] rounded-[32px] w-full p-6 shadow-[0_30px_90px_rgba(0,0,0,0.9)] border border-white/20 relative animate-in zoom-in-95 duration-200 transition-all text-white max-h-[92vh] flex flex-col overflow-hidden ${isOccupied ? 'max-w-4xl' : 'max-w-md'}`}>
               <button
                 onClick={() => {
                   setSelectedRoom(null);
                   setAssignTargetPatient('');
                 }}
-                className="absolute top-6 right-6 text-white/50 hover:text-white transition-colors p-2 hover:bg-white/5 rounded-full cursor-pointer z-10"
+                aria-label="Close room panel" title="Close"
+                className="absolute top-5 right-5 text-white/70 hover:text-white transition-colors p-2 bg-white/5 hover:bg-white/10 rounded-full cursor-pointer z-10"
               >
                 <X className="w-5 h-5" />
               </button>
 
-              <div className="mb-5">
+              <div className="mb-5 shrink-0 pr-12">
                 <span className="text-[9px] font-extrabold text-blue-400 bg-blue-500/20 border border-blue-500/30 border border-[#BFDBFE] px-3 py-1 rounded-full uppercase tracking-wider">
                   Clinic Location Manager
                 </span>
@@ -1974,7 +1993,7 @@ export const PatientFlowView: React.FC = () => {
                 </h3>
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-4 flex-1 min-h-0 overflow-y-auto pr-1">
                 {/* Room Status Indicator */}
                 <div className="bg-white/5 border border-white/10 rounded-[16px] p-4">
                   <span className="text-[9px] text-white/50 font-bold uppercase tracking-wider block mb-1">Current Status</span>
@@ -1990,17 +2009,7 @@ export const PatientFlowView: React.FC = () => {
                       return (
                         <button
                           key={st}
-                          onClick={() => {
-                            setRoomAssignments(prev => ({
-                              ...prev,
-                              [selectedRoom]: {
-                                ...prev[selectedRoom],
-                                status: st,
-                                encounterId: st === 'Occupied' ? prev[selectedRoom].encounterId : null,
-                                doctorId: prev[selectedRoom].doctorId ?? null
-                              }
-                            }));
-                          }}
+                          onClick={() => setRoomStatus(selectedRoom, st)}
                           className={`flex-1 border text-[10px] py-1.5 rounded-lg text-center transition-all cursor-pointer ${colorStyle}`}
                         >
                           {st}
@@ -2087,7 +2096,7 @@ export const PatientFlowView: React.FC = () => {
                           <div className="space-y-2 pt-3 border-t border-white/10">
                             <button
                               onClick={() => {
-                                handleOpenHealthCard(enc.patient_name);
+                                handleOpenHealthCard(enc.patient_name, enc.patient_ref);
                                 setSelectedRoom(null);
                               }}
                               className="w-full py-2 bg-indigo-900/30 border border-indigo-500/50 hover:bg-indigo-500/30 text-indigo-300 font-bold text-xs rounded-[10px] transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
@@ -2192,7 +2201,7 @@ export const PatientFlowView: React.FC = () => {
                                           setSoapP("Screening labs ordered (lipid panel, CMP, CBC). Advised regular checkups.");
                                           setEditingDiagnosis("Z00.00 (General Wellness)");
                                         }}
-                                        className="flex-1 text-[9px] font-black text-slate-600 bg-white/10 hover:bg-slate-200 py-1.5 px-2 rounded-[8px] border border-white/10 transition-colors"
+                                        className="flex-1 text-[9px] font-black text-white/80 bg-white/10 hover:bg-white/20 py-1.5 px-2 rounded-[8px] border border-white/20 transition-colors"
                                       >
                                         Adult Wellness
                                       </button>
@@ -2321,21 +2330,21 @@ export const PatientFlowView: React.FC = () => {
                                   </div>
 
                                   {/* Quick Actions / Verification Gateways */}
-                                  <div className="bg-[var(--color-text-primary)]/50 border border-[#E0D9FD] rounded-[16px] p-4 space-y-3">
-                                    <span className="text-[9px] text-[var(--color-accent)] font-extrabold uppercase tracking-wider block">Verification & Communications</span>
+                                  <div className="bg-white/5 border border-white/10 rounded-[16px] p-4 space-y-3">
+                                    <span className="text-[9px] text-indigo-300 font-extrabold uppercase tracking-wider block">Verification & Communications</span>
                                     <div className="flex gap-2">
                                       <button
                                         onClick={() => {
-                                          handleOpenHealthCard(enc.patient_name);
+                                          handleOpenHealthCard(enc.patient_name, enc.patient_ref);
                                           setSelectedRoom(null);
                                         }}
-                                        className="flex-1 py-2 bg-[#F5F3FF] border border-[#DDD6FE] hover:bg-white/10 text-[var(--color-surface)] font-bold text-xs rounded-[10px] transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
+                                        className="flex-1 py-2 bg-indigo-900/30 border border-indigo-500/50 hover:bg-indigo-500/30 text-indigo-300 font-bold text-xs rounded-[10px] transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
                                       >
                                         <CreditCard className="w-4 h-4" /> Verify Insurance
                                       </button>
                                       <button
                                         onClick={() => handleCallPatient(enc)}
-                                        className="flex-1 py-2 bg-[#EEF4FF] border border-[#BFDBFE] hover:bg-blue-500/30 text-[#2563EB] font-bold text-xs rounded-[10px] transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
+                                        className="flex-1 py-2 bg-blue-900/30 border border-blue-500/50 hover:bg-blue-500/30 text-blue-400 font-bold text-xs rounded-[10px] transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
                                       >
                                         <Phone className="w-4 h-4" /> Outbound Call
                                       </button>
@@ -2362,20 +2371,24 @@ export const PatientFlowView: React.FC = () => {
                                 try {
                                   // Auto-save charting values first on checkout!
                                   const combinedNotes = `Subjective: ${soapS}\n\nObjective: ${soapO}\n\nAssessment: ${soapA}\n\nPlan: ${soapP}`;
-                                  await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/${enc.id}`, {
+                                  await fetchWithAuth(`/api/v1/encounters/${enc.id}`, {
                                     method: 'PUT',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
-                                      status: 'Completed',
                                       diagnosis: editingDiagnosis,
                                       clinical_notes: combinedNotes,
                                       medications: editingMedications
                                     })
                                   });
-                                  fetchEncounters();
+                                  // The checkout is recorded as an event (with the actor).
+                                  await postFlow(`/visits/${encodeURIComponent(enc.id)}/status`, { status: 'Completed' });
+                                  toast(`${enc.patient_name} checked out.`);
                                   setSelectedRoom(null);
                                 } catch (e) {
-                                  console.error(e);
+                                  toast(`Checkout not recorded: ${(e as Error).message}`, 'error');
+                                } finally {
+                                  fetchEncounters();
+                                  fetchFlow();
                                 }
                               }}
                               className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-[10px] transition-colors hover:scale-[1.01] active:scale-98 cursor-pointer text-center"
@@ -2385,20 +2398,16 @@ export const PatientFlowView: React.FC = () => {
                             <button
                               onClick={async () => {
                                 try {
-                                  const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/${enc.id}`, {
-                                    method: 'PUT',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ status: 'Waiting' })
-                                  });
-                                  if (response.ok) {
-                                    fetchEncounters();
-                                    setSelectedRoom(null);
-                                  }
+                                  await postFlow(`/visits/${encodeURIComponent(enc.id)}/status`, { status: 'Waiting' });
+                                  setSelectedRoom(null);
                                 } catch (e) {
-                                  console.error(e);
+                                  toast((e as Error).message, 'error');
+                                } finally {
+                                  fetchEncounters();
+                                  fetchFlow();
                                 }
                               }}
-                              className="py-2.5 px-3 bg-white/10 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-[10px] transition-colors cursor-pointer"
+                              className="py-2.5 px-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs rounded-[10px] transition-colors cursor-pointer"
                             >
                               Return to Queue
                             </button>
@@ -2422,18 +2431,18 @@ export const PatientFlowView: React.FC = () => {
                     {/* Patient Assignment */}
                     <div>
                       <span className="text-[9px] text-white/50 font-bold uppercase tracking-wider block mb-2">👤 Patient — {selectedRoom}</span>
-                      {encounters.filter(e => e.status && (e.status.toLowerCase() === 'waiting' || e.status.toLowerCase() === 'delayed')).length > 0 ? (
+                      {(flow?.queue || []).filter(e => e.status === 'Waiting' || e.status === 'Delayed').length > 0 ? (
                         <select
                           value={assignTargetPatient}
                           onChange={(e) => setAssignTargetPatient(e.target.value)}
                           className="w-full bg-white/10 border border-white/10 text-xs font-bold text-white/70 rounded-[10px] px-3 py-2 outline-none cursor-pointer"
                         >
                           <option value="" className="bg-[var(--color-surface)] text-white">-- Select Patient from Queue --</option>
-                          {encounters
-                            .filter(e => e.status && (e.status.toLowerCase() === 'waiting' || e.status.toLowerCase() === 'delayed'))
+                          {(flow?.queue || [])
+                            .filter(e => e.status === 'Waiting' || e.status === 'Delayed')
                             .sort((a, b) => {
-                              const p: Record<string, number> = { Urgent: 0, High: 1, Medium: 2, Low: 3 };
-                              return (p[a.priority] ?? 4) - (p[b.priority] ?? 4);
+                              const p: Record<string, number> = { Urgent: 0, Normal: 1 };
+                              return (p[a.priority || ''] ?? 2) - (p[b.priority || ''] ?? 2);
                             })
                             .map(e => (
                               <option key={e.id} value={e.id} className="bg-[var(--color-surface)] text-white">
@@ -2471,7 +2480,7 @@ export const PatientFlowView: React.FC = () => {
                         <div className="flex items-center justify-between bg-purple-500/10 border border-purple-500/30 rounded-[10px] px-3 py-2">
                           <p className="text-[10px] text-purple-300 font-bold">Currently Assigned: {currentDoc.name}</p>
                           <button
-                            onClick={() => setRoomAssignments(prev => ({ ...prev, [selectedRoom]: { ...prev[selectedRoom], doctorId: null } }))}
+                            onClick={() => setRoomDoctor(selectedRoom, null)}
                             className="text-[9px] text-rose-400 hover:text-rose-300 font-bold"
                           >Remove</button>
                         </div>
@@ -2482,38 +2491,16 @@ export const PatientFlowView: React.FC = () => {
                     <button
                       onClick={async () => {
                         if (!assignTargetPatient && !assignTargetDoctor) return;
-                        const selectedEnc = encounters.find(e => e.id === assignTargetPatient);
-                        const selectedDoc = CLINIC_DOCTORS.find(d => d.id === assignTargetDoctor);
                         const roomName = selectedRoom;
-                        // Immediately update local state (ARR-004 — Staff Approval)
-                        setRoomAssignments(prev => ({
-                          ...prev,
-                          [roomName]: {
-                            status: assignTargetPatient ? 'Occupied' : prev[roomName].status,
-                            encounterId: assignTargetPatient || prev[roomName].encounterId,
-                            doctorId: assignTargetDoctor || prev[roomName].doctorId
-                          }
-                        }));
+                        const patient = (flow?.queue || []).find(e => e.id === assignTargetPatient);
+                        const doctor = assignTargetDoctor;
                         setSelectedRoom(null);
                         setAssignTargetPatient('');
                         setAssignTargetDoctor('');
-                        // Backend sync (non-blocking)
-                        if (assignTargetPatient) {
-                          try {
-                            await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/${assignTargetPatient}`, {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ status: 'In Room' })
-                            });
-                            fetchEncounters();
-                          } catch (err) {
-                            console.warn('Backend sync warning:', err);
-                          }
-                        }
-                        const msg = [selectedEnc?.patient_name, selectedDoc?.name].filter(Boolean).join(' + ');
-                        window.dispatchEvent(new CustomEvent('show-sentinel-toast', {
-                          detail: { message: `🏥 ${roomName}: ${msg || 'Assignment confirmed'}!`, type: 'success' }
-                        }));
+                        // Staff confirmation (ARR-004): recorded on the server with the actor.
+                        if (doctor) await setRoomDoctor(roomName, doctor);
+                        if (patient) await assignRoom(patient.id, roomName, patient.patient_name);
+                        else toast(`🏥 ${roomName}: ${doctor} assigned.`);
                       }}
                       disabled={!assignTargetPatient && !assignTargetDoctor}
                       className="w-full py-2.5 bg-[#2563EB] hover:bg-blue-700 active:scale-95 text-white font-bold text-xs rounded-[10px] transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
@@ -2531,12 +2518,7 @@ export const PatientFlowView: React.FC = () => {
                       This room is currently flagged for cleaning & sanitation protocols.
                     </p>
                     <button
-                      onClick={() => {
-                        setRoomAssignments(prev => ({
-                          ...prev,
-                          [selectedRoom]: { status: 'Available', encounterId: null, doctorId: prev[selectedRoom]?.doctorId ?? null }
-                        }));
-                      }}
+                      onClick={() => setRoomStatus(selectedRoom, 'Available')}
                       className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-[10px] transition-colors cursor-pointer"
                     >
                       Finish Cleaning & Make Available
@@ -2545,23 +2527,25 @@ export const PatientFlowView: React.FC = () => {
                 )}
               </div>
 
-              <div className="mt-6 flex justify-end">
+              <div className="mt-4 flex justify-end shrink-0">
                 <button
                   onClick={() => {
                     setSelectedRoom(null);
                     setAssignTargetPatient('');
                   }}
-                  className="bg-white/10 hover:bg-slate-200 text-slate-700 font-bold text-xs px-4 py-2 rounded-[10px] transition-colors cursor-pointer"
+                  className="bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs px-4 py-2 rounded-[10px] transition-colors cursor-pointer"
                 >
                   Close Panel
                 </button>
               </div>
             </div>
           </div>
+          </ModalPortal>
         );
       })()}
       {/* Custom Glassmorphism Add Room Modal */}
       {isAddRoomModalOpen && (
+        <ModalPortal>
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in">
           <div className="bg-[var(--color-surface)] border border-white/20 rounded-[28px] w-full max-w-md p-6 shadow-[0_25px_60px_rgba(0,0,0,0.9)] animate-in zoom-in-95 text-white">
             <div className="flex justify-between items-center mb-4 border-b border-white/10 pb-3">
@@ -2604,22 +2588,20 @@ export const PatientFlowView: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (!newRoomName || !newRoomName.trim()) return;
                   const cleanName = newRoomName.trim();
-                  if (roomAssignments[cleanName]) {
-                    alert("A room with this name already exists!");
-                    return;
+                  try {
+                    await postFlow('/rooms', { name: cleanName, kind: /lab/i.test(cleanName) ? 'lab' : 'consult', doctor: newRoomDoctor });
+                    toast(`🏥 ${cleanName} added to Clinic Heat Map!`);
+                    setNewRoomName('');
+                    setNewRoomDoctor(null);
+                    setIsAddRoomModalOpen(false);
+                  } catch (e) {
+                    toast(`${cleanName} not added: ${(e as Error).message}`, 'error');
+                  } finally {
+                    fetchFlow();
                   }
-                  setRoomAssignments(prev => {
-                    const next = { ...prev, [cleanName]: { status: 'Available', encounterId: null, doctorId: newRoomDoctor } };
-                    localStorage.setItem('roomAssignments', JSON.stringify(next));
-                    return next;
-                  });
-                  window.dispatchEvent(new CustomEvent('show-sentinel-toast', { detail: { message: `🏥 ${cleanName} added to Clinic Heat Map!`, type: 'success' } }));
-                  setNewRoomName('');
-                  setNewRoomDoctor(null);
-                  setIsAddRoomModalOpen(false);
                 }}
                 className="flex-1 bg-[#2563EB] hover:bg-blue-700 text-white font-bold py-2.5 rounded-[14px] text-xs transition-colors shadow-lg active:scale-95"
               >
@@ -2628,6 +2610,7 @@ export const PatientFlowView: React.FC = () => {
             </div>
           </div>
         </div>
+        </ModalPortal>
       )}
     </div>
   );

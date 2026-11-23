@@ -247,8 +247,8 @@ def get_all_encounters(
             query = query.offset(skip or 0).limit(limit)
         return query.all(), total
 
-    encounters, total_count = fetch_page()
-    # Report 05 §05.2: Remove auto-seeding from GET. Seeding must only happen explicitly.
+    # A read never writes: an empty clinic stays empty (no demo seeding from this endpoint).
+    encounters, _total_count = fetch_page()
     return encounters
 
 
@@ -357,35 +357,32 @@ def get_encounter_journey(
         if not user_clinic or not enc.clinic_id or enc.clinic_id != user_clinic:
             raise HTTPException(status_code=403, detail="Cannot access encounter belonging to another clinic facility")
 
-    timestamps = dict(enc.stage_timestamps or {})
-    current_stage = enc.journey_stage or "Check In"
+    # Visits with events: stages, times, status and wait come from the recorded events.
+    from app.services.patient_flow_service import journey_for_visit
+    journey = journey_for_visit(db, enc.id)
 
-    mrn_val = getattr(enc, "mrn", None)
-    if not mrn_val or mrn_val == "Unknown" or mrn_val.startswith("MRN-ENC"):
-        # Resolve genuine MRN from workbook patient sheet crosswalk (Report 05 §05.5)
-        try:
-            from app.api.v1.endpoints.patients import _get_all_raw_patients
-            raw_pts = _get_all_raw_patients()
-            for p in raw_pts:
-                p_match = (
-                    p.get("patient_id") == enc.patient_id or
-                    p.get("name") == enc.patient_id or
-                    f"{p.get('first_name')} {p.get('last_name')}" == getattr(enc, "patient_name", None)
-                )
-                if p_match:
-                    mrn_val = p.get("mrn")
-                    break
-        except Exception:
-            pass
-    if not mrn_val or mrn_val == "Unknown":
-        if enc.patient_id == "PAT20260001" or getattr(enc, "patient_name", "") == "Mariam Ali":
-            mrn_val = "MRN-000001"
-        else:
-            mrn_val = "MRN-000001" if (enc.patient_id and enc.patient_id.startswith("PAT")) else "Unknown"
+    timestamps = dict(enc.stage_timestamps or {})
+    current_stage = enc.journey_stage
+    status_val = enc.status
+    wait_val = enc.wait_time
+    stage_sources = {}
+    if journey:
+        timestamps = journey["stage_timestamps"]
+        current_stage = journey["current_stage"]
+        status_val = journey["status"]
+        wait_val = journey["wait_time"]
+        stage_sources = journey["stage_sources"]
+
+    # The patient's identifier and MRN: as stored, otherwise from the clinic's patient records by
+    # the patient's identifier (never by name, never a default MRN).
+    from app.services.workbook_dataset import patients_by_ref
+    records = patients_by_ref()
+    patient_ref = enc.patient_ref or (enc.patient_id if enc.patient_id in records else None)
+    mrn_val = getattr(enc, "mrn", None) or (records.get(patient_ref) or {}).get("mrn") or "Unknown"
 
     return {
         "encounter_id": enc.id,
-        "patient_id": enc.patient_id or enc.id,
+        "patient_id": patient_ref,
         "patient_name": enc.patient_name or "Unknown Patient",
         "mrn": mrn_val,
         "provider_name": enc.provider_name or "Unknown Provider",
@@ -393,10 +390,11 @@ def get_encounter_journey(
         "insurance": enc.payer_network or "Unknown",
         "current_stage": current_stage,
         "stage_timestamps": timestamps,
+        "stage_sources": stage_sources,
         "stages": ["Check In", "Waiting", "Consultation", "Lab", "Billing", "Completed"],
-        "status": enc.status or "Waiting",
+        "status": status_val,
         "priority": enc.priority or "Normal",
-        "wait_time": enc.wait_time
+        "wait_time": wait_val
     }
 
 
@@ -416,9 +414,13 @@ def update_encounter(
         raise HTTPException(status_code=403, detail="Read-Only Auditor cannot modify encounters")
 
     from app.core.config import settings
-    if getattr(settings, "SOURCE_PROFILE", "") == "workbook":
-        # Report 05 §05.6: Encounters are read-only in workbook integration mode
-        raise HTTPException(status_code=403, detail="Encounters are read-only in workbook integration profile (Report 05 §05.6)")
+    flow_fields = (encounter_in.status, encounter_in.journey_stage, encounter_in.stage_timestamps,
+                   encounter_in.wait_time)
+    if getattr(settings, "SOURCE_PROFILE", "") == "workbook" and any(v is not None for v in flow_fields):
+        # Report 05 §05.6: a visit's status, stages and wait are read-only in the workbook integration
+        # profile (staff reports go to POST /patient-flow/visits/{id}/status as events). Clinical
+        # charting (notes, diagnosis, medications) stays editable.
+        raise HTTPException(status_code=403, detail="Encounter status is read-only in workbook integration profile (Report 05 §05.6)")
 
     enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
     if not enc:
@@ -428,6 +430,17 @@ def update_encounter(
         user_clinic = getattr(current_user, 'clinic_id', None)
         if not user_clinic or not enc.clinic_id or enc.clinic_id != user_clinic:
             raise HTTPException(status_code=403, detail="Cannot modify encounter belonging to another clinic facility")
+
+    # A visit's flow status comes from its events. A person reports a change through
+    # POST /patient-flow/visits/{id}/status, which records it as an event with the actor.
+    if encounter_in.status is not None or encounter_in.journey_stage is not None \
+            or encounter_in.stage_timestamps is not None or encounter_in.wait_time is not None:
+        from app.services.patient_flow_service import has_visit_events
+        if has_visit_events(db, enc.id):
+            raise HTTPException(
+                status_code=409,
+                detail="This visit's status comes from its recorded events. Report a change with "
+                       "POST /api/v1/patient-flow/visits/{id}/status.")
 
     now_iso = datetime.utcnow().isoformat()
     timestamps = dict(enc.stage_timestamps or {})

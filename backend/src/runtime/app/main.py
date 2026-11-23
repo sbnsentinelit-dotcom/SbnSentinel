@@ -133,7 +133,10 @@ def run_startup_seeding():
                 from app.services.dubai_seed_service import (
                     auto_seed_dubai_if_empty, repair_seeded_authority_requirement)
                 enc_count = db.query(EncounterModel).count()
-                if enc_count == 0 and getattr(settings, "SOURCE_PROFILE", "") != "workbook":
+                # The workbook profile stays empty until an explicit import, except in synthetic
+                # (demo) mode, where the clinic's workbook is imported and the visit generator runs.
+                demo_import = getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+                if enc_count == 0 and (getattr(settings, "SOURCE_PROFILE", "") != "workbook" or demo_import):
                     print("[INFO] Encounters empty on startup. Auto-seeding UAE Dubai clinic data...")
                     auto_seed_dubai_if_empty(db)
                     print("[SUCCESS] UAE Dubai clinic dataset seeded automatically.")
@@ -143,6 +146,16 @@ def run_startup_seeding():
                 # UAE claim-denial policy, rules and mappings (also repairs rows from older seeds).
                 from app.services.uae_claims_governance import register_uae_claims_governance
                 register_uae_claims_governance()
+                # Synthetic mode: the visit generator plays the clinic's queue feed. Store the visit
+                # events of the last 14 days up to now so Patient Flow trends (up to 7 days against
+                # the 7 days before) have history.
+                if getattr(settings, "SYNTHETIC_TEST_ENABLED", False):
+                    from app.models.clinic import ClinicModel
+                    from app.services.visit_generator import sync_generated_events
+                    for (clinic_id,) in db.query(ClinicModel.id).all():
+                        added = sync_generated_events(db, clinic_id, days=14)
+                        if added:
+                            print(f"[INFO] Stored {added} synthetic visit events for {clinic_id}.")
             except Exception as seed_err:
                 print(f"[WARNING] Could not auto-seed dubai data: {seed_err}")
 

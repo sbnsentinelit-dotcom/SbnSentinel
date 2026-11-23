@@ -9,6 +9,15 @@ from app.main import app
 from app.db.database import SessionLocal
 
 
+@pytest.fixture(autouse=True)
+def connector_profile(monkeypatch):
+    """These tests cover the connector deployment profile (Practice Fusion enabled). The default
+    profile is now the workbook profile with Practice Fusion off, so they switch it on here."""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "ENABLE_PRACTICE_FUSION", True)
+    monkeypatch.setattr(settings, "SOURCE_PROFILE", "connector")
+
+
 @pytest.fixture(scope="module")
 def db_session():
     db = SessionLocal()

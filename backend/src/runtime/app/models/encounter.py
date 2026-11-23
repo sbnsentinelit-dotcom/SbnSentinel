@@ -6,7 +6,11 @@ class EncounterModel(Base):
     __tablename__ = "encounters"
 
     id = Column(String, primary_key=True, index=True)
+    # Historically holds the patient's display name (patient_name reads it). The patient's stable
+    # identifier and MRN are patient_ref and mrn; patient lookups and actions use those.
     patient_id = Column(String, index=True, nullable=False)
+    patient_ref = Column(String, index=True, nullable=True)  # e.g. PAT20260001
+    mrn = Column(String, nullable=True)                       # e.g. MRN-000001
     provider_id = Column(String, index=True, nullable=False)
     clinic_id = Column(String, index=True, nullable=True)
     date = Column(String, nullable=False)

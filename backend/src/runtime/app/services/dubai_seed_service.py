@@ -98,154 +98,64 @@ def seed_dubai_data(db: Session):
         db.add(clinic)
         db.commit()
 
-    # 1. Generate 500 UAE Patients
-    patients = []
-    base_dob = datetime(1960, 1, 1)
-    for i in range(1, 501):
-        f = FIRST_NAMES[(i * 7) % len(FIRST_NAMES)]
-        last_n = LAST_NAMES[(i * 11) % len(LAST_NAMES)]
-        name = f"{f} {last_n}"
-        em = EMIRATES[i % len(EMIRATES)]
-        nat = NATIONALITIES[(i * 3) % len(NATIONALITIES)]
-        payer = PAYERS[(i * 5) % len(PAYERS)]
-        plan = PLANS[(i * 2) % len(PLANS)] if payer != "Self Pay" else "Self Pay"
-        eid = f"784-19{60 + (i % 40):02d}-{i * 137 % 9000000 + 1000000:07d}-{(i * 3) % 9 + 1}"
-        mem_id = f"MEM-UAE-{100000 + i}"
-        dob = (base_dob + timedelta(days=i * 53)).strftime("%Y-%m-%d")
-        gender = "Female" if i % 2 == 0 else "Male"
-
-        patients.append({
-            "patient_id": eid,
-            "name": name,
-            "dob": dob,
-            "gender": gender,
-            "emirate": em,
-            "nationality": nat,
-            "payer": payer,
-            "plan": plan,
-            "member_id": mem_id,
-        })
-
-    # 2. Seed 789 Encounters
-    start_date = datetime(2026, 1, 1)
-    today_dt = datetime.now()
-    yesterday_dt = today_dt - timedelta(days=1)
-    today_str = today_dt.strftime("%Y-%m-%d")
-    yesterday_str = yesterday_dt.strftime("%Y-%m-%d")
+    # 1-2. Patients and encounters come from the clinic's UAE billing workbook (client_excel.json):
+    # 500 patients (directory reads them from the workbook) and 789 historical encounters with their
+    # own identifiers. Nothing is invented here: no live statuses, waits or stage times. Today's live
+    # visits are produced as visit events by the visit generator, and every Patient Flow number is
+    # calculated from those events.
+    from app.services.workbook_dataset import encounters as workbook_encounters
 
     existing_enc_ids = {e.id for e in db.query(EncounterModel.id).all()}
-    encounters_data = []
+    encounters_data = []  # encounters that have a claim, in claim order (CLM2026000001 is the first)
 
-    for i in range(1, 790):
-        enc_id = f"ENC2026{i:06d}"
-        p = patients[(i * 5) % len(patients)]
-        doc, specialty = PROVIDERS[i % len(PROVIDERS)]
-        diag_code, diag_desc = DIAGNOSES[(i * 3) % len(DIAGNOSES)]
-        cpt_code, cpt_desc, billed_amt = CPT_CATALOG[i % len(CPT_CATALOG)]
-
-        if i >= 770:
-            enc_date = today_str
-            if i % 4 == 0:
-                enc_status = "Waiting"
-                enc_stage = "Waiting"
-                enc_wait = "15 mins"
-            elif i % 4 == 1:
-                enc_status = "In Room"
-                enc_stage = "Consultation"
-                enc_wait = "20 mins"
-            elif i % 4 == 2:
-                enc_status = "Delayed"
-                enc_stage = "Waiting"
-                enc_wait = "40 mins"
-            else:
-                enc_status = "Completed"
-                enc_stage = "Completed"
-                enc_wait = "10 mins"
-        elif i >= 750:
-            enc_date = yesterday_str
-            if i % 3 == 0:
-                enc_status = "Waiting"
-                enc_stage = "Waiting"
-                enc_wait = "10 mins"
-            elif i % 3 == 1:
-                enc_status = "In Room"
-                enc_stage = "Consultation"
-                enc_wait = "15 mins"
-            else:
-                enc_status = "Completed"
-                enc_stage = "Completed"
-                enc_wait = "12 mins"
-        else:
-            enc_date = (start_date + timedelta(days=(i * 3) % 280)).strftime("%Y-%m-%d")
-            enc_status = "Completed" if i % 10 != 0 else "In Room"
-            enc_stage = "Completed" if enc_status == "Completed" else "Consultation"
-            enc_wait = f"{(i * 7) % 25 + 5} mins"
-
-        is_denied = (i % 5 == 0) and (p["payer"] != "Self Pay")
-        is_paid = (i % 3 == 0) or (p["payer"] == "Self Pay")
-
-        if is_denied:
-            billing_status = "Claim Denied"
-            d_code, d_desc = DENIAL_REASONS[i % len(DENIAL_REASONS)]
-            denial_reason = f"{d_code}: {d_desc}"
-        elif is_paid:
-            billing_status = "Paid"
-            denial_reason = None
-        else:
-            billing_status = "Billed"
-            denial_reason = None
-
-        enc_obj = {
-            "id": enc_id,
-            "patient_name": p["name"],
-            "patient_id": p["patient_id"],
-            "payer": p["payer"],
-            "member_id": p["member_id"],
-            "provider": doc,
-            "specialty": specialty,
-            "date": enc_date,
-            "diagnosis": f"{diag_code} - {diag_desc}",
-            "cpt_code": cpt_code,
-            "billed_amt": billed_amt,
-            "billing_status": billing_status,
-            "denial_reason": denial_reason,
-        }
-        encounters_data.append(enc_obj)
-
-        enc_timestamps = {
-            "Check In": f"{enc_date}T08:30:00Z",
-            "Waiting": f"{enc_date}T08:45:00Z",
-        }
-        if enc_stage in ("Consultation", "Billing", "Completed"):
-            enc_timestamps["Consultation"] = f"{enc_date}T09:00:00Z"
-        if enc_status == "Completed":
-            enc_timestamps["Billing"] = f"{enc_date}T09:30:00Z"
-            enc_timestamps["Completed"] = f"{enc_date}T09:45:00Z"
+    for w in workbook_encounters():
+        enc_id = w["encounter_id"]
+        diagnosis = (f"{w['diagnosis_code']} - {w['diagnosis_description']}"
+                     if w.get("diagnosis_code") else w.get("diagnosis_description"))
+        cancelled = w.get("status") == "Cancelled"
+        if w.get("billing_status") in ("Paid", "Claim Denied", "Billed"):
+            encounters_data.append({
+                "id": enc_id,
+                "patient_name": w["patient_name"],
+                "patient_id": w["patient_ref"],
+                "payer": w.get("payer") or "Self Pay",
+                "provider": w["provider"],
+                "specialty": w.get("specialty"),
+                "date": w["date"],
+                "diagnosis": diagnosis,
+                "cpt_code": w.get("cpt_code"),
+                "billed_amt": w.get("billed_amount") or 0.0,
+                "billing_status": w["billing_status"],
+                "denial_reason": w.get("denial_reason"),
+            })
 
         if enc_id not in existing_enc_ids:
             encounter = EncounterModel(
                 id=enc_id,
-                patient_id=p["name"],
-                provider_id=doc,
+                patient_id=w["patient_name"],
+                patient_ref=w["patient_ref"],
+                mrn=w.get("mrn"),
+                provider_id=w["provider"],
                 clinic_id=clinic_id,
-                date=enc_date,
-                diagnosis=f"{diag_code} - {diag_desc}",
-                type=f"{specialty} Consultation",
-                status=enc_status,
-                journey_stage=enc_stage,
-                stage_timestamps=enc_timestamps,
-                billing_status=billing_status,
-                copay=50.0 if p["payer"] != "Self Pay" else billed_amt,
-                priority="Urgent" if "Urgent" in specialty else "Normal",
-                wait_time=enc_wait,
-                department=specialty,
+                date=w["date"],
+                diagnosis=diagnosis,
+                type=f"{w.get('specialty')} {w.get('visit_type') or 'Consultation'}",
+                status=w.get("status") or None,
+                journey_stage=None if cancelled else "Completed",
+                stage_timestamps=None,
+                billing_status=w.get("billing_status"),
+                copay=w.get("patient_responsibility"),
+                priority="Urgent" if w.get("visit_type") == "Urgent" else "Normal",
+                wait_time=None,
+                department=w.get("specialty"),
                 avatar=None,
-                clinical_notes=f"UAE Clinical Visit: Patient {p['name']} presenting with {diag_desc}. Evaluated by {doc} ({specialty}). Payer: {p['payer']}.",
-                medications="Standard UAE formulary prescription as indicated",
-                payer_network=p["payer"],
-                cpt_code=cpt_code,
-                billing_amount=billed_amt,
-                denial_reason=denial_reason,
+                clinical_notes=(f"UAE Clinical Visit: Patient {w['patient_name']} evaluated by {w['provider']} "
+                                f"({w.get('specialty')}). Diagnosis: {diagnosis}. Payer: {w.get('payer')}."),
+                medications=None,
+                payer_network=w.get("payer"),
+                cpt_code=w.get("cpt_code"),
+                billing_amount=w.get("billed_amount"),
+                denial_reason=w.get("denial_reason"),
             )
             db.add(encounter)
             existing_enc_ids.add(enc_id)
@@ -562,6 +472,11 @@ def seed_dubai_data(db: Session):
 
     db.commit()
 
+    # The clinic's rooms (their state is calculated from visit events).
+    from app.services.patient_flow_service import ensure_rooms
+    ensure_rooms(db, clinic_id)
+    db.commit()
+
     # 6. Ensure UAE Clinic Connector exists (Only outside workbook profile)
     from app.core.config import settings
     if getattr(settings, "SOURCE_PROFILE", "") != "workbook":
@@ -586,7 +501,7 @@ def auto_seed_dubai_if_empty(db: Session):
     Checks if encounters table is empty, and auto-seeds the Dubai demo data if so.
     """
     from app.core.config import settings
-    if getattr(settings, "SOURCE_PROFILE", "") == "workbook":
+    if getattr(settings, "SOURCE_PROFILE", "") == "workbook" and not getattr(settings, "SYNTHETIC_TEST_ENABLED", False):
         return
     count = db.query(EncounterModel).count()
     if count == 0:

@@ -136,6 +136,29 @@ def verify_patient_eligibility(
         return new_record
 
 
+@router.get("/patient-ref/{patient_ref}")
+def get_patient_insurance_by_ref(
+    patient_ref: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
+    """
+    Insurance for one patient, found by the patient's identifier (e.g. PAT20260002), never by name:
+    several patients share a name. Returns the verified record if one is stored for this identifier
+    (verify-eligibility stores it with the identifier as its key) and the payer facts on file in the
+    clinic's patient records.
+    """
+    from app.services.workbook_dataset import patients_by_ref
+    on_file = patients_by_ref().get(patient_ref)
+    record = db.query(PatientInsuranceModel).filter(PatientInsuranceModel.patient_name == patient_ref).first()
+    return {
+        "patient_ref": patient_ref,
+        "stored": PatientInsuranceResponse.model_validate(record).model_dump(mode="json") if record else None,
+        "on_file": ({"payer": on_file.get("payer"), "plan": on_file.get("plan"),
+                     "member_id": on_file.get("member_id"), "name": on_file.get("name")} if on_file else None),
+    }
+
+
 @router.get("/patient/{patient_name}", response_model=Optional[PatientInsuranceResponse])
 def get_patient_insurance_details(
     patient_name: str,

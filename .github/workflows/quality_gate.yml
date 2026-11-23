@@ -118,6 +118,13 @@ jobs:
       run: |
         pytest tests/test_qa_verification_fixes.py tests/integration/test_financial_reporting_pack.py -v
 
+    - name: Patient Flow Verification
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/unit/test_patient_flow.py tests/integration/test_patient_flow_integration.py -v
+
   frontend-quality:
     name: Frontend Quality Assurance
     runs-on: ubuntu-latest
