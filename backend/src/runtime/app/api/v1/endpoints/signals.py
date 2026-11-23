@@ -122,10 +122,12 @@ def get_historical_signals(db: Session = Depends(get_db),
 
         import re
         from app.core.config import get_deployment_currency
-        curr = meta.get("currency") or get_deployment_currency()
+        curr = getattr(s, "exposure_currency", None) or meta.get("currency") or get_deployment_currency()
         raw_exp = s.estimated_financial_exposure or ""
-        m = re.search(r'([0-9]+(?:\.[0-9]+)?)', raw_exp)
-        exp_amount = float(m.group(1)) if m else None
+        exp_amount = getattr(s, "exposure_amount", None)
+        if exp_amount is None and raw_exp:
+            m = re.search(r'([0-9]+(?:\.[0-9]+)?)', raw_exp)
+            exp_amount = float(m.group(1)) if m else None
 
         result.append({
             "decision": dec,
@@ -148,6 +150,7 @@ def get_historical_signals(db: Session = Depends(get_db),
             "revenue_risk_category": s.revenue_risk_category,
             "estimated_financial_exposure": s.estimated_financial_exposure,
             "exposure_amount": exp_amount,
+            "exposure_currency": curr,
             "currency": curr,
             "revenue_confidence": s.revenue_confidence,
             "operational_dependency": s.operational_dependency,

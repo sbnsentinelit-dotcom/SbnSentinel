@@ -60,10 +60,8 @@ class FinancialReportingService:
                 FinancialClaimModel.service_date <= period_end,
             ).all()
 
-            target_currency = currency or (all_claims[0].currency if all_claims else None)
-            if not target_currency:
-                from app.core.config import get_deployment_currency
-                target_currency = get_deployment_currency()
+            from app.core.config import get_deployment_currency
+            target_currency = currency or get_deployment_currency()
 
             # Separate totals by currency to prevent mixed-currency aggregation (e.g. AED 640 + USD 100 = 740)
             currency_totals: Dict[str, Dict[str, Any]] = {}
@@ -486,6 +484,9 @@ class FinancialReportingService:
         """
         session = db or SessionLocal()
         try:
+            from app.core.config import get_deployment_currency
+            default_curr = get_deployment_currency()
+
             rem_q = session.query(FinancialRemittanceModel).filter(
                 FinancialRemittanceModel.clinic_id == clinic_id,
                 FinancialRemittanceModel.remittance_date >= period_start,
@@ -516,8 +517,8 @@ class FinancialReportingService:
                 if matched_receipts:
                     matched_remittance_ids.add(rem.remittance_id)
 
-                rem_currency = rem.currency or "AED"
-                receipt_currencies = {r.currency or "AED" for r in matched_receipts}
+                rem_currency = rem.currency or default_curr
+                receipt_currencies = {r.currency or default_curr for r in matched_receipts}
                 receipt_currency = list(receipt_currencies)[0] if len(receipt_currencies) == 1 else ("MIXED" if receipt_currencies else rem_currency)
 
                 currencies_match = bool(matched_receipts and len(receipt_currencies) == 1 and rem_currency in receipt_currencies)
@@ -551,16 +552,15 @@ class FinancialReportingService:
 
             rep_currency = currency or (remittances[0].currency if remittances else (receipts[0].currency if receipts else None))
             if not rep_currency:
-                from app.core.config import get_deployment_currency
-                rep_currency = get_deployment_currency()
+                rep_currency = default_curr
 
             # Separate advised, received, and unallocated amounts by currency
-            all_currencies = set(r.currency or "AED" for r in remittances) | set(r.currency or "AED" for r in receipts)
+            all_currencies = set(r.currency or default_curr for r in remittances) | set(r.currency or default_curr for r in receipts)
             currency_totals: Dict[str, Dict[str, Any]] = {}
             for curr in all_currencies:
-                c_rems = [r for r in remittances if (r.currency or "AED") == curr]
-                c_rcpts = [r for r in receipts if (r.currency or "AED") == curr]
-                c_unallocated = [r for r in unallocated_receipts if (r.currency or "AED") == curr]
+                c_rems = [r for r in remittances if (r.currency or default_curr) == curr]
+                c_rcpts = [r for r in receipts if (r.currency or default_curr) == curr]
+                c_unallocated = [r for r in unallocated_receipts if (r.currency or default_curr) == curr]
                 currency_totals[curr] = {
                     "total_payer_advised": round(sum(r.total_paid for r in c_rems), 2),
                     "total_cash_received": round(sum(r.amount for r in c_rcpts), 2),

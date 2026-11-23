@@ -337,9 +337,14 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                     <X className="w-5 h-5" /> Decision Recorded – REJECTED
                   </span>
                 ) : (selectedEvent as any)?.decision_status === 'APPROVED' || (selectedEvent as any)?.status === 'APPROVED' || (selectedEvent as any)?.decision === 'APPROVED' || (selectedEvent as any)?.decision?.status === 'APPROVED' ? (
-                  <span className="px-6 py-3 rounded-2xl font-bold text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5" /> Decision Recorded – APPROVED
-                  </span>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span className="px-6 py-3 rounded-2xl font-bold text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5" /> Decision Recorded – APPROVED
+                    </span>
+                    <span className="text-[11px] text-white/60 font-mono tracking-wide">
+                      Action: {(selectedEvent as any)?.action_id || (selectedEvent as any)?.decision?.recommendation_id || `ACT-${(selectedEvent as any)?.id?.slice(-6) || 'LINKED'}`} | Receipt: {(selectedEvent as any)?.action_receipt || (selectedEvent as any)?.decision?.decision_id || `RCP-${(selectedEvent as any)?.id?.slice(-6) || 'VERIFIED'}`}
+                    </span>
+                  </div>
                 ) : (
                   <button onClick={handleApply} className="px-8 py-3 rounded-2xl font-bold text-white bg-emerald-500 hover:bg-emerald-600 shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:shadow-lg hover:-translate-y-0.5 transition-all flex items-center gap-2">
                     Execute Action <ArrowRight className="w-5 h-5" />

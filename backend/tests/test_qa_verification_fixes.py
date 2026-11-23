@@ -595,6 +595,77 @@ def test_technical_rejection_period_filter():
         db.commit()
 
 
+def test_encounter_journey_wait_time_preserves_none():
+    from app.models.encounter import EncounterModel
+    from app.api.v1.endpoints.encounters import get_encounter_journey
+    from unittest.mock import MagicMock
+
+    enc_id = "enc_test_journey_wait_none"
+    with SessionLocal() as db:
+        db.query(EncounterModel).filter(EncounterModel.id == enc_id).delete()
+        db.commit()
+
+        enc = EncounterModel(
+            id=enc_id,
+            clinic_id="DXB-CLINIC-01",
+            patient_id="pat_wait_none",
+            provider_id="prv_01",
+            date="2026-11-22",
+            type="Consultation",
+            status="Waiting",
+            priority="Normal",
+            wait_time=None,  # Not recorded / unavailable
+        )
+        db.add(enc)
+        db.commit()
+
+        mock_user = MagicMock()
+        mock_user.role = "System Administrator"
+        mock_user.clinic_id = "DXB-CLINIC-01"
+
+        res = get_encounter_journey(encounter_id=enc_id, db=db, current_user=mock_user)
+        assert res["wait_time"] is None, f"Expected None for missing wait_time, got {res['wait_time']}"
+
+        # Clean up
+        db.query(EncounterModel).filter(EncounterModel.id == enc_id).delete()
+        db.commit()
+
+
+def test_owner_summary_default_currency_from_deployment():
+    clinic = "clinic_default_curr_01"
+    now = datetime.now(timezone.utc)
+    p_start = now - timedelta(days=2)
+    p_end = now + timedelta(days=1)
+
+    # When no currency passed and claims exist, it should use get_deployment_currency()
+    res = financial_reporting_service.generate_owner_summary(clinic, p_start, p_end, currency=None)
+    assert res["currency"] == get_deployment_currency()
+
+
+def test_reconciliation_report_default_currency():
+    clinic = "clinic_recon_curr_01"
+    now = datetime.now(timezone.utc)
+    p_start = now - timedelta(days=2)
+    p_end = now + timedelta(days=1)
+
+    res = financial_reporting_service.generate_reconciliation_report(clinic, p_start, p_end, currency=None)
+    assert res["currency"] == get_deployment_currency()
+
+
+def test_signal_model_exposure_attributes():
+    from app.models.signal import SignalModel
+
+    sig = SignalModel(
+        id="sig_test_exp_01",
+        clinic_id="DXB-CLINIC-01",
+        estimated_financial_exposure="AED 1,500.00",
+        exposure_amount=1500.0,
+        exposure_currency="AED",
+    )
+    assert sig.exposure_amount == 1500.0
+    assert sig.exposure_currency == "AED"
+
+
 if __name__ == "__main__":
     test_currency_mapping_no_db_sniffing()
     test_gender_authoritative_source_preservation()
@@ -606,4 +677,8 @@ if __name__ == "__main__":
     test_unpaid_lines_currency_isolation()
     test_denials_and_rejections_currency_isolation()
     test_technical_rejection_period_filter()
+    test_encounter_journey_wait_time_preserves_none()
+    test_owner_summary_default_currency_from_deployment()
+    test_reconciliation_report_default_currency()
+    test_signal_model_exposure_attributes()
     print("All QA verification fix tests passed successfully!")

@@ -164,10 +164,10 @@ export const RevenueReportsView: React.FC = () => {
       {/* Dynamic Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { title: "Daily Revenue (Est)", value: dailyRevenue !== null ? formatMoney(dailyRevenue, backendSummary?.currency) : 'Unavailable', trend: dailyRevenue !== null ? `+${(4.2 + (eLen % 10) * 0.1).toFixed(1)}%` : 'N/A', icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-          { title: "Saved by Sentinel AI", value: savedRevenue !== null ? formatMoney(savedRevenue, backendSummary?.currency) : 'Unavailable', trend: savedRevenue !== null ? `+${18 + (eLen % 3)}%` : 'N/A', icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
-          { title: "Pending Claims", value: pendingClaims !== null ? pendingClaims : 'Unavailable', trend: pendingClaims !== null ? `-${2 + (eLen % 2)}` : 'N/A', icon: FileText, color: 'text-orange-400', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
-          { title: "Claim Denials", value: claimDenials !== null ? claimDenials : 'Unavailable', trend: claimDenials !== null ? `-${12 + (eLen % 4)}%` : 'N/A', icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
+          { title: "Daily Revenue (Est)", value: dailyRevenue !== null ? formatMoney(dailyRevenue, backendSummary?.currency) : 'Unavailable', trend: (backendSummary as any)?.daily_revenue_trend || 'Unavailable', icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
+          { title: "Saved by Sentinel AI", value: savedRevenue !== null ? formatMoney(savedRevenue, backendSummary?.currency) : 'Unavailable', trend: (backendSummary as any)?.saved_revenue_trend || 'Unavailable', icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
+          { title: "Pending Claims", value: pendingClaims !== null ? pendingClaims : 'Unavailable', trend: (backendSummary as any)?.pending_claims_trend || 'Unavailable', icon: FileText, color: 'text-orange-400', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
+          { title: "Claim Denials", value: claimDenials !== null ? claimDenials : 'Unavailable', trend: (backendSummary as any)?.claim_denials_trend || 'Unavailable', icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
         ].map((stat, i) => (
           <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] text-white card-hover flex flex-col justify-between relative overflow-hidden transition-all duration-300">
              <div className="flex items-start justify-between relative z-10">

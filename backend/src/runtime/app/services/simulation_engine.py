@@ -262,6 +262,7 @@ class SimulationEngine:
                     new_id = f"enc_{random.randint(1000, 99999)}"
                     new_enc = EncounterModel(
                         id=new_id,
+                        clinic_id="DXB-CLINIC-01",
                         patient_id=random.choice(["Alex M.", "Brian K.", "Chloe T.", "Daniel S.", "Eva R.", "Fiona W.", "Liam H.", "Zoe P."]),
                         provider_id=random.choice(["Dr. Smith", "Dr. Patel", "Dr. Chen", "Dr. Sarah Jenkins"]),
                         date=datetime.now().strftime("%Y-%m-%d"),
@@ -271,7 +272,7 @@ class SimulationEngine:
                         billing_status="Pending",
                         copay=float(random.choice([20, 30, 45, 50, 100])),
                         priority=random.choice(["Normal", "Urgent"]),
-                        wait_time="0 mins",
+                        wait_time="15 mins",
                         department=random.choice(["General Practice", "Cardiology", "Radiology"]),
                         avatar=None
                     )

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Float
 from datetime import datetime
 from app.db.database import Base
 
@@ -25,6 +25,8 @@ class SignalModel(Base):
     context_reason = Column(String, nullable=True)
     revenue_risk_category = Column(String, nullable=True)
     estimated_financial_exposure = Column(String, nullable=True)
+    exposure_amount = Column(Float, nullable=True)
+    exposure_currency = Column(String(8), nullable=True)
     revenue_confidence = Column(String, nullable=True)
     operational_dependency = Column(String, nullable=True)
     explainability_log = Column(String, nullable=True)

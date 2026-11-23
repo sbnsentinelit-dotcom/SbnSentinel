@@ -128,6 +128,11 @@ def seed_dubai_data(db: Session):
 
     # 2. Seed 789 Encounters
     start_date = datetime(2026, 1, 1)
+    today_dt = datetime.now()
+    yesterday_dt = today_dt - timedelta(days=1)
+    today_str = today_dt.strftime("%Y-%m-%d")
+    yesterday_str = yesterday_dt.strftime("%Y-%m-%d")
+
     existing_enc_ids = {e.id for e in db.query(EncounterModel.id).all()}
     encounters_data = []
 
@@ -137,7 +142,44 @@ def seed_dubai_data(db: Session):
         doc, specialty = PROVIDERS[i % len(PROVIDERS)]
         diag_code, diag_desc = DIAGNOSES[(i * 3) % len(DIAGNOSES)]
         cpt_code, cpt_desc, billed_amt = CPT_CATALOG[i % len(CPT_CATALOG)]
-        enc_date = (start_date + timedelta(days=(i * 3) % 280)).strftime("%Y-%m-%d")
+
+        if i >= 770:
+            enc_date = today_str
+            if i % 4 == 0:
+                enc_status = "Waiting"
+                enc_stage = "Waiting"
+                enc_wait = "15 mins"
+            elif i % 4 == 1:
+                enc_status = "In Room"
+                enc_stage = "Consultation"
+                enc_wait = "20 mins"
+            elif i % 4 == 2:
+                enc_status = "Delayed"
+                enc_stage = "Waiting"
+                enc_wait = "40 mins"
+            else:
+                enc_status = "Completed"
+                enc_stage = "Completed"
+                enc_wait = "10 mins"
+        elif i >= 750:
+            enc_date = yesterday_str
+            if i % 3 == 0:
+                enc_status = "Waiting"
+                enc_stage = "Waiting"
+                enc_wait = "10 mins"
+            elif i % 3 == 1:
+                enc_status = "In Room"
+                enc_stage = "Consultation"
+                enc_wait = "15 mins"
+            else:
+                enc_status = "Completed"
+                enc_stage = "Completed"
+                enc_wait = "12 mins"
+        else:
+            enc_date = (start_date + timedelta(days=(i * 3) % 280)).strftime("%Y-%m-%d")
+            enc_status = "Completed" if i % 10 != 0 else "In Room"
+            enc_stage = "Completed" if enc_status == "Completed" else "Consultation"
+            enc_wait = f"{(i * 7) % 25 + 5} mins"
 
         is_denied = (i % 5 == 0) and (p["payer"] != "Self Pay")
         is_paid = (i % 3 == 0) or (p["payer"] == "Self Pay")
@@ -170,13 +212,12 @@ def seed_dubai_data(db: Session):
         }
         encounters_data.append(enc_obj)
 
-        enc_status = "Completed" if i % 10 != 0 else "In Room"
-        enc_stage = "Completed" if enc_status == "Completed" else "Consultation"
         enc_timestamps = {
             "Check In": f"{enc_date}T08:30:00Z",
             "Waiting": f"{enc_date}T08:45:00Z",
-            "Consultation": f"{enc_date}T09:00:00Z"
         }
+        if enc_stage in ("Consultation", "Billing", "Completed"):
+            enc_timestamps["Consultation"] = f"{enc_date}T09:00:00Z"
         if enc_status == "Completed":
             enc_timestamps["Billing"] = f"{enc_date}T09:30:00Z"
             enc_timestamps["Completed"] = f"{enc_date}T09:45:00Z"
@@ -196,7 +237,7 @@ def seed_dubai_data(db: Session):
                 billing_status=billing_status,
                 copay=50.0 if p["payer"] != "Self Pay" else billed_amt,
                 priority="Urgent" if "Urgent" in specialty else "Normal",
-                wait_time=f"{(i * 7) % 25 + 5} mins",
+                wait_time=enc_wait,
                 department=specialty,
                 avatar=None,
                 clinical_notes=f"UAE Clinical Visit: Patient {p['name']} presenting with {diag_desc}. Evaluated by {doc} ({specialty}). Payer: {p['payer']}.",

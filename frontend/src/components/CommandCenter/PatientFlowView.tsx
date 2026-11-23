@@ -1124,10 +1124,19 @@ export const PatientFlowView: React.FC = () => {
           {/* Top Stats */}
       {(() => {
         // Clinic calendar clock for today and previous calendar day (B-74)
-        const now = new Date();
-        const todayStr = now.toISOString().slice(0, 10);
-        const yesterdayDate = new Date(now.getTime() - 86400000);
-        const yesterdayStr = yesterdayDate.toISOString().slice(0, 10);
+        const getClinicDateStr = (date: Date, daysOffset = 0) => {
+          const region = (process.env.NEXT_PUBLIC_DEPLOYMENT_REGION || 'UAE').toUpperCase();
+          const timeZone = region === 'UAE' ? 'Asia/Dubai' : (region === 'US' ? 'America/New_York' : 'UTC');
+          const target = new Date(date.getTime() + daysOffset * 86400000);
+          return new Intl.DateTimeFormat('en-CA', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(target);
+        };
+        const todayStr = getClinicDateStr(new Date(), 0);
+        const yesterdayStr = getClinicDateStr(new Date(), -1);
 
         // Group encounters strictly by calendar day (B-74: Today's cards only count today's clinic date)
         const currentDayEncs = encounters.filter(e => {
@@ -1187,7 +1196,7 @@ export const PatientFlowView: React.FC = () => {
         const inConsultationTrend = calcTrend(inConsultationCount, priorDayEncs.length > 0 ? priorInConsultation : null);
         const avgWaitTrend = currentAvgWait !== null && priorAvgWait !== null ? calcTrend(currentAvgWait, priorAvgWait, true) : 'Unavailable';
         const delayedTrend = calcTrend(delayedCount, priorDayEncs.length > 0 ? priorDelayed : null);
-        const waitDisplay = currentAvgWait !== null ? `${currentAvgWait}m` : (currentDayEncs.length === 0 ? '0m' : 'Unavailable');
+        const waitDisplay = currentAvgWait !== null ? `${currentAvgWait}m` : 'Unavailable';
 
         return (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -1235,9 +1244,25 @@ export const PatientFlowView: React.FC = () => {
         const formatStageTs = (ts?: string | null) => {
           if (!ts) return null;
           const s = String(ts).trim();
+          if (!s.includes('T') && !s.includes(':')) {
+            return s; // If date-only, show full string without slicing into "2026-"
+          }
+          try {
+            const d = new Date(s);
+            if (!isNaN(d.getTime())) {
+              const region = (process.env.NEXT_PUBLIC_DEPLOYMENT_REGION || 'UAE').toUpperCase();
+              const timeZone = region === 'UAE' ? 'Asia/Dubai' : (region === 'US' ? 'America/New_York' : 'UTC');
+              return d.toLocaleTimeString('en-GB', {
+                timeZone,
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              });
+            }
+          } catch (e) {}
           if (s.includes('T')) return s.split('T')[1].slice(0, 5);
           if (s.includes(':')) return s.slice(0, 5);
-          return s; // If date-only, show full string without slicing into "2026-"
+          return s;
         };
 
         const handleTimelineStageClick = async (targetStage: string) => {

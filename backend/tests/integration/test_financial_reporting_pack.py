@@ -11,6 +11,7 @@ from app.models.financial_reporting import (
     FinancialAdjustmentModel,
     ReportSnapshotModel,
 )
+from app.core.config import settings
 from app.services.financial_reporting_service import (
     financial_reporting_service,
     neutralize_formula,
@@ -18,7 +19,8 @@ from app.services.financial_reporting_service import (
 
 
 @pytest.fixture(autouse=True)
-def clean_financial_db():
+def clean_financial_db(monkeypatch):
+    monkeypatch.setattr(settings, "DEPLOYMENT_REGION", "UAE")
     with SessionLocal() as db:
         db.query(ReportSnapshotModel).delete()
         db.query(FinancialAdjustmentModel).delete()

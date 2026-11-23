@@ -381,7 +381,7 @@ def get_encounter_journey(
         "stages": ["Check In", "Waiting", "Consultation", "Lab", "Billing", "Completed"],
         "status": enc.status or "Waiting",
         "priority": enc.priority or "Normal",
-        "wait_time": enc.wait_time or "0 mins"
+        "wait_time": enc.wait_time
     }
 
 
