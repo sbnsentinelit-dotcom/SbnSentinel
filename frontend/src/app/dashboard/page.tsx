@@ -856,7 +856,7 @@ export default function Dashboard() {
                                 })}
                               </svg>
                               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="text-2xl font-extrabold text-white">{flowToday ? flowToday.arrivals : 'Unavailable'}</span>
+                                <span className="text-2xl font-extrabold text-white">{flowToday ? total : 'Unavailable'}</span>
                                 <span className="text-[9px] text-white/70 font-bold uppercase">Patients Today</span>
                               </div>
                             </div>
