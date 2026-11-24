@@ -131,7 +131,7 @@ def run_startup_seeding():
             try:
                 from app.models.encounter import EncounterModel
                 from app.services.dubai_seed_service import (
-                    auto_seed_dubai_if_empty, repair_seeded_authority_requirement)
+                    auto_seed_dubai_if_empty, repair_seeded_authority_requirement, repair_seeded_revenue_fields)
                 enc_count = db.query(EncounterModel).count()
                 # The workbook profile stays empty until an explicit import, except in synthetic
                 # (demo) mode, where the clinic's workbook is imported and the visit generator runs.
@@ -143,17 +143,23 @@ def run_startup_seeding():
                 repaired = repair_seeded_authority_requirement(db)
                 if repaired:
                     print(f"[INFO] Repaired authority requirement on {repaired} seeded recommendations.")
+                repaired = repair_seeded_revenue_fields(db)
+                if repaired:
+                    print(f"[INFO] Filled revenue category and dependency on {repaired} claim-denial signals.")
                 # UAE claim-denial policy, rules and mappings (also repairs rows from older seeds).
                 from app.services.uae_claims_governance import register_uae_claims_governance
                 register_uae_claims_governance()
-                # Synthetic mode: the visit generator plays the clinic's queue feed. Store the visit
-                # events of the last 14 days up to now so Patient Flow trends (up to 7 days against
-                # the 7 days before) have history.
+                # Synthetic mode: the visit generator plays the clinic's queue and billing feeds. Store
+                # the visit events from the workbook's last visit up to now (at least 14 days, so Patient
+                # Flow trends have history; at most 60), and bill the completed visits.
                 if getattr(settings, "SYNTHETIC_TEST_ENABLED", False):
                     from app.models.clinic import ClinicModel
-                    from app.services.visit_generator import sync_generated_events
+                    from datetime import datetime
+                    from app.services.patient_flow_policy import DEFAULT_FLOW_POLICY
+                    from app.services.visit_generator import history_days, sync_generated_events
+                    days = history_days(DEFAULT_FLOW_POLICY.local_date(datetime.utcnow()))
                     for (clinic_id,) in db.query(ClinicModel.id).all():
-                        added = sync_generated_events(db, clinic_id, days=14)
+                        added = sync_generated_events(db, clinic_id, days=days)
                         if added:
                             print(f"[INFO] Stored {added} synthetic visit events for {clinic_id}.")
             except Exception as seed_err:

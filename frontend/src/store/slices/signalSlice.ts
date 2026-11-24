@@ -24,6 +24,8 @@ export interface SignalEvent {
   exposure_amount?: number;
   currency?: string;
   revenue_impact_status?: string;
+  /** Revenue engine confidence: HIGH when the amount comes from the source (e.g. the payer remittance). */
+  revenue_confidence?: string;
   operational_dependency?: string;
   ai_insight?: string;
   status?: 'active' | 'acknowledged' | 'dismissed' | 'expired' | 'superseded' | 'APPROVED' | 'REJECTED';

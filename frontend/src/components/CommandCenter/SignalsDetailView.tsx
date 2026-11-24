@@ -339,7 +339,7 @@ export const SignalsDetailView: React.FC<{ initialSignalId?: string | null; onCl
                   <p className="text-[11px] font-semibold text-white/70 leading-snug">
                     {selectedSignal.operational_dependency && selectedSignal.operational_dependency !== 'N/A'
                       ? selectedSignal.operational_dependency
-                      : 'Depends on whether the slot was filled. Status unverified'}
+                      : 'Not recorded'}
                   </p>
                 </div>
               </div>

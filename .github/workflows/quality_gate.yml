@@ -146,6 +146,13 @@ jobs:
       run: |
         pytest tests/unit/test_waiting_room_rule.py -v
 
+    - name: Revenue Intelligence Verification (period figures, visit billing, export, signal revenue fields)
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/integration/test_revenue_overview.py tests/integration/test_generated_billing.py -v
+
   frontend-quality:
     name: Frontend Quality Assurance
     runs-on: ubuntu-latest

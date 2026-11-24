@@ -1370,25 +1370,6 @@ export const PatientFlowView: React.FC = () => {
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-base font-bold text-white">Live Waiting Queue</h3>
             </div>
-            {flow?.summary && (
-              <div className="mb-5 space-y-1 text-xs text-white/80 font-semibold">
-                <p>
-                  {flow.summary.consultations_started} consultation{flow.summary.consultations_started === 1 ? '' : 's'} started
-                  {' · '}
-                  {flow.summary.average_wait_minutes !== null
-                    ? `Average wait for those ${flow.summary.average_sample}: ${flow.summary.average_wait_minutes} minutes`
-                    : 'No verified wait times'}
-                </p>
-                <p>
-                  {flow.summary.still_waiting} patient{flow.summary.still_waiting === 1 ? '' : 's'} still waiting
-                  {flow.summary.longest_wait_minutes !== null ? ` · longest ${flow.summary.longest_wait_minutes} minutes since arrival` : ''}
-                  {flow.summary.left_before_seen ? ` · ${flow.summary.left_before_seen} left before being seen` : ''}
-                  {flow.summary.no_show ? ` · ${flow.summary.no_show} no-show` : ''}
-                  {flow.summary.unknown ? ` · ${flow.summary.unknown} status unknown` : ''}
-                  {flow.summary.needs_review ? ` · ${flow.summary.needs_review} need review` : ''}
-                </p>
-              </div>
-            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>

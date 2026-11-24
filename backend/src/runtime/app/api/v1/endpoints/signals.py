@@ -12,6 +12,7 @@ from app.db.database import get_db
 from app.models.signal import SignalModel
 from app.models.governance_storage import RecommendationModel, HumanDecisionModel
 from app.services.risk_level_evaluator import current_evaluation, current_level
+from app.services.revenue_intelligence_engine import dependency_for_signal
 
 router = APIRouter()
 
@@ -479,7 +480,7 @@ def get_historical_signals(
             "exposure_currency": curr,
             "currency": curr,
             "revenue_confidence": s.revenue_confidence,
-            "operational_dependency": s.operational_dependency or "Depends on whether the slot was filled. Status unverified",
+            "operational_dependency": s.operational_dependency or dependency_for_signal(meta.get("risk_kind"), s.message),
             "explainability_log": getattr(s, "explainability_log", None),
             "priority_score": getattr(s, "priority_score", None),
             # Review state (active / dismissed) and the recorded human decision, kept separate.

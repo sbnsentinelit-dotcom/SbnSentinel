@@ -5,11 +5,13 @@ import { Download, Filter, TrendingUp, DollarSign, Activity, FileText, AlertCirc
 import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store';
+import {
+  RevenueOverview, chartGeometry, compactAmount, filenameFrom, periodKey, ringSegments, sparkPath, statusColor,
+} from '@/utils/revenueOverview';
 
 export const RevenueReportsView: React.FC = () => {
   const stats = useSelector((state: RootState) => state.signals.stats);
   const events = useSelector((state: RootState) => state.signals.events);
-  const eLen = events.length;
 
   const [isExporting, setIsExporting] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
@@ -18,33 +20,30 @@ export const RevenueReportsView: React.FC = () => {
   const [mounted, setMounted] = useState(false);
   const [encounters, setEncounters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [backendSummary, setBackendSummary] = useState<any | null>(null);
-  const [summaryStats, setSummaryStats] = useState<any | null>(null);
-  const [totalClaimsCount, setTotalClaimsCount] = useState(789);
+  const [overview, setOverview] = useState<RevenueOverview | null>(null);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [totalClaimsCount, setTotalClaimsCount] = useState(0);
 
   const [selectedClaimDetail, setSelectedClaimDetail] = useState<any | null>(null);
   const [revenuePage, setRevenuePage] = useState(1);
   const revenuePageSize = 15;
 
+  const period = periodKey(filterRange);
+  const statusQuery = statusFilter !== 'all' ? `&billing_status=${encodeURIComponent(statusFilter)}` : '';
+
   const fetchEncounters = async (page = revenuePage) => {
     try {
       setLoading(true);
-      const res = await fetchWithAuth(`/api/v1/encounters?page=${page}&page_size=${revenuePageSize}`);
+      const res = await fetchWithAuth(`/api/v1/encounters?page=${page}&page_size=${revenuePageSize}&period=${period}${statusQuery}`);
       if (res && res.ok) {
         const totalHeader = res.headers.get('X-Total-Count');
-        if (totalHeader) setTotalClaimsCount(parseInt(totalHeader, 10));
+        setTotalClaimsCount(totalHeader ? parseInt(totalHeader, 10) : 0);
         const data = await res.json();
         setEncounters(data);
       }
-      const statsRes = await fetchWithAuth('/api/v1/encounters/summary-stats');
-      if (statsRes && statsRes.ok) {
-        const statsData = await statsRes.json();
-        setSummaryStats(statsData);
-      }
-      const repRes = await fetchWithAuth('/api/v1/financial-reports/summary');
-      if (repRes && repRes.ok) {
-        const repData = await repRes.json();
-        setBackendSummary(repData);
+      const ovRes = await fetchWithAuth(`/api/v1/encounters/revenue-overview?period=${period}`);
+      if (ovRes && ovRes.ok) {
+        setOverview(await ovRes.json());
       }
     } catch (e) {
       console.error("Error fetching data in revenue view:", e);
@@ -56,7 +55,8 @@ export const RevenueReportsView: React.FC = () => {
   useEffect(() => {
     setMounted(true);
     fetchEncounters(revenuePage);
-  }, [revenuePage, events.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revenuePage, events.length, period, statusFilter]);
 
   // Source-truth billing helper: Use actual encounter fields; never invent based on department (HC14)
   const getBillingDetails = (enc: any) => {
@@ -66,47 +66,54 @@ export const RevenueReportsView: React.FC = () => {
     return { payer, cpt, amount };
   };
 
-  // Clinic Billing Calculations & Regional Currency
-  const activeCurrency = backendSummary?.currency || (encounters.find(e => e.currency)?.currency) || (process.env.NEXT_PUBLIC_DEPLOYMENT_REGION?.toUpperCase() === 'UAE' ? 'AED' : 'USD');
+  // Clinic billing figures for the selected period (calculated by the server) & regional currency
+  const activeCurrency = overview?.currency || (encounters.find(e => e.currency)?.currency) || (process.env.NEXT_PUBLIC_DEPLOYMENT_REGION?.toUpperCase() === 'UAE' ? 'AED' : 'USD');
   const isUSD = activeCurrency.toUpperCase() === 'USD';
   const currLabel = isUSD ? '$' : 'AED ';
-  const dailyRevenue = summaryStats?.total_charges ?? backendSummary?.metrics?.total_charges ?? null;
-  const savedRevenue = summaryStats?.total_paid ?? backendSummary?.metrics?.confirmed_bank_receipts ?? null;
-  const pendingClaims = summaryStats?.pending_count ?? (encounters.length > 0 ? encounters.filter(e => e.billing_status === 'Pending' || e.billing_status === 'Billed' || e.billing_status === 'Submitted').length : null);
-  const claimDenials = summaryStats?.denied_count ?? (encounters.length > 0 ? encounters.filter(e => e.billing_status === 'Claim Denied' || e.billing_status === 'Denied').length : null);
+  const cards = overview?.cards;
+  const dailyRevenue = cards ? cards.charges.value : null;
+  const savedRevenue = cards ? cards.paid_amount.value : null;
+  const pendingClaims = cards ? cards.pending.value : null;
+  const claimDenials = cards ? cards.denied.value : null;
 
-  // Claim status chart values
-  const totalClaims = summaryStats?.total_encounters || totalClaimsCount || encounters.length || 0;
-  const paidCount = summaryStats?.paid_count ?? (encounters.length > 0 ? encounters.filter(e => e.billing_status === 'Paid' || e.billing_status === 'Settled').length : 0);
-  const pendingCount = pendingClaims ?? 0;
-  const deniedCount = claimDenials ?? 0;
-
-  const paidPct = totalClaims > 0 ? Math.round((paidCount / totalClaims) * 100) : 0;
-  const pendingPct = totalClaims > 0 ? Math.round((pendingCount / totalClaims) * 100) : 0;
-  const deniedPct = totalClaims > 0 ? Math.max(0, 100 - paidPct - pendingPct) : 0;
+  // Claim status ring: every status in the period, percentages that add up to 100.
+  const totalClaims = overview?.total_claims ?? 0;
+  const breakdown = overview?.status_breakdown ?? [];
+  const segments = ringSegments(breakdown);
+  const chart = chartGeometry(overview?.series ?? [], overview?.period ?? period);
+  const statusOptions = [
+    { value: 'all', label: 'All statuses' },
+    ...breakdown.map((s) => ({ value: s.key, label: s.label })),
+  ];
 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 4000);
   };
 
-  const handleExport = () => {
+  // Export: every billing record in the period matching the status filter (all pages), built by the server.
+  const handleExport = async () => {
     setIsExporting(true);
-    let csvContent = "Patient ID,Patient Name,Procedure Code,Payer,Amount,Status\n";
-    encounters.forEach(enc => {
-      const { payer, cpt, amount } = getBillingDetails(enc);
-      csvContent += `${enc.id},${enc.patient_name},${cpt.replace(',', '')},${payer},${amount},${enc.billing_status || 'Pending'}\n`;
-    });
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `sbn_sentinel_revenue_${filterRange.toLowerCase().replace(' ', '_')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast("📊 Real-time billing CSV file exported successfully!");
-    setTimeout(() => setIsExporting(false), 1500);
+    try {
+      const res = await fetchWithAuth(`/api/v1/encounters/export?period=${period}${statusQuery || '&billing_status=all'}`);
+      if (!res || !res.ok) throw new Error(`Export failed (${res?.status})`);
+      const blob = await res.blob();
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.setAttribute("href", url);
+      link.setAttribute("download", filenameFrom(res.headers.get('Content-Disposition'), `sbn_sentinel_revenue_${period}.csv`));
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      const label = statusOptions.find((o) => o.value === statusFilter)?.label ?? statusFilter;
+      showToast(`📊 Exported ${statusFilter === 'all' ? 'all' : label} billing records for ${filterRange}`);
+    } catch (e) {
+      console.error('Revenue export failed:', e);
+      showToast('Export failed. Please try again.');
+    } finally {
+      setTimeout(() => setIsExporting(false), 1500);
+    }
   };
 
   return (
@@ -143,6 +150,7 @@ export const RevenueReportsView: React.FC = () => {
                   key={range}
                   onClick={() => {
                     setFilterRange(range);
+                    setRevenuePage(1);
                     setShowFilter(false);
                     showToast(`Updated revenue range to: ${range}`);
                   }}
@@ -154,6 +162,17 @@ export const RevenueReportsView: React.FC = () => {
             </div>
           )}
 
+          <select
+            aria-label="Billing status filter for the table and the export"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setRevenuePage(1); }}
+            className="bg-white/5 border border-white/10 text-white font-bold text-xs px-3 py-2.5 rounded-[16px] premium-shadow cursor-pointer focus:outline-none hover:bg-white/10 transition-colors"
+          >
+            {statusOptions.map((o) => (
+              <option key={o.value} value={o.value} className="bg-[var(--color-surface)] text-white">{o.label}</option>
+            ))}
+          </select>
+
           <button onClick={handleExport} className={`flex items-center gap-2 text-white font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow transition-colors ${isExporting ? 'bg-[var(--color-semantic-positive)] hover:bg-[#059669]' : 'bg-[#111827] hover:bg-[#1F2937]'}`}>
             {isExporting ? <Check className="w-4 h-4" /> : <Download className="w-4 h-4" />}
             {isExporting ? 'Exported!' : 'Export CSV'}
@@ -164,17 +183,19 @@ export const RevenueReportsView: React.FC = () => {
       {/* Dynamic Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { title: "Daily Revenue (Est)", value: dailyRevenue !== null ? formatMoney(dailyRevenue, backendSummary?.currency) : 'Unavailable', trend: (backendSummary as any)?.daily_revenue_trend || 'Unavailable', icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
-          { title: "Saved by Sentinel AI", value: savedRevenue !== null ? formatMoney(savedRevenue, backendSummary?.currency) : 'Unavailable', trend: (backendSummary as any)?.saved_revenue_trend || 'Unavailable', icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
-          { title: "Pending Claims", value: pendingClaims !== null ? pendingClaims : 'Unavailable', trend: (backendSummary as any)?.pending_claims_trend || 'Unavailable', icon: FileText, color: 'text-orange-400', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
-          { title: "Claim Denials", value: claimDenials !== null ? claimDenials : 'Unavailable', trend: (backendSummary as any)?.claim_denials_trend || 'Unavailable', icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
-        ].map((stat, i) => (
+          { title: "Daily Revenue (Est)", value: dailyRevenue !== null ? formatMoney(dailyRevenue, activeCurrency) : 'Unavailable', card: cards?.charges, icon: DollarSign, color: 'text-emerald-400', bg: 'bg-emerald-500/20', line: 'var(--color-semantic-positive)' },
+          { title: "Saved by Sentinel AI", value: savedRevenue !== null ? formatMoney(savedRevenue, activeCurrency) : 'Unavailable', card: cards?.paid_amount, icon: BrainCircuit, color: 'text-white', bg: 'bg-purple-500/20', line: 'var(--color-surface)' },
+          { title: "Pending Claims", value: pendingClaims !== null ? pendingClaims : 'Unavailable', card: cards?.pending, icon: FileText, color: 'text-orange-400', bg: 'bg-orange-500/20', line: 'var(--color-semantic-attention)' },
+          { title: "Claim Denials", value: claimDenials !== null ? claimDenials : 'Unavailable', card: cards?.denied, icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/20', line: 'var(--color-semantic-critical)' },
+        ].map((s) => ({ ...s, trend: s.card?.trend ?? 'Unavailable', good: s.card?.good ?? null })).map((stat, i) => (
           <div key={i} className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-6 shadow-[0_20px_50px_rgba(46,16,85,0.3)] text-white card-hover flex flex-col justify-between relative overflow-hidden transition-all duration-300">
              <div className="flex items-start justify-between relative z-10">
                 <div className={`p-3 ${stat.bg} rounded-[16px]`}>
                   <stat.icon className={`w-5 h-5 ${stat.color}`} />
                 </div>
-                <div className={`flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-[6px] transition-colors ${stat.trend.startsWith('+') ? 'text-emerald-400 bg-emerald-500/20' : 'text-red-400 bg-red-500/20'}`}>
+                <div
+                  title={stat.card?.trend && overview ? `Compared with ${overview.compare_start} to ${overview.compare_end}` : 'No figures for the comparison period'}
+                  className={`flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-[6px] transition-colors ${stat.good === true ? 'text-emerald-400 bg-emerald-500/20' : stat.good === false ? 'text-red-400 bg-red-500/20' : 'text-white/60 bg-white/10'}`}>
                   <TrendingUp className={`w-3 h-3 ${stat.trend.startsWith('-') ? 'rotate-180' : ''}`} /> {stat.trend}
                 </div>
              </div>
@@ -186,9 +207,7 @@ export const RevenueReportsView: React.FC = () => {
              {/* Background Graphic */}
              <div className="absolute right-0 bottom-0 w-32 h-16 opacity-30">
                 <svg viewBox="0 0 100 40" className="w-full h-full preserve-aspect-ratio-none">
-                  <g className="transition-transform duration-500" style={{ transform: `translateY(${Math.sin(eLen + i) * 3}px)` }}>
-                    <path d="M0,40 C20,20 40,35 60,15 C80,25 100,5 100,5" fill="none" stroke={stat.line} strokeWidth="3" strokeLinecap="round" />
-                  </g>
+                  <path d={sparkPath(stat.card?.spark ?? [])} fill="none" stroke={stat.line} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
              </div>
           </div>
@@ -216,26 +235,30 @@ export const RevenueReportsView: React.FC = () => {
                   </linearGradient>
                 </defs>
                 <g className="text-white/50 text-[10px] font-mono font-bold" fill="currentColor">
-                   <text x="-55" y="20">{currLabel}80K</text>
-                   <text x="-55" y="100">{currLabel}60K</text>
-                   <text x="-55" y="180">{currLabel}40K</text>
-                   <text x="-55" y="260">{currLabel}20K</text>
-                   
-                   <text x="20" y="290">Week 1</text>
-                   <text x="250" y="290">Week 2</text>
-                   <text x="500" y="290">Week 3</text>
-                   <text x="750" y="290">Week 4</text>
- 
-                   <line x1="10" y1="20" x2="800" y2="20" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="4 4" />
-                   <line x1="10" y1="100" x2="800" y2="100" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="4 4" />
-                   <line x1="10" y1="180" x2="800" y2="180" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="4 4" />
-                   <line x1="10" y1="260" x2="800" y2="260" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="4 4" />
+                   {chart.ticks.map((t) => (
+                     <React.Fragment key={t.y}>
+                       <text x="-55" y={t.y}>{currLabel}{compactAmount(t.value)}</text>
+                       <line x1="10" y1={t.y} x2="800" y2={t.y} stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="4 4" />
+                     </React.Fragment>
+                   ))}
+                   {chart.points.map((pt) => pt.label && (
+                     <text key={`${pt.date}${pt.hour ?? ''}`} x={pt.x} y="290" textAnchor="middle">{pt.label}</text>
+                   ))}
                 </g>
- 
+
                 <g className="transition-transform duration-500">
-                  <path d="M20,180 C150,80 300,240 450,140 C600,40 700,100 800,60 L800,260 L20,260 Z" fill="url(#mainChart)"/>
-                  <path d="M20,180 C150,80 300,240 450,140 C600,40 700,100 800,60" fill="none" stroke="var(--color-surface-raised)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>
-                  <circle cx="800" cy="60" r="6" fill="var(--color-surface-raised)" stroke="white" strokeWidth="3" className="animate-pulse" />
+                  {chart.area && <path d={chart.area} fill="url(#mainChart)"/>}
+                  {chart.line && <path d={chart.line} fill="none" stroke="var(--color-semantic-positive)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>}
+                  {chart.points.map((pt, idx) => (
+                    <circle key={`${pt.date}${pt.hour ?? ''}`} cx={pt.x} cy={pt.y} r={idx === chart.points.length - 1 ? 6 : 4} fill="var(--color-surface-raised)" stroke="white" strokeWidth={idx === chart.points.length - 1 ? 3 : 2} className={idx === chart.points.length - 1 ? 'animate-pulse' : ''}>
+                      <title>{`${pt.date}${pt.hour ? ` ${pt.hour}` : ''}: ${formatMoney(pt.value, activeCurrency)}`}</title>
+                    </circle>
+                  ))}
+                  {overview && chart.total === 0 && (
+                    <text x="400" y="150" fill="rgba(255,255,255,0.6)" fontSize="13" fontWeight="bold" textAnchor="middle">
+                      {`No billed charges between ${overview.start} and ${overview.end}`}
+                    </text>
+                  )}
                   
                   <g transform="translate(660, 15)">
                      <rect width="130" height="30" rx="12" fill="rgba(255,255,255,0.1)" />
@@ -256,30 +279,22 @@ export const RevenueReportsView: React.FC = () => {
                 <div className="relative w-28 h-28">
                    <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
                      <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="rgba(255,255,255,0.1)" strokeWidth="4"></circle>
-                     <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="var(--color-semantic-positive)" strokeWidth="4" strokeDasharray={`${paidPct} ${100 - paidPct}`} strokeDashoffset="0" className="transition-all duration-500"></circle>
-                     <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="var(--color-semantic-attention)" strokeWidth="4" strokeDasharray={`${pendingPct} ${100 - pendingPct}`} strokeDashoffset={`-${paidPct}`} className="transition-all duration-500"></circle>
-                     <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="var(--color-semantic-critical)" strokeWidth="4" strokeDasharray={`${deniedPct} ${100 - deniedPct}`} strokeDashoffset={`-${paidPct + pendingPct}`} className="transition-all duration-500"></circle>
+                     {segments.map((seg) => (
+                       <circle key={seg.key} cx="18" cy="18" r="15.915" fill="transparent" stroke={seg.color} strokeWidth="4" strokeDasharray={seg.dash} strokeDashoffset={seg.offset} className="transition-all duration-500"></circle>
+                     ))}
                    </svg>
                    <div className="absolute inset-0 flex flex-col items-center justify-center">
-                     <span className="text-xl font-extrabold text-white">{encounters.length}</span>
+                     <span className="text-xl font-extrabold text-white" title={`Claims with a service date from ${overview?.start ?? ''} to ${overview?.end ?? ''}`}>{totalClaims}</span>
                    </div>
                 </div>
                 <div className="space-y-3">
-                   <div className="flex items-center gap-2 text-sm">
-                     <div className="w-2.5 h-2.5 rounded-full bg-[var(--color-semantic-positive)]"></div>
-                     <span className="text-white/70 font-medium">Paid</span>
-                     <span className="font-bold text-white ml-2">{paidPct}%</span>
-                   </div>
-                   <div className="flex items-center gap-2 text-sm">
-                     <div className="w-2.5 h-2.5 rounded-full bg-[var(--color-semantic-attention)]"></div>
-                     <span className="text-white/70 font-medium">Pending</span>
-                     <span className="font-bold text-white ml-2">{pendingPct}%</span>
-                   </div>
-                   <div className="flex items-center gap-2 text-sm">
-                     <div className="w-2.5 h-2.5 rounded-full bg-[var(--color-semantic-critical)]"></div>
-                     <span className="text-white/70 font-medium">Denied</span>
-                     <span className="font-bold text-white ml-2">{deniedPct}%</span>
-                   </div>
+                   {breakdown.map((s) => (
+                     <div key={s.key} className="flex items-center gap-2 text-sm" title={`${s.count} of ${totalClaims} claims`}>
+                       <div className="w-2.5 h-2.5 rounded-full" style={{ background: statusColor(s.key) }}></div>
+                       <span className="text-white/70 font-medium">{s.label}</span>
+                       <span className="font-bold text-white ml-2">{s.pct}%</span>
+                     </div>
+                   ))}
                 </div>
              </div>
           </div>
@@ -333,7 +348,7 @@ export const RevenueReportsView: React.FC = () => {
                   patient_name: enc.patient_name,
                   code: cpt,
                   payer: payer,
-                  amt: formatMoney(amount, enc.currency || backendSummary?.currency),
+                  amt: formatMoney(amount, enc.currency || activeCurrency),
                   status: enc.billing_status || 'Pending',
                   date: enc.date || 'Today',
                   diagnosis: enc.diagnosis || 'No Diagnosis Recorded',

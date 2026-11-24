@@ -2,6 +2,7 @@ import math
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from app.db.database import get_db
@@ -186,6 +187,87 @@ def get_encounter_summary_stats(
     }
 
 
+def scoped_encounter_query(db: Session, current_user: User, clinic_id: Optional[str] = None):
+    """Encounters the caller may see: own clinic for front desk / clinic managers, the requested or own
+    clinic for other roles, everything (or the requested clinic) for System Administrators."""
+    query = legacy_encounter_query(db)
+    if current_user and getattr(current_user, 'role', None) != UserRole.SYSTEM_ADMINISTRATOR.value:
+        effective_clinic = clinic_id or getattr(current_user, 'clinic_id', None)
+        if getattr(current_user, 'role', None) in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
+            if getattr(current_user, 'clinic_id', None):
+                query = query.filter(EncounterModel.clinic_id == current_user.clinic_id)
+            else:
+                query = query.filter(EncounterModel.clinic_id == "UNASSIGNED_FORCE_FAIL")
+        elif effective_clinic:
+            query = query.filter(EncounterModel.clinic_id == effective_clinic)
+    elif clinic_id:
+        query = query.filter(EncounterModel.clinic_id == clinic_id)
+    return query
+
+
+def _period_bounds(period: Optional[str]):
+    """(period key, start, end) for today / week / month in the clinic's local time."""
+    from app.services import revenue_overview as rev
+    try:
+        key = rev.normalize_period(period)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    start, end, _ps, _pe = rev.period_bounds(key, rev.clinic_today())
+    return key, start, end
+
+
+@router.get("/revenue-overview")
+def get_revenue_overview(
+    period: Optional[str] = Query("week", description="today | week | month"),
+    clinic_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
+    """Revenue Intelligence cards, trends, daily chart and claim-status ring for one period, all
+    calculated from the encounters the caller may see."""
+    from app.services import revenue_overview as rev
+    key, _start, _end = _period_bounds(period)
+    return rev.revenue_overview(scoped_encounter_query(db, current_user, clinic_id), key,
+                                rev.clinic_today(), get_deployment_currency())
+
+
+@router.get("/export")
+def export_encounters(
+    period: Optional[str] = Query("week", description="today | week | month"),
+    billing_status: Optional[str] = Query("all", description="all | paid | pending | denied | an exact status"),
+    clinic_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
+):
+    """CSV of every billing record in the period that matches the status filter (not just one page)."""
+    import csv
+    import io
+    from app.services import revenue_overview as rev
+    key, start, end = _period_bounds(period)
+    query = rev.status_filter(rev.in_dates(scoped_encounter_query(db, current_user, clinic_id), start, end),
+                              billing_status)
+    currency = get_deployment_currency()
+
+    def lines():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(rev.EXPORT_COLUMNS)
+        for row in rev.export_rows(query, currency):
+            writer.writerow(row)
+            if buf.tell() > 64_000:
+                yield buf.getvalue()
+                buf.seek(0)
+                buf.truncate()
+        yield buf.getvalue()
+
+    slug = "all" if not billing_status or billing_status == "all" else \
+        "".join(ch if ch.isalnum() else "_" for ch in billing_status.lower()).strip("_")
+    filename = f"sbn_sentinel_revenue_{key}_{start.isoformat()}_{end.isoformat()}_{slug}.csv"
+    return StreamingResponse(lines(), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                                      "Access-Control-Expose-Headers": "Content-Disposition"})
+
+
 @router.get("", response_model=List[EncounterResponse])
 @router.get("/", response_model=List[EncounterResponse])
 def get_all_encounters(
@@ -198,6 +280,7 @@ def get_all_encounters(
     status: Optional[str] = Query(None),
     billing_status: Optional[str] = Query(None),
     clinic_id: Optional[str] = Query(None),
+    period: Optional[str] = Query(None, description="today | week | month (Revenue Intelligence table)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_scoped_user)
 ):
@@ -205,18 +288,11 @@ def get_all_encounters(
     Get clinical patient encounters with high-performance server-side pagination and facility scoping.
     """
     def selected_query():
-        query = legacy_encounter_query(db)
-        if current_user and getattr(current_user, 'role', None) != UserRole.SYSTEM_ADMINISTRATOR.value:
-            effective_clinic = clinic_id or getattr(current_user, 'clinic_id', None)
-            if getattr(current_user, 'role', None) in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
-                if getattr(current_user, 'clinic_id', None):
-                    query = query.filter(EncounterModel.clinic_id == current_user.clinic_id)
-                else:
-                    query = query.filter(EncounterModel.clinic_id == "UNASSIGNED_FORCE_FAIL")
-            elif effective_clinic:
-                query = query.filter(EncounterModel.clinic_id == effective_clinic)
-        elif clinic_id:
-            query = query.filter(EncounterModel.clinic_id == clinic_id)
+        query = scoped_encounter_query(db, current_user, clinic_id)
+        if period:
+            from app.services.revenue_overview import in_dates
+            _key, start, end = _period_bounds(period)
+            query = in_dates(query, start, end)
 
         if search:
             pattern = f"%{search}%"
@@ -228,7 +304,8 @@ def get_all_encounters(
                 EncounterModel.billing_status.ilike(pattern)
             ))
         if billing_status:
-            query = query.filter(EncounterModel.billing_status == billing_status)
+            from app.services.revenue_overview import status_filter
+            query = status_filter(query, billing_status)
         if status:
             query = query.filter(EncounterModel.status == status)
         return query

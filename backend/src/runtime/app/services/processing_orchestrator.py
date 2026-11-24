@@ -37,7 +37,7 @@ from app.services.decision_context_engine import decision_context_engine
 from app.services.policy_engine import policy_engine
 from app.services.rules_engine import rules_engine
 from app.services.intelligence_engine import intelligence_engine
-from app.services.revenue_intelligence_engine import revenue_intelligence_engine
+from app.services.revenue_intelligence_engine import revenue_fields, revenue_intelligence_engine
 from app.services.data_audit_engine import data_audit_engine
 from app.schemas.signal import SignalEvent
 from app.core.exceptions import (
@@ -725,7 +725,8 @@ class ProcessingOrchestrator:
                 revenue_risk_category=revenue_model.opportunity_category if revenue_model else "UNAVAILABLE",
                 estimated_financial_exposure=revenue_model.estimated_exposure if revenue_model else "UNAVAILABLE",
                 revenue_confidence=revenue_model.financial_priority if revenue_model else "UNAVAILABLE",
-                operational_dependency="",
+                operational_dependency=(revenue_fields(intel_result.get("rule_id")).get("operational_dependency")
+                                        if intel_result else None) or "",
                 org_id=target_org_id,
                 clinic_id=target_clinic_id,
             )

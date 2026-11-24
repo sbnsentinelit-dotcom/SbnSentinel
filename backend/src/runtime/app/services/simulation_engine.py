@@ -248,7 +248,7 @@ class SimulationEngine:
                 revenue_risk_category=revenue.opportunity_category if revenue else "UNAVAILABLE",
                 estimated_financial_exposure=revenue.estimated_exposure if revenue else "UNAVAILABLE",
                 revenue_confidence=revenue.financial_priority if revenue else "UNAVAILABLE",
-                operational_dependency=""
+                operational_dependency=(stored_signal.operational_dependency if stored_signal else None) or ""
             )
             await self.broadcast(event)
         finally:
