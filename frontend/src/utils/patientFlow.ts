@@ -9,6 +9,7 @@ export type FlowCard = {
   previous: number | null;
   spark: Array<number | null>;
   sample?: number;
+  without_arrival?: number;
 };
 
 export type FlowRow = {
@@ -30,6 +31,27 @@ export type FlowRow = {
   arrived_at: string | null;
   stage_timestamps: Record<string, string>;
   date: string;
+  /** Waiting-room review (server): seen / waiting / left / noShow / unknown / review. */
+  review_status?: string | null;
+  since_ready_minutes?: number | null;
+  /** "30 mins since ready" or "Readiness unconfirmed" while the patient is waiting. */
+  readiness?: string | null;
+  ready_alert?: boolean;
+  handoff?: string | null;
+  next_owner?: string | null;
+};
+
+export type FlowSummary = {
+  consultations_started: number;
+  average_wait_minutes: number | null;
+  average_sample: number;
+  started_without_arrival: number;
+  still_waiting: number;
+  longest_wait_minutes: number | null;
+  left_before_seen: number;
+  no_show: number;
+  unknown: number;
+  needs_review: number;
 };
 
 export type FlowRoom = {
@@ -57,6 +79,7 @@ export type FlowSnapshot = {
   timezone: string;
   feed: { last_event_at: string | null; synced: boolean };
   cards: Record<'checked_in' | 'in_consultation' | 'avg_wait' | 'delayed', FlowCard>;
+  summary?: FlowSummary;
   queue: FlowRow[];
   total: number;
   rooms: FlowRoom[];

@@ -61,7 +61,7 @@ def test_seed_imports_the_workbook_without_invented_live_data(tmp_path):
         # Workbook only: 789 historical visits, no open visit, no measured wait, no suggestion.
         snap = snapshot(db, "DXB-CLINIC-01")
         assert snap["queue"] == [] and snap["suggestions"] == []
-        assert snap["cards"]["avg_wait"]["display"] == "No verified waits"
+        assert snap["cards"]["avg_wait"]["display"] == "No verified wait times"
         assert all(r["status"] == "Available" for r in snap["rooms"])
         assert snap["feed"] == {"last_event_at": None, "synced": False}
     finally:
@@ -182,7 +182,20 @@ def test_staff_reports_are_recorded_as_events_and_delayed_is_calculated(clinic):
     try:
         manual = db.query(VisitEventModel).filter(VisitEventModel.visit_id == "V1",
                                                   VisitEventModel.source == "manual").one()
-        assert manual.event_type == CONSULT_START and manual.recorded_by == "frontdesk@test.local"
+        # A room is not the consultation start: the patient is still waiting.
+        assert manual.event_type == "ROOMED" and manual.recorded_by == "frontdesk@test.local"
+        assert manual.source_role == "rooms" and manual.known_at is not None
+    finally:
+        db.close()
+    row = client.get("/api/v1/patient-flow").json()["queue"][0]
+    assert row["status"] == "In Room" and row["review_status"] == "waiting"
+    res = client.post("/api/v1/patient-flow/visits/V1/status", json={"status": "In Consultation"})
+    assert res.status_code == 200 and res.json()["status"] == "In Consultation" and res.json()["room"] == "Room 1"
+    db = SessionLocal()
+    try:
+        start = db.query(VisitEventModel).filter(VisitEventModel.visit_id == "V1",
+                                                 VisitEventModel.event_type == CONSULT_START).one()
+        assert start.source_role == "clinician"
     finally:
         db.close()
     assert client.post("/api/v1/patient-flow/visits/V1/status", json={"status": "Waiting"}).status_code == 409
@@ -235,3 +248,104 @@ def test_clinic_scope_is_enforced(clinic):
     _login(clinic, role=UserRole.READ_ONLY_AUDITOR.value)
     assert client.get("/api/v1/patient-flow").status_code == 200
     assert client.post("/api/v1/patient-flow/visits/X/status", json={"status": "In Room"}).status_code == 403
+
+
+# ---------------------------------------------------------------- waiting-room review (Stress Test 3)
+def test_waiting_room_case_on_the_live_screen(clinic):
+    from app.models.patient_flow import NURSING_DONE
+    from app.services import waiting_room_case as case
+    from app.services.patient_flow_service import record_feed_heartbeat
+    now = datetime.utcnow().replace(second=0, microsecond=0)
+    db = SessionLocal()
+    try:
+        ids = case.record_case(db, clinic, now - timedelta(minutes=45), now)
+        assert case.record_case(db, clinic, now - timedelta(minutes=45), now) == ids          # delivered once
+        events = db.query(VisitEventModel).filter(VisitEventModel.visit_id.in_(ids)).all()
+    finally:
+        db.close()
+    # One patient per doctor at a time, one consultation per room at a time.
+    spans = {}
+    for v in ids:
+        t = {e.event_type: e for e in events if e.visit_id == v}
+        spans[v] = (t["ROOMED"].event_time, t["CONSULT_END"].event_time, t["CONSULT_START"].provider,
+                    t["CONSULT_START"].room)
+    for x in ids:
+        for y in ids:
+            if x < y and spans[x][0] < spans[y][1] and spans[y][0] < spans[x][1]:
+                assert spans[x][2] != spans[y][2] and spans[x][3] != spans[y][3]
+    record_feed_heartbeat(clinic, datetime.utcnow())
+    _login(clinic)
+
+    def screen():
+        body = client.get("/api/v1/patient-flow", params={"department": case.CASE_DEPARTMENT}).json()
+        return body, {r["id"]: r for r in body["queue"]}
+
+    body, rows = screen()
+    s = body["summary"]
+    assert (s["consultations_started"], s["average_wait_minutes"], s["average_sample"]) == (9, 10, 9)
+    assert (s["still_waiting"], s["longest_wait_minutes"]) == (1, 45)
+    assert body["cards"]["avg_wait"]["display"] == "10m" and body["cards"]["avg_wait"]["sample"] == 9
+    in_consult = [r for r in rows.values() if r["status"] == "In Consultation"]
+    assert len(in_consult) == 3
+    assert len({r["provider_name"] for r in in_consult}) == 3 and len({r["room"] for r in in_consult}) == 3
+    occupied = [r for r in body["rooms"] if r["name"] in case.CASE_ROOMS and r["status"] == "Occupied"]
+    assert len(occupied) == 3 and len({r["provider"] for r in occupied}) == 3
+    waiting = rows[ids[-1]]
+    assert waiting["wait_minutes"] == 45 and waiting["readiness"] == "30 mins since ready"
+    assert waiting["handoff"] == "Handoff sent · Acceptance pending" and waiting["next_owner"] == "Clinic coordinator"
+    assert "Day Clinic" in body["departments"]
+
+    # Remove the nursing timestamp: only the readiness conclusion changes.
+    db = SessionLocal()
+    try:
+        assert case.supersede(db, ids[-1], NURSING_DONE, "test correction") == 1
+        assert case.redeliver(db, ids[-1], FILE_READY_EVENT) is False                   # duplicate counted once
+    finally:
+        db.close()
+    body, rows = screen()
+    waiting = rows[ids[-1]]
+    assert waiting["wait_minutes"] == 45 and waiting["readiness"] == "Readiness unconfirmed"
+    assert waiting["handoff"] == "Handoff unconfirmed" and waiting["next_owner"] == "Clinic coordinator"
+    assert body["summary"]["average_wait_minutes"] == 10 and body["summary"]["still_waiting"] == 1
+
+    # The patient leaves before being seen: out of the waiting queue and out of the average.
+    db = SessionLocal()
+    try:
+        assert case.patient_left(db, clinic, ids[-1]) is True
+    finally:
+        db.close()
+    body, rows = screen()
+    assert body["summary"]["still_waiting"] == 0 and body["summary"]["left_before_seen"] == 1
+    assert body["summary"]["average_wait_minutes"] == 10 and ids[-1] not in rows
+
+    # A new run replaces the earlier case: its patients no longer appear.
+    db = SessionLocal()
+    try:
+        newer = case.record_case(db, clinic, now - timedelta(minutes=44), now)
+    finally:
+        db.close()
+    body, rows = screen()
+    assert not set(ids) & set(rows) and set(rows) <= set(newer)
+    assert body["summary"]["still_waiting"] == 1 and body["summary"]["consultations_started"] == 9
+
+
+FILE_READY_EVENT = "FILE_READY"
+
+
+def test_generated_day_is_consistent_with_the_waiting_room_rule(clinic):
+    from app.services.patient_flow_service import build_states, waiting_room_review
+    db = SessionLocal()
+    try:
+        sync_generated_events(db, clinic, days=1)
+        events = db.query(VisitEventModel).filter(VisitEventModel.clinic_id == clinic,
+                                                  VisitEventModel.visit_id.isnot(None)).all()
+    finally:
+        db.close()
+    now = datetime.utcnow()
+    states = build_states(events, now)
+    review = waiting_room_review(events, list(states), clinic, now, fresh=True)
+    assert review["review"] == 0 and review["unknown"] == 0
+    assert review["seen"] + review["waiting"] + review["left"] == len(states)
+    for row in review["rows"]:
+        if row["status"] == "waiting":
+            assert row["handoff"] in ("Sent, acceptance pending", "Unconfirmed")

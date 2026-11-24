@@ -13,7 +13,7 @@ dismissed suggestions, manual status reports) with its connector receipt.
 """
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, UniqueConstraint
 
 from app.db.database import Base
 
@@ -29,10 +29,31 @@ BILLING = "BILLING"                # at the billing desk
 CHECKED_OUT = "CHECKED_OUT"        # left the clinic: visit complete
 CANCELLED = "CANCELLED"            # left without being seen / cancelled after arrival
 ROOM_STATUS = "ROOM_STATUS"        # a person set a room's status (detail = Available / Cleaning / Occupied)
+NO_SHOW = "NO_SHOW"                # booked visit recorded as a no-show (the patient never arrived)
+# Waiting-room evidence (who is still waiting, how long since ready, who follows up):
+ROOMED = "ROOMED"                  # patient placed in a room; this is NOT the consultation start
+FILE_READY = "FILE_READY"          # medical records: the patient's file is ready
+FILE_REVOKED = "FILE_REVOKED"
+NURSING_DONE = "NURSING_DONE"      # nursing assessment complete
+NURSING_REVOKED = "NURSING_REVOKED"
+PAYER_APPROVED = "PAYER_APPROVED"  # payer authorization approved (only when the service requires it)
+PAYER_REVOKED = "PAYER_REVOKED"
+HANDOFF_SENT = "HANDOFF_SENT"      # handoff to the receiving team sent (handoff_id, destination)
+HANDOFF_ACCEPTED = "HANDOFF_ACCEPTED"  # the receiving team accepted that handoff
 
 VISIT_EVENT_TYPES = (ARRIVED, READY, CONSULT_START, CONSULT_END, LAB_START, LAB_END, BILLING,
-                     CHECKED_OUT, CANCELLED)
+                     CHECKED_OUT, CANCELLED, NO_SHOW, ROOMED, FILE_READY, FILE_REVOKED, NURSING_DONE,
+                     NURSING_REVOKED, PAYER_APPROVED, PAYER_REVOKED, HANDOFF_SENT, HANDOFF_ACCEPTED)
 TERMINAL_EVENTS = (CHECKED_OUT, CANCELLED)
+
+# The team that is authorized to record each event (an event from another source is not trusted).
+SOURCE_ROLE_OF_EVENT = {
+    ARRIVED: "reception", CANCELLED: "reception", NO_SHOW: "reception", CHECKED_OUT: "reception",
+    CONSULT_START: "clinician", CONSULT_END: "clinician", ROOMED: "rooms",
+    FILE_READY: "records", FILE_REVOKED: "records", NURSING_DONE: "nursing", NURSING_REVOKED: "nursing",
+    PAYER_APPROVED: "payer", PAYER_REVOKED: "payer", HANDOFF_SENT: "nursing", HANDOFF_ACCEPTED: "consult_team",
+    READY: "nursing", LAB_START: "lab", LAB_END: "lab", BILLING: "billing",
+}
 
 SOURCE_GENERATOR = "visit_generator"
 SOURCE_MANUAL = "manual"
@@ -59,6 +80,15 @@ class VisitEventModel(Base):
     source = Column(String(64), nullable=False)
     recorded_by = Column(String(160), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    # When Sentinel learned about the event (a late entry is not counted before it was known); UTC.
+    known_at = Column(DateTime, nullable=True)
+    source_role = Column(String(32), nullable=True)       # reception, nursing, records, payer, clinician, ...
+    handoff_id = Column(String(64), nullable=True)
+    destination = Column(String(64), nullable=True)       # receiving team of a handoff
+    payer_required = Column(Boolean, nullable=True)       # on ARRIVED: does this service need payer approval?
+    # A data correction never deletes an event: it is superseded (from this time on it no longer counts).
+    superseded_at = Column(DateTime, nullable=True)
+    superseded_by = Column(String(160), nullable=True)
 
 
 class ClinicRoomModel(Base):

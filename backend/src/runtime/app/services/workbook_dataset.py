@@ -145,6 +145,7 @@ def encounters() -> List[Dict[str, Any]]:
             "provider": e.get("Provider"),
             "specialty": e.get("Specialty"),
             "visit_type": e.get("Visit_Type"),
+            "authorization_required": {"Yes": True, "No": False}.get(e.get("Authorization_Required")),
             "date": visit_date.isoformat() if visit_date else None,
             "status": e.get("Encounter_Status"),
             "diagnosis_code": e.get("Diagnosis_Code"),

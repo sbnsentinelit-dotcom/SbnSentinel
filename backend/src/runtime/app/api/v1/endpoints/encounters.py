@@ -451,6 +451,7 @@ def update_encounter(
             "Check In": "Check In",
             "Waiting": "Waiting",
             "In Room": "Consultation",
+            "In Consultation": "Consultation",
             "Consultation": "Consultation",
             "Lab": "Lab",
             "Billing": "Billing",
