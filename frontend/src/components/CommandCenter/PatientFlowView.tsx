@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
-import { FlowActionResult, FlowRow, FlowSnapshot, clinicTime, newIdempotencyKey, postFlow, sparkPath, trendClass } from '@/utils/patientFlow';
+import { FlowActionResult, FlowCard, FlowRow, FlowSnapshot, clinicTime, newIdempotencyKey, postFlow, sparkPath, trendClass } from '@/utils/patientFlow';
 import { Users, UserCheck, Clock, AlertCircle, Search, Filter, Download, Calendar, Activity, ChevronLeft, ChevronRight, LayoutGrid, Stethoscope, Check, CreditCard, ShieldCheck, ShieldAlert, Camera, RefreshCw, Scan, Sparkles, Phone, X, FileText } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store';
@@ -46,6 +46,37 @@ export const PatientFlowView: React.FC = () => {
   // Live Database Encounters State
   const [encounters, setEncounters] = useState<any[]>([]);
   const [selectedPatientEncounter, setSelectedPatientEncounter] = useState<any | null>(null);
+  // The journey line runs from the first stage dot to the last one (and the progress to the current
+  // stage's dot), measured from the dots themselves so it never runs past "Completed".
+  const journeyTrackRef = useRef<HTMLDivElement | null>(null);
+  const [journeyLine, setJourneyLine] = useState<{ left: number; width: number; fill: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const box = journeyTrackRef.current;
+      if (!box) return;
+      const dots = Array.from(box.querySelectorAll<HTMLElement>('[data-journey-dot]'));
+      if (dots.length < 2) return;
+      const b = box.getBoundingClientRect();
+      const centers = dots.map(d => { const r = d.getBoundingClientRect(); return { x: r.left + r.width / 2 - b.left, y: r.top + r.height / 2 - b.top }; });
+      const active = Number(box.dataset.activeIndex ?? -1);
+      const left = centers[0].x;
+      const width = centers[centers.length - 1].x - left;
+      const fill = active >= 0 && active < centers.length ? centers[active].x - left : 0;
+      const top = centers[0].y;
+      setJourneyLine(prev => (prev && prev.left === left && prev.width === width && prev.fill === fill && prev.top === top)
+        ? prev : { left, width, fill, top });
+    };
+    measure();
+    // Re-measure whenever the timeline box changes size (window resize, side panels, zoom).
+    const box = journeyTrackRef.current;
+    const observer = typeof ResizeObserver !== 'undefined' && box ? new ResizeObserver(measure) : null;
+    if (observer && box) observer.observe(box);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  });
   const selectedPatientEncounterRef = useRef(selectedPatientEncounter);
   useEffect(() => {
     selectedPatientEncounterRef.current = selectedPatientEncounter;
@@ -1173,6 +1204,12 @@ export const PatientFlowView: React.FC = () => {
                     <p className="text-[28px] font-extrabold text-white leading-none transition-all">{card.display}</p>
                     <span className={`text-[11px] font-bold mb-1 transition-colors ${trendClass(card)}`}>{card.trend ?? 'Unavailable'}</span>
                   </div>
+                  {stat.title === 'Avg Wait Time' && typeof (card as FlowCard).sample === 'number' && (
+                    <p className="text-[10px] text-white/60 font-semibold mt-1">
+                      for {(card as FlowCard).sample} consultation{(card as FlowCard).sample === 1 ? '' : 's'} started
+                      {(card as FlowCard).without_arrival ? ` · ${(card as FlowCard).without_arrival} without arrival time` : ''}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-col items-end gap-3">
                   <div className={`p-3 ${stat.bg} rounded-[16px]`}>
@@ -1233,7 +1270,7 @@ export const PatientFlowView: React.FC = () => {
 
         return (
           <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-8 shadow-[0_20px_50px_rgba(46,16,85,0.3)] card-hover text-white">
-            <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-2">
+            <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-2">
               <div>
                 <h3 className="text-base font-bold text-white">
                   Patient Journey: <span className="text-blue-400 font-extrabold">{activeEncounter?.patient_name || 'Select a Patient'}</span>
@@ -1248,9 +1285,11 @@ export const PatientFlowView: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="flex items-center justify-between relative">
-              <div className="absolute left-8 right-8 top-1/2 -translate-y-1/2 h-1 bg-white/10 -z-10 rounded-full"></div>
-              <div className="absolute left-8 right-1/3 top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-[var(--color-semantic-positive)] to-[var(--color-accent)] -z-10 rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, Math.max(0, activeStageIndex) * 20)}%` }}></div>
+            <div ref={journeyTrackRef} data-active-index={activeStageIndex} className="flex items-center justify-between relative isolate pt-14">
+              <div className="absolute -translate-y-1/2 h-1 bg-white/10 -z-10 rounded-full"
+                style={journeyLine ? { left: journeyLine.left, width: journeyLine.width, top: journeyLine.top } : { display: 'none' }}></div>
+              <div className="absolute -translate-y-1/2 h-1 bg-gradient-to-r from-[var(--color-semantic-positive)] to-[var(--color-accent)] -z-10 rounded-full transition-[width] duration-1000"
+                style={journeyLine ? { left: journeyLine.left, width: journeyLine.fill, top: journeyLine.top } : { display: 'none' }}></div>
 
               {stageList.map((stageName, i) => {
                 const stageTs = stageTimes[stageName];
@@ -1271,7 +1310,7 @@ export const PatientFlowView: React.FC = () => {
                         </div>
                       </div>
                     )}
-                    <div className={`w-5 h-5 rounded-full shadow-sm z-10 transition-all duration-500 group-hover:scale-125 ${status === 'done' ? 'bg-[var(--color-semantic-positive)]' : status === 'current' ? 'bg-[var(--color-accent)] border-4 border-blue-500/30 scale-125' : 'bg-[var(--color-surface-raised)] border-4 border-white/20 group-hover:border-blue-500/30'}`}></div>
+                    <div data-journey-dot className={`w-5 h-5 rounded-full shadow-sm z-10 transition-all duration-500 group-hover:scale-125 ${status === 'done' ? 'bg-[var(--color-semantic-positive)]' : status === 'current' ? 'bg-[var(--color-accent)] border-4 border-blue-500/30 scale-125' : 'bg-[var(--color-surface-raised)] border-4 border-white/20 group-hover:border-blue-500/30'}`}></div>
                     <span className={`text-[11px] font-extrabold uppercase tracking-wider transition-colors ${status === 'pending' ? 'text-white/50 group-hover:text-white/70' : 'text-white'}`}>{stageName}</span>
                     {stageTs && (
                       <span className="text-[10px] text-white/50 font-mono">
@@ -1331,6 +1370,25 @@ export const PatientFlowView: React.FC = () => {
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-base font-bold text-white">Live Waiting Queue</h3>
             </div>
+            {flow?.summary && (
+              <div className="mb-5 space-y-1 text-xs text-white/80 font-semibold">
+                <p>
+                  {flow.summary.consultations_started} consultation{flow.summary.consultations_started === 1 ? '' : 's'} started
+                  {' · '}
+                  {flow.summary.average_wait_minutes !== null
+                    ? `Average wait for those ${flow.summary.average_sample}: ${flow.summary.average_wait_minutes} minutes`
+                    : 'No verified wait times'}
+                </p>
+                <p>
+                  {flow.summary.still_waiting} patient{flow.summary.still_waiting === 1 ? '' : 's'} still waiting
+                  {flow.summary.longest_wait_minutes !== null ? ` · longest ${flow.summary.longest_wait_minutes} minutes since arrival` : ''}
+                  {flow.summary.left_before_seen ? ` · ${flow.summary.left_before_seen} left before being seen` : ''}
+                  {flow.summary.no_show ? ` · ${flow.summary.no_show} no-show` : ''}
+                  {flow.summary.unknown ? ` · ${flow.summary.unknown} status unknown` : ''}
+                  {flow.summary.needs_review ? ` · ${flow.summary.needs_review} need review` : ''}
+                </p>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -1338,6 +1396,8 @@ export const PatientFlowView: React.FC = () => {
                     <th className="pb-4 font-extrabold tracking-wider px-2">Patient</th>
                     <th className="pb-4 font-extrabold tracking-wider px-2">Provider</th>
                     <th className="pb-4 font-extrabold tracking-wider px-2">Wait Time</th>
+                    <th className="pb-4 font-extrabold tracking-wider px-2">Since Ready</th>
+                    <th className="pb-4 font-extrabold tracking-wider px-2">Handoff / Next Owner</th>
                     <th className="pb-4 font-extrabold tracking-wider px-2">Status</th>
                     <th className="pb-4 font-extrabold tracking-wider px-2 text-right">Action</th>
                   </tr>
@@ -1345,7 +1405,7 @@ export const PatientFlowView: React.FC = () => {
                 <tbody className="text-sm font-semibold text-white">
                   {filteredEncounters.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="py-12 text-center">
+                      <td colSpan={7} className="py-12 text-center">
                         <p className="text-sm text-white/50 font-bold">No patients currently in the queue. New check-ins will appear here automatically.</p>
                       </td>
                     </tr>
@@ -1353,7 +1413,7 @@ export const PatientFlowView: React.FC = () => {
                   {filteredEncounters.map((row, i) => {
                     let sBg = 'bg-orange-500/20';
                     let sText = 'text-[var(--color-semantic-attention)]';
-                    if (row.status === 'In Room') {
+                    if (row.status === 'In Room' || row.status === 'In Consultation') {
                       sBg = 'bg-emerald-500/20';
                       sText = 'text-[var(--color-semantic-positive)]';
                     } else if (row.status === 'Delayed') {
@@ -1386,6 +1446,13 @@ export const PatientFlowView: React.FC = () => {
                           <p className="text-[10px] text-white/50 font-bold uppercase">{row.department || 'General'}</p>
                         </td>
                         <td className="py-4 px-2 font-mono text-white/70 transition-all">{row.wait_time != null && row.wait_time !== '' ? row.wait_time : 'Unavailable'}</td>
+                        <td className={`py-4 px-2 text-[11px] font-bold ${row.readiness === 'Readiness unconfirmed' ? 'text-white/50 italic' : row.ready_alert ? 'text-[var(--color-semantic-attention)]' : 'text-white/70'}`}>
+                          {row.readiness || '—'}
+                        </td>
+                        <td className="py-4 px-2 text-[11px]">
+                          {row.handoff ? <p className="font-bold text-white/80">{row.handoff}</p> : <p className="text-white/40">—</p>}
+                          {row.next_owner && <p className="text-white/50 font-semibold">Follow-up: {row.next_owner}</p>}
+                        </td>
                         <td className="py-4 px-2">
                           <select
                             value={row.status}
@@ -1407,6 +1474,7 @@ export const PatientFlowView: React.FC = () => {
                           >
                             <option className="bg-[var(--color-surface)] text-white" value="Waiting">Waiting</option>
                             <option className="bg-[var(--color-surface)] text-white" value="In Room">In Room</option>
+                            <option className="bg-[var(--color-surface)] text-white" value="In Consultation">In Consultation</option>
                             <option className="bg-[var(--color-surface)] text-white" value="Completed">Completed</option>
                             <option className="bg-[var(--color-surface)] text-white" value="Delayed">Delayed</option>
                           </select>
@@ -1421,7 +1489,7 @@ export const PatientFlowView: React.FC = () => {
                                 }}
                                 disabled={!recommendedRoom}
                                 className="text-[11px] font-bold text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 hover:bg-emerald-500/30 px-3 py-1.5 rounded-[8px] transition-all flex items-center gap-1 active:scale-95 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={recommendedRoom ? `Decision Support Recommendation: ${recommendedRoom} is free now. Staff confirmation starts the consultation.` : 'No consultation room is free right now.'}
+                                title={recommendedRoom ? `Decision Support Recommendation: ${recommendedRoom} is free now. Staff confirmation places the patient in the room; the consultation starts when the clinician records it.` : 'No consultation room is free right now.'}
                               >
                                 {recommendedRoom ? `✓ Assign ${recommendedRoom} (Recommended)` : 'No room free'}
                               </button>
@@ -1446,7 +1514,7 @@ export const PatientFlowView: React.FC = () => {
         </div>
 
         {/* Heat Map & AI suggestions */}
-        <div className="flex flex-col gap-6 self-start sticky top-6">
+        <div className="flex flex-col gap-6 self-start sticky top-6 max-h-[calc(100vh-10rem)] overflow-y-auto custom-scrollbar pr-1 [&>*]:shrink-0">
           <div className="bg-gradient-to-br from-[var(--color-surface-raised)] to-[var(--color-surface)] border border-white/10 rounded-[24px] p-8 shadow-[0_20px_50px_rgba(46,16,85,0.3)] text-white flex-1">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-base font-bold text-white flex items-center gap-2">

@@ -8,6 +8,13 @@ Definitions (policy values in services/patient_flow_policy.py):
 - Wait = consultation start - arrival. While a patient is still waiting, the current wait is
   cutoff - arrival.
 - Delayed = still waiting and the current wait is above the delay threshold.
+- A patient placed in a room (ROOMED) is still waiting: a room is not the consultation start.
+- Waiting-room review (services/waiting_room_rule.py, the auditor's rule): average wait over visits with
+  a recorded arrival and consultation start (with the count), who is still waiting, time since the last
+  required preparation step (file, nursing, payer approval when needed) or "Readiness unconfirmed", and
+  the handoff state with the follow-up owner. Cards and rows use the same review at the same cutoff.
+- An event counts from the time Sentinel knew it (known_at) and stops counting once a data correction
+  supersedes it; nothing is deleted, so an earlier cutoff shows what was known then.
 - Today / Yesterday show the clinic at a cutoff (now, or the same clock time yesterday): who is
   waiting and who is with a provider at that moment; Last 7 Days shows totals over the period.
 - Trends compare with the equivalent earlier cutoff (yesterday at the same time, the day before,
@@ -26,9 +33,12 @@ from sqlalchemy.orm import Session
 
 from app.models.encounter import EncounterModel
 from app.models.patient_flow import (
-    ARRIVED, BILLING, CANCELLED, CHECKED_OUT, CONSULT_END, CONSULT_START, LAB_END, LAB_START, READY,
-    ROOM_STATUS, SOURCE_MANUAL, TERMINAL_EVENTS, ClinicRoomModel, PatientFlowActionModel, VisitEventModel,
+    ARRIVED, BILLING, CANCELLED, CHECKED_OUT, CONSULT_END, CONSULT_START, FILE_READY, FILE_REVOKED,
+    HANDOFF_ACCEPTED, HANDOFF_SENT, LAB_END, LAB_START, NO_SHOW, NURSING_DONE, NURSING_REVOKED, PAYER_APPROVED,
+    PAYER_REVOKED, READY, ROOM_STATUS, ROOMED, SOURCE_MANUAL, SOURCE_ROLE_OF_EVENT, TERMINAL_EVENTS,
+    ClinicRoomModel, PatientFlowActionModel, VisitEventModel,
 )
+from app.services.waiting_room_rule import revised_rule
 from app.services import workbook_dataset
 from app.services.patient_flow_policy import DEFAULT_FLOW_POLICY, PatientFlowPolicy, local_midnight_utc
 
@@ -100,6 +110,10 @@ class VisitState:
     def waiting(self) -> bool:
         return self.is_open and not self.consult_start
 
+    @property
+    def roomed(self) -> bool:
+        return bool(self.t(ROOMED)) and not self.consult_start
+
     def wait_minutes(self) -> Optional[int]:
         """Measured wait (arrival -> consultation start); while waiting, the wait so far."""
         if not self.arrived_at:
@@ -129,6 +143,8 @@ class VisitState:
         if stage == "Completed":
             return "Completed"
         if self.consult_start:
+            return "In Consultation"
+        if self.roomed:
             return "In Room"
         return "Delayed" if self.delayed(policy) else "Waiting"
 
@@ -140,11 +156,18 @@ class VisitState:
         return out
 
 
+def counts_at(ev: VisitEventModel, cutoff: datetime) -> bool:
+    """An event counts at `cutoff` once Sentinel knew it and until a correction superseded it."""
+    known = getattr(ev, "known_at", None) or ev.event_time
+    superseded = getattr(ev, "superseded_at", None)
+    return known <= cutoff and not (superseded and superseded <= cutoff)
+
+
 def build_states(events: Iterable[VisitEventModel], cutoff: datetime) -> Dict[str, VisitState]:
     """Visit states at `cutoff` from the events recorded up to then. The first event of each type
     counts; nothing after a terminal event (checked out / cancelled) changes the visit."""
     states: Dict[str, VisitState] = {}
-    ordered = sorted((e for e in events if e.visit_id and e.event_time <= cutoff),
+    ordered = sorted((e for e in events if e.visit_id and e.event_time <= cutoff and counts_at(e, cutoff)),
                      key=lambda e: (e.event_time, e.id or 0))
     for ev in ordered:
         st = states.get(ev.visit_id)
@@ -155,7 +178,7 @@ def build_states(events: Iterable[VisitEventModel], cutoff: datetime) -> Dict[st
         for attr in ("patient_ref", "patient_name", "provider", "department", "priority"):
             if getattr(st, attr) is None and getattr(ev, attr):
                 setattr(st, attr, getattr(ev, attr))
-        if ev.event_type == CONSULT_START and ev.room and st.room is None:
+        if ev.event_type in (CONSULT_START, ROOMED) and ev.room and st.room is None:
             # The room of the consultation (a later room assignment fills it if the start had none).
             st.room = ev.room
         if ev.event_type not in st.times:
@@ -206,14 +229,15 @@ def room_states(rooms: List[ClinicRoomModel], states: Dict[str, VisitState], roo
                         last_change = s.t(x)
         else:
             occupant = next((s for s in states.values()
-                             if s.room == room.name and s.consult_start and not s.t(CONSULT_END)
+                             if s.room == room.name and (s.consult_start or s.t(ROOMED)) and not s.t(CONSULT_END)
                              and not any(s.t(x) for x in TERMINAL_EVENTS)), None)
             ended = [s.t(CONSULT_END) for s in states.values() if s.room == room.name and s.t(CONSULT_END)]
             started = [s.consult_start for s in states.values() if s.room == room.name and s.consult_start]
             if occupant:
                 info.update(status="Occupied", visit_id=occupant.visit_id, patient_name=occupant.patient_name,
                             provider=occupant.provider, department=occupant.department,
-                            wait_minutes=occupant.wait_minutes(), since=iso(occupant.consult_start))
+                            wait_minutes=occupant.wait_minutes(),
+                            since=iso(occupant.consult_start or occupant.t(ROOMED)))
             elif ended:
                 last_end = max(ended)
                 cleaning_until = last_end + timedelta(minutes=policy.cleaning_minutes)
@@ -230,6 +254,81 @@ def room_states(rooms: List[ClinicRoomModel], states: Dict[str, VisitState], roo
                     info.update(status=latest.detail, since=iso(latest.event_time), available_in_minutes=None)
         out.append(info)
     return out
+
+
+# ---------------------------------------------------------------- waiting-room review
+_RULE_KIND = {
+    ARRIVED: "arrive", CONSULT_START: "start", ROOMED: "room", FILE_READY: "file", FILE_REVOKED: "file_revoked",
+    NURSING_DONE: "nurse", NURSING_REVOKED: "nurse_revoked", PAYER_APPROVED: "approval",
+    PAYER_REVOKED: "approval_revoked", HANDOFF_SENT: "send", HANDOFF_ACCEPTED: "accept",
+    CANCELLED: "left", NO_SHOW: "no_show",
+}
+HANDOFF_TEXT = {"Sent, acceptance pending": "Handoff sent · Acceptance pending", "Accepted": "Handoff accepted",
+                "Unconfirmed": "Handoff unconfirmed", "Handoff evidence unavailable": "Handoff evidence unavailable"}
+_FEED_HEARTBEAT: Dict[str, datetime] = {}
+
+
+def record_feed_heartbeat(clinic_id: str, at: Optional[datetime] = None) -> None:
+    """The queue feed (here the visit generator) reports that it is delivering for this clinic."""
+    _FEED_HEARTBEAT[clinic_id] = at or datetime.utcnow()
+
+
+def feed_is_fresh(events: List[VisitEventModel], clinic_id: str, cutoff: datetime, now: datetime,
+                  policy: PatientFlowPolicy) -> bool:
+    """Was the movement feed delivering at the cutoff? For a past cutoff: events arrived after it."""
+    window = timedelta(minutes=policy.feed_fresh_minutes)
+    if now - cutoff > window:
+        return any(cutoff < e.event_time <= now for e in events)
+    beat = _FEED_HEARTBEAT.get(clinic_id)
+    if beat and now - beat <= window:
+        return True
+    last = max((e.event_time for e in events if e.event_time <= now), default=None)
+    return bool(last and now - last <= window)
+
+
+def _iso_z(dt: datetime) -> str:
+    return dt.replace(microsecond=0).isoformat() + "Z"
+
+
+def waiting_room_review(events: List[VisitEventModel], visit_ids: Iterable[str], clinic_id: str, cutoff: datetime,
+                        fresh: bool) -> Dict[str, Any]:
+    """The auditor's waiting-room rule over this clinic's stored events for the given visits."""
+    wanted = set(visit_ids)
+    rule_events, payer = [], {}
+    for e in events:
+        if e.visit_id not in wanted or not counts_at(e, cutoff):
+            continue
+        if e.event_type == ARRIVED and e.visit_id not in payer:
+            payer[e.visit_id] = e.payer_required
+        kind = _RULE_KIND.get(e.event_type)
+        if not kind:
+            continue
+        rule_events.append({
+            "clinic": e.clinic_id, "visit": e.visit_id, "kind": kind,
+            "source": e.source_role or SOURCE_ROLE_OF_EVENT.get(e.event_type), "id": e.event_key,
+            "occurred": _iso_z(e.event_time), "known": _iso_z(e.known_at or e.event_time),
+            "destination": e.destination, "handoff": e.handoff_id,
+        })
+    roster = [{"id": v, "clinic": clinic_id, "payerRequired": payer.get(v)} for v in sorted(wanted)]
+    return revised_rule(roster, rule_events, {"clinic": clinic_id, "cutoff": _iso_z(cutoff), "fresh": fresh})
+
+
+def _review_visits(states: Dict[str, VisitState], start: datetime) -> List[str]:
+    """Visits in the review roster: arrived in the period, started in it, or still waiting at its cutoff."""
+    return [k for k, s in states.items()
+            if s.arrived_at >= start or s.waiting or (s.consult_start and s.consult_start >= start)]
+
+
+def flow_summary(review: Dict[str, Any]) -> Dict[str, Any]:
+    mean = review["mean"]
+    return {"consultations_started": review["seen"],
+            "average_wait_minutes": round(mean) if mean is not None else None,
+            "average_sample": review["denom"], "started_without_arrival": review["seenMissing"],
+            "still_waiting": review["waiting"],
+            # Elapsed time is shown in whole minutes passed (like every wait on the screen).
+            "longest_wait_minutes": int(review["longest"]) if review["longest"] is not None else None,
+            "left_before_seen": review["left"], "no_show": review["noShow"], "unknown": review["unknown"],
+            "needs_review": review["review"]}
 
 
 # ---------------------------------------------------------------- metrics
@@ -373,9 +472,21 @@ def _load_events(db: Session, clinic_id: str, since: datetime) -> List[VisitEven
             .all())
 
 
-def _row(s: VisitState, enc: Optional[EncounterModel], policy: PatientFlowPolicy) -> Dict[str, Any]:
+def _row(s: VisitState, enc: Optional[EncounterModel], policy: PatientFlowPolicy,
+         review_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     wait = s.wait_minutes()
+    r = review_row or {}
+    waiting_now = r.get("status") == "waiting"
+    ready = r.get("readyAge")
     return {
+        "review_status": r.get("status"),
+        "since_ready_minutes": int(ready) if waiting_now and ready is not None else None,
+        "readiness": (None if not waiting_now else f"{int(ready)} mins since ready" if ready is not None
+                      else "Readiness unconfirmed"),
+        "ready_alert": bool(r.get("flag")) if waiting_now else False,
+        "handoff": HANDOFF_TEXT.get(r.get("handoff"), r.get("handoff")) if waiting_now else None,
+        "next_owner": r.get("owner") if r.get("status") in ("waiting", "unknown", "review") else None,
+        "evidence": r.get("evidence") or [],
         "id": s.visit_id, "visit_id": s.visit_id,
         "patient_name": s.patient_name, "patient_ref": s.patient_ref,
         "mrn": getattr(enc, "mrn", None), "payer_network": getattr(enc, "payer_network", None),
@@ -408,10 +519,18 @@ def snapshot(db: Session, clinic_id: str, period: str = "Today", department: Opt
     states = {k: v for k, v in build_states(visit_events, cutoff).items() if keep(v)}
     prev_states = {k: v for k, v in build_states(visit_events, prev_cutoff).items() if keep(v)}
     current = _metrics(states, mode, start, cutoff, policy)
+    fresh = feed_is_fresh(visit_events, clinic_id, cutoff, now, policy)
+    review = waiting_room_review(visit_events, _review_visits(states, start), clinic_id, cutoff, fresh)
+    current["avg_wait"] = round(review["mean"]) if review["mean"] is not None else None
+    current["avg_wait_sample"] = review["denom"]
     # The comparison is only made when events cover the earlier period from its first day.
     first_prev_day_end = prev_start + timedelta(days=1)
     has_history = any(prev_start <= e.event_time < min(first_prev_day_end, prev_cutoff) for e in visit_events)
     previous = _metrics(prev_states, mode, prev_start, prev_cutoff, policy) if has_history else None
+    if previous is not None:
+        prev_review = waiting_room_review(visit_events, _review_visits(prev_states, prev_start), clinic_id,
+                                          prev_cutoff, feed_is_fresh(visit_events, clinic_id, prev_cutoff, now, policy))
+        previous["avg_wait"] = round(prev_review["mean"]) if prev_review["mean"] is not None else None
     spark = _spark(visit_events, mode, start, cutoff, policy, keep)
 
     cards = {}
@@ -420,12 +539,13 @@ def snapshot(db: Session, clinic_id: str, period: str = "Today", department: Opt
         prev_value = previous[key] if previous else None
         trend = _trend(value, prev_value, unit)
         if key == "avg_wait":
-            display = f"{value}m" if value is not None else "No verified waits"
+            display = f"{value}m" if value is not None else "No verified wait times"
         else:
             display = str(value)
         cards[key] = {"value": value, "display": display, "trend": trend, "trend_good": _trend_good(key, trend),
                       "previous": prev_value, "spark": spark[key]}
     cards["avg_wait"]["sample"] = current["avg_wait_sample"]
+    cards["avg_wait"]["without_arrival"] = review["seenMissing"]
 
     if mode == "occupancy":
         visible = [s for s in states.values() if s.is_open]
@@ -435,7 +555,8 @@ def snapshot(db: Session, clinic_id: str, period: str = "Today", department: Opt
         visible.sort(key=lambda s: (s.arrived_at, s.visit_id), reverse=True)
     encs = {e.id: e for e in db.query(EncounterModel).filter(
         EncounterModel.id.in_([s.visit_id for s in visible] or [""])).all()}
-    queue = [_row(s, encs.get(s.visit_id), policy) for s in visible]
+    review_rows = {r["id"]: r for r in review["rows"]}
+    queue = [_row(s, encs.get(s.visit_id), policy, review_rows.get(s.visit_id)) for s in visible]
 
     # Rooms and suggestions describe the clinic now, whatever period is selected.
     now_states = build_states(visit_events, now)
@@ -473,9 +594,11 @@ def snapshot(db: Session, clinic_id: str, period: str = "Today", department: Opt
                    "cleaning_minutes": policy.cleaning_minutes,
                    "consult_slot_minutes": policy.consult_slot_minutes},
         "feed": {"last_event_at": iso(last_event), "synced": synced},
-        "cards": cards, "queue": queue, "total": len(queue),
+        "cards": cards, "summary": flow_summary(review), "queue": queue, "total": len(queue),
         "rooms": rooms, "suggestions": suggestions, "doctors": doctors,
-        "departments": workbook_dataset.specialties(),
+        "departments": sorted(set(workbook_dataset.specialties())
+                              | {e.department for e in visit_events if e.department}),
+        "readiness_policy": {"ready_alert_minutes": 10, "follow_up_until_accepted": "Clinic coordinator"},
     }
 
 
@@ -533,7 +656,7 @@ def _manual_event(db: Session, clinic_id: str, st: VisitState, event_type: str, 
         event_key=f"manual:{uuid.uuid4().hex}", clinic_id=clinic_id, visit_id=st.visit_id, event_type=event_type,
         event_time=at, patient_ref=st.patient_ref, patient_name=st.patient_name, provider=st.provider,
         department=st.department, priority=st.priority, room=room, detail=detail, source=SOURCE_MANUAL,
-        recorded_by=actor,
+        recorded_by=actor, known_at=at, source_role=SOURCE_ROLE_OF_EVENT.get(event_type),
     )
     db.add(ev)
     return ev
@@ -564,9 +687,15 @@ def report_status(db: Session, clinic_id: str, visit_id: str, status: str, actor
             raise PatientFlowError("The consultation has already started; a visit cannot go back to Waiting.")
         return {"visit_id": visit_id, "status": st.status(policy), "recorded": False}
     if status == "In Room":
-        if st.consult_start:
+        # Placing the patient in a room does not start the consultation.
+        if st.consult_start or st.roomed:
             return {"visit_id": visit_id, "status": st.status(policy), "recorded": False}
         room = _free_consult_room(db, clinic_id, now, policy)
+        _manual_event(db, clinic_id, st, ROOMED, now, actor, room=room)
+    elif status == "In Consultation":
+        if st.consult_start:
+            return {"visit_id": visit_id, "status": st.status(policy), "recorded": False}
+        room = st.room or _free_consult_room(db, clinic_id, now, policy)
         _manual_event(db, clinic_id, st, CONSULT_START, now, actor, room=room)
     elif status == "Completed":
         if st.consult_start and not st.t(CONSULT_END):
@@ -584,14 +713,14 @@ def report_status(db: Session, clinic_id: str, visit_id: str, status: str, actor
 
 def assign_room(db: Session, clinic_id: str, visit_id: str, room_name: str, actor: str,
                 now: Optional[datetime] = None, policy: PatientFlowPolicy = DEFAULT_FLOW_POLICY) -> Dict[str, Any]:
-    """Staff start the consultation of a waiting patient in a free room, or give a room to a
-    consultation that started without one (recorded with the actor)."""
+    """Staff place a waiting patient in a free room (the consultation has not started yet), or give a
+    room to a consultation that started without one (recorded with the actor)."""
     now = now or datetime.utcnow()
     st = visit_state(db, clinic_id, visit_id, now)
     if not st:
         raise LookupError("Visit not found in this clinic")
     roomless_consult = st.is_open and st.stage == "Consultation" and not st.room
-    if not (st.waiting or roomless_consult):
+    if not ((st.waiting and not st.roomed) or roomless_consult):
         raise PatientFlowError("Only a waiting patient, or a consultation without a room, can be assigned a room.")
     events = _load_events(db, clinic_id, now - timedelta(days=2))
     rooms = room_states(ensure_rooms(db, clinic_id), build_states([e for e in events if e.visit_id], now),
@@ -601,11 +730,11 @@ def assign_room(db: Session, clinic_id: str, visit_id: str, room_name: str, acto
         raise PatientFlowError(f"{room_name} is not a consultation room of this clinic.")
     if target["status"] != "Available":
         raise PatientFlowError(f"{room_name} is {target['status'].lower()}.")
-    _manual_event(db, clinic_id, st, CONSULT_START, now, actor, room=room_name)
+    _manual_event(db, clinic_id, st, CONSULT_START if roomless_consult else ROOMED, now, actor, room=room_name)
     db.flush()
     refresh_encounter_cache(db, clinic_id, [visit_id], now, policy)
     db.commit()
-    return {"visit_id": visit_id, "room": room_name, "status": "In Room"}
+    return {"visit_id": visit_id, "room": room_name, "status": "In Consultation" if roomless_consult else "In Room"}
 
 
 def set_room_status(db: Session, clinic_id: str, room_id: int, status: str, actor: str,
@@ -618,7 +747,7 @@ def set_room_status(db: Session, clinic_id: str, room_id: int, status: str, acto
         raise LookupError("Room not found in this clinic")
     db.add(VisitEventModel(event_key=f"manual:{uuid.uuid4().hex}", clinic_id=clinic_id, visit_id=None,
                            event_type=ROOM_STATUS, event_time=now, room=room.name, detail=status,
-                           source=SOURCE_MANUAL, recorded_by=actor))
+                           source=SOURCE_MANUAL, recorded_by=actor, known_at=now, source_role="rooms"))
     db.commit()
     return {"room": room.name, "status": status}
 

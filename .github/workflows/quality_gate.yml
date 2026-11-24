@@ -139,6 +139,13 @@ jobs:
       run: |
         pytest tests/unit/test_severity_reference.py -v
 
+    - name: Waiting Room Stress Test 3 (43 + 12 cases, 500-cohort sweep)
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/unit/test_waiting_room_rule.py -v
+
   frontend-quality:
     name: Frontend Quality Assurance
     runs-on: ubuntu-latest
