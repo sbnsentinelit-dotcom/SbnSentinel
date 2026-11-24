@@ -16,13 +16,18 @@ Principles (from the auditor's severity reference):
    inputs and the evaluation time. It is re-evaluated at read time, so a deadline that comes
    closer raises the level by itself.
 
+Claim denials use the payer filing-risk rule (auditor's Severity Synthetic Retest 2, see severity_checks):
+per claim, a verified deadline, materiality, an exposed current plan and verified correction-route bounds give
+High, "Critical — act now" or "Critical — escalate for containment"; a missing deadline is "Unable to
+evaluate"; after the deadline without a receipt, "Verify filing outcome". The badge text is `label`.
+
 Levels: Critical, High, Moderate. There is no Low.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 CRITICAL = "Critical"
 HIGH = "High"
@@ -58,6 +63,12 @@ class RiskPolicy:
         "CO16": 3.0,   # obtain and attach clinical documents
         "CO15": 5.0,   # retrospective prior authorization
     })
+    # Correction-and-resubmission route per denial code: (shortest, longest) days. Synthetic demo bounds,
+    # treated as verified; the longest equals correction_days. PR204 has no route (inventory incomplete).
+    route_days: Dict[str, Tuple[float, float]] = field(default_factory=lambda: {
+        "CO4": (0.5, 1.0), "CO50": (1.0, 2.0), "CO29": (1.0, 2.0), "CO16": (2.0, 3.0), "CO15": (3.0, 5.0),
+    })
+    route_bounds_verified: bool = True
     no_show_repeat_count: int = 2              # no-shows in the last 90 days -> High
     wait_moderate_minutes: int = 30
     wait_high_minutes: int = 45
@@ -100,10 +111,13 @@ class RiskEvaluation:
     time_left: Optional[str] = None
     autopilot_eligible: bool = False
     autopilot_action: Optional[str] = None     # what Autopilot does: resubmit_claim | permitted_action
+    label: Optional[str] = None                # badge text, e.g. "Critical — act now"
+    timeline: List[Dict[str, str]] = field(default_factory=list)   # when the level changes (claims)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "level": self.level, "reason": self.reason, "kind": self.kind,
+            "level": self.level, "label": self.label or self.level, "timeline": list(self.timeline),
+            "reason": self.reason, "kind": self.kind,
             "problem": self.problem, "recommended_action": self.recommended_action,
             "expected_outcome": self.expected_outcome,
             "deadline": self.deadline.replace(tzinfo=timezone.utc).isoformat() if self.deadline else None,
@@ -130,6 +144,11 @@ def _utc(value: Any) -> Optional[datetime]:
         except ValueError:
             return None
     return t.astimezone(timezone.utc).replace(tzinfo=None) if t.tzinfo else t
+
+
+def _minutes(t: datetime) -> int:
+    """Whole minutes since the epoch (the filing-risk core works on minutes)."""
+    return int((t - datetime(1970, 1, 1)).total_seconds() // 60)
 
 
 def _number(value: Any) -> Optional[float]:
@@ -198,7 +217,7 @@ def evaluate_claim_denial(inputs: Dict[str, Any], now: datetime, policy: RiskPol
     code = (inputs.get("denial_code") or "").upper() or None
     claim_id = inputs.get("claim_id") or "this claim"
     payer = inputs.get("payer") or "the payer"
-    denial_reason = (inputs.get("denial_reason") or "").strip()
+    denial_reason = (inputs.get("denial_reason") or "").strip().rstrip(".")
     amount = _number(inputs.get("denied_amount"))
     currency = (inputs.get("currency") or "").upper() or None
     deadline = _utc(inputs.get("resubmission_deadline"))
@@ -247,48 +266,173 @@ def evaluate_claim_denial(inputs: Dict[str, Any], now: datetime, policy: RiskPol
     extra = dict(problem=problem, recommended_action=action, expected_outcome=outcome, deadline=deadline,
                  time_left=time_left)
 
-    def done(level: str, reason: str) -> RiskEvaluation:
-        # Autopilot may act on a Critical claim with a verified deadline that has not passed. It first
-        # collects the evidence; the payer connector refuses a resubmission with anything missing.
-        eligible = level == CRITICAL and deadline is not None and now <= deadline
+    def done(level: str, reason: str, label: Optional[str] = None, action: Optional[str] = None,
+             timeline: Optional[List[Dict[str, str]]] = None) -> RiskEvaluation:
+        # Autopilot acts only on "Critical — act now" (a verified deadline that the fastest route can still
+        # meet). It first collects the evidence; the payer connector refuses a resubmission with anything
+        # missing. "Escalate for containment" cannot be fixed in time, so it goes to a person.
+        eligible = label == "Critical — act now" and deadline is not None and now <= deadline
+        fields = dict(extra, recommended_action=action or extra["recommended_action"])
         return _result(CLAIM_DENIAL, level, reason, now, policy, used, missing, autopilot_eligible=eligible,
-                       autopilot_action="resubmit_claim" if eligible else None, **extra)
+                       autopilot_action="resubmit_claim" if eligible else None, label=label or level,
+                       timeline=timeline or [], **fields)
 
+    # Payer filing risk (auditor's Severity Synthetic Retest 2): this one claim and its resubmission
+    # obligation, from the facts known now; never pooled with other claims.
+    from app.services.severity_checks import Fact, Receipt, classify_filing_risk
+    key = ("claim", claim_id)
+    now_m = _minutes(now)
+    facts = [Fact("deadline", _minutes(deadline), key)] if deadline is not None else []
     if amount is None:
         missing.append("denied amount")
-        return done(MODERATE, "The denied amount was not received, so materiality cannot be assessed; the level "
-                    f"cannot be raised above Moderate{when}.")
-    if currency and currency != policy.currency:
+    elif currency and currency != policy.currency:
         missing.append(f"amount in {policy.currency}")
-        return done(MODERATE, f"The denied amount is in {currency}; the materiality rule is set in {policy.currency} "
-                    f"and no conversion is applied, so the level cannot be raised above Moderate{when}.")
-    if amount < policy.materiality_amount:
-        return done(MODERATE, f"Denied amount {shown} is below the materiality threshold of "
-                    f"{_money(policy.materiality_amount, policy.currency)}{when}.")
-    if deadline is None:
+    else:
+        facts.append(Fact("material", amount >= policy.materiality_amount, key))
+    days_left = (deadline - now).total_seconds() / 86400 if deadline is not None else None
+    # The current plan (the normal billing workflow) threatens timely filing inside the warning window.
+    facts.append(Fact("plan_exposed", days_left is not None and days_left <= policy.warning_window_days, key))
+    routes, complete, lead = claim_routes(inputs, code, policy)
+    facts.append(Fact("inventory_complete", complete, key))
+    if routes is not None:
+        facts.append(Fact("routes", routes, key))
+    receipts = []
+    receipt = inputs.get("filing_receipt") or {}
+    event_at, known_at = _utc(receipt.get("event_at")), _utc(receipt.get("known_at"))
+    if event_at and known_at:
+        receipts.append(Receipt(kind=receipt.get("kind") or "policy-required-receipt", key=key,
+                                event_at=_minutes(event_at), known_at=_minutes(known_at),
+                                verified=bool(receipt.get("verified")), ref=receipt.get("ref") or ""))
+    filing = classify_filing_risk(facts, now_m, key=key, receipts=receipts, alert_lead=lead)
+    used.update({"filing_code": filing, "filing_receipt": receipt.get("ref"), "alert_lead_minutes": lead,
+                 "recovery_routes": [{"name": r.name, "shortest_minutes": r.shortest, "longest_minutes": r.longest,
+                                      "verified": r.hard_bounds} for r in (routes or ())],
+                 "route_inventory_complete": complete})
+
+    if filing == "UNASSESSED: deadline":
         missing.append("payer resubmission deadline")
-        return done(HIGH, f"Denied amount {shown} is material, but the payer resubmission deadline has not been "
-                    "received, so Critical cannot be established. Verify the deadline.")
-    if now > deadline:
-        return done(HIGH, f"Denied amount {shown} is material and the payer resubmission deadline has passed "
-                    f"({time_left}; deadline {local_time(deadline, policy)}). A missing resubmission receipt does not "
-                    "prove the claim was not resubmitted; verify the outcome.")
-    days_left = (deadline - now).total_seconds() / 86400
-    if correction is None:
-        missing.append(f"correction time for denial code {code or 'unknown'}")
-        level = HIGH if days_left <= policy.warning_window_days else MODERATE
-        return done(level, f"Denied amount {shown} is material{when}, but the correction time for this denial "
-                    "code is not known, so Critical cannot be established.")
-    if days_left <= correction + policy.critical_buffer_days:
-        gather = f" ({', '.join(not_in_ehr)} still to be obtained)" if not_in_ehr else ""
-        return done(CRITICAL, f"Denied amount {shown} is material. Only {time_left} before the payer resubmission "
-                    f"deadline ({local_time(deadline, policy)}) and the correction for {code} needs about "
-                    f"{_days(correction)}{gather}, so it must start today.")
-    if days_left <= policy.warning_window_days:
+        return done(MODERATE, "The payer resubmission deadline has not been received or verified, so the filing "
+                    "risk cannot be evaluated. Verify the deadline.", "Unable to evaluate — filing deadline unverified")
+    if filing == "VERIFIED TIMELY":
+        ref = receipts[0].ref
+        return done(MODERATE, f"Receipt {ref} shows the claim was resubmitted on or before the payer deadline "
+                    f"({local_time(deadline, policy)}).", "Filed on time",
+                    action=f"No action needed: claim {claim_id} was resubmitted to {payer} in time.")
+    if filing == "LATE RECEIPT: verify earlier filing":
+        return done(HIGH, f"The only resubmission receipt for claim {claim_id} is after the payer deadline "
+                    f"({local_time(deadline, policy)}).", "Verify filing outcome",
+                    action=f"Verify with {payer} whether an earlier qualifying submission of claim {claim_id} exists.")
+    if filing == "VERIFY OUTCOME":
+        return done(HIGH, f"The payer resubmission deadline has passed ({time_left}; deadline "
+                    f"{local_time(deadline, policy)}). A missing resubmission receipt does not prove the claim was "
+                    "not resubmitted; verify the outcome.", "Verify filing outcome")
+    if filing == "UNASSESSED: exposure":
+        return done(MODERATE, f"The denied amount was not received in {policy.currency}, so materiality cannot "
+                    f"be assessed and the level cannot be raised above Moderate{when}.",
+                    "Unable to evaluate — exposure unverified")
+    if filing == "NO MATERIAL FILING ALERT":
+        if amount < policy.materiality_amount:
+            return done(MODERATE, f"Denied amount {shown} is below the materiality threshold of "
+                        f"{_money(policy.materiality_amount, policy.currency)}{when}.", "No active filing alert")
+        return done(MODERATE, f"Denied amount {shown} is material, but the payer resubmission deadline is beyond the "
+                    f"{_days(policy.warning_window_days)} warning window{when}.", "No active filing alert")
+    if filing in ("HIGH: verify recovery routes", "HIGH: verify route bounds"):
+        if not complete or routes is None:
+            missing.append(f"recovery route for claim {claim_id}" if inputs.get("recovery_routes") is not None
+                           else f"correction route for denial code {code or 'unknown'}")
+            why = "the list of recovery routes is incomplete"
+        else:
+            why = "the recovery route times are estimates, not verified bounds"
+        return done(HIGH, f"Denied amount {shown} is material and the deadline is inside the "
+                    f"{_days(policy.warning_window_days)} warning window{when}, but {why}, so Critical cannot be "
+                    "established.", "High — verify recovery options now")
+    timeline = filing_timeline(deadline, routes, lead, policy)
+    if filing == "HIGH: monitor last start":
+        d_m = _minutes(deadline)
+        best = next(r for r in routes if _route_start(r, now_m) + r.shortest <= d_m and d_m - r.longest > now_m + lead
+                    and (r.earliest_start is None or r.earliest_start <= d_m - r.longest))
+        safe = deadline - timedelta(minutes=best.longest)
         return done(HIGH, f"Denied amount {shown} is material and the payer resubmission deadline is inside the "
-                    f"{_days(policy.warning_window_days)} warning window{when}.")
-    return done(MODERATE, f"Denied amount {shown} is material, but the payer resubmission deadline is beyond the "
-                f"{_days(policy.warning_window_days)} warning window{when}.")
+                    f"{_days(policy.warning_window_days)} warning window{when}. Starting the {best.name.lower()} by "
+                    f"{local_time(safe, policy)} allows the full {_duration(best.longest)}.", "High",
+                    timeline=timeline)
+    if filing == "CRITICAL: containment":
+        fastest = min(routes, key=lambda r: r.shortest) if routes else None
+        why = (f"even the fastest {fastest.name.lower()} needs {_duration(fastest.shortest)}" if fastest
+               else "no recovery route remains")
+        return done(CRITICAL, f"Denied amount {shown} is material. Only {time_left} before the payer resubmission "
+                    f"deadline ({local_time(deadline, policy)}) and {why}, so it cannot finish in time.",
+                    "Critical — escalate for containment",
+                    action=(f"Escalate now: ask {payer} about an extension or other relief for claim {claim_id}. "
+                            "Do not record a write-off; verify the outcome after the deadline."), timeline=timeline)
+    fastest = min((r for r in routes if _route_start(r, now_m) + r.shortest <= _minutes(deadline)),
+                  key=lambda r: r.shortest)
+    gather = f" ({', '.join(not_in_ehr)} still to be obtained)" if not_in_ehr else ""
+    only = (", so only the fastest verified completion can still meet it"
+            if _minutes(deadline) - now_m < fastest.longest else "")
+    urgency = "it must start today" if fastest.longest >= 1440 else "it must start now"
+    return done(CRITICAL, f"Denied amount {shown} is material. Only {time_left} before the payer resubmission "
+                f"deadline ({local_time(deadline, policy)}) and the {fastest.name.lower()} needs "
+                f"{_duration(fastest.shortest)} to {_duration(fastest.longest)}{gather}{only}; {urgency}.",
+                "Critical — act now", timeline=timeline)
+
+
+def _route_start(route, now_m: int) -> int:
+    return now_m if route.earliest_start is None else max(now_m, route.earliest_start)
+
+
+def _duration(minutes: int) -> str:
+    if minutes % 1440 == 0:
+        return _days(minutes // 1440)
+    if minutes >= 60 and minutes % 60 == 0:
+        h = minutes // 60
+        return f"{h} hour" + ("" if h == 1 else "s")
+    return f"{minutes} minute" + ("" if minutes == 1 else "s")
+
+
+def claim_routes(inputs: Dict[str, Any], code: Optional[str], policy: RiskPolicy):
+    """(routes, inventory complete, immediate-action lead in minutes) for one claim. A claim's own
+    recovery routes (from the source system) come first; otherwise the policy's route for its denial code."""
+    from app.services.severity_checks import Route
+    data = inputs.get("recovery_routes")
+    if data is not None:
+        routes = []
+        for r in data:
+            try:
+                routes.append(Route(int(r["shortest_minutes"]), int(r["longest_minutes"]),
+                                    hard_bounds=bool(r.get("verified")), name=r.get("name") or "Recovery route",
+                                    ref=r.get("ref") or ""))
+            except (KeyError, TypeError, ValueError):
+                return None, False, int(inputs.get("alert_lead_minutes") or 0)
+        return tuple(routes), inputs.get("route_inventory_complete") is True, int(inputs.get("alert_lead_minutes") or 0)
+    bounds = policy.route_days.get(code) if code else None
+    lead = int(policy.critical_buffer_days * 1440)
+    if not bounds:
+        return None, False, lead
+    route = Route(int(bounds[0] * 1440), int(bounds[1] * 1440), hard_bounds=policy.route_bounds_verified,
+                  name=f"{code} correction and resubmission")
+    return (route,), True, lead
+
+
+def filing_timeline(deadline: Optional[datetime], routes, lead: int, policy: RiskPolicy) -> List[Dict[str, str]]:
+    """When this claim's level changes, from its own deadline and verified routes (no clock is faked)."""
+    if deadline is None or not routes:
+        return []
+    d = _minutes(deadline)
+    usable = [r for r in routes if r.earliest_start is None or r.earliest_start <= d - r.longest]
+    if not usable:
+        return []
+    safe = max(d - r.longest for r in usable)
+    last = max(d - r.shortest for r in routes)
+    window = d - int(policy.warning_window_days * 1440)
+
+    def t(minute: int) -> str:
+        return local_time(datetime(1970, 1, 1) + timedelta(minutes=minute), policy)
+    return [{"label": "No active filing alert", "until": t(window)},
+            {"label": "High", "from": t(window), "until": t(safe - lead - 1)},
+            {"label": "Critical — act now", "from": t(safe - lead), "until": t(last)},
+            {"label": "Critical — escalate for containment", "from": t(last + 1), "until": t(d)},
+            {"label": "Verify filing outcome", "from": t(d + 1)}]
 
 
 # --------------------------------------------------------------------------- no-show

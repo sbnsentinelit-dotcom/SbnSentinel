@@ -32,7 +32,7 @@ def level(kind, inputs, now=NOW):
     (claim(currency="USD", days=1), MODERATE),
     (claim(amount="499.99", days=0.5), MODERATE),
     # material, evidence incomplete or deadline passed -> High (never Critical)
-    (claim(days=None), HIGH),
+    (claim(days=None), MODERATE),          # deadline unverified -> Unable to evaluate (filing risk)
     (claim(days=-1), HIGH),
     # material, verified deadline, days left <= correction time + 1 day -> Critical
     (claim(code="CO4", days=2), CRITICAL),
@@ -68,7 +68,8 @@ def test_claim_result_explains_itself():
 
 def test_missing_deadline_is_named_in_the_reason():
     r = evaluate(CLAIM_DENIAL, claim(days=None), NOW)
-    assert r.level == HIGH and r.missing_inputs == ["payer resubmission deadline"]
+    assert r.label == "Unable to evaluate — filing deadline unverified"
+    assert r.level == MODERATE and r.missing_inputs == ["payer resubmission deadline"]
     assert "Missing input: payer resubmission deadline." in r.reason
 
 
@@ -185,3 +186,42 @@ def test_no_show_and_wait_texts():
     wt = evaluate(WAIT_TIME, {"wait_minutes": 52, "patient_priority": "Normal", "room_available": True}, NOW)
     assert wt.problem == "The patient has waited 52 minutes (normal priority; a room is free)."
     assert wt.recommended_action == "Give the patient the next free room and update them on the wait."
+
+
+# --------------------------------------------------------------------------- payer filing risk labels (Retest 2)
+
+def test_filing_risk_labels_on_claims():
+    def lab(inputs, now=NOW):
+        return evaluate(CLAIM_DENIAL, inputs, now).label
+    assert lab(claim(code="CO4", days=2.1)) == "High"
+    assert lab(claim(code="CO4", days=1.5)) == "Critical — act now"
+    assert lab(claim(code="CO4", days=0.4)) == "Critical — escalate for containment"   # fastest needs 0.5 day
+    assert lab(claim(code="PR204", days=2)) == "High — verify recovery options now"   # no route recorded
+    assert lab(claim(code="CO4", days=-1)) == "Verify filing outcome"
+    assert lab(claim(amount="300.00", days=1)) == "No active filing alert"
+    assert lab(claim(code="CO4", days=9)) == "No active filing alert"
+
+
+def test_containment_goes_to_a_person_not_autopilot():
+    r = evaluate(CLAIM_DENIAL, full_claim(days=1.5), NOW)          # CO16 needs at least 2 days
+    assert r.level == CRITICAL and r.label == "Critical — escalate for containment"
+    assert r.autopilot_eligible is False and r.recommended_action.startswith("Escalate now")
+    assert "cannot finish in time" in r.reason
+
+
+def test_unverified_route_bounds_keep_high_and_ask_to_verify():
+    from dataclasses import replace as dc_replace
+    from app.services.risk_level_evaluator import CLAIM_DENIAL as KIND, evaluate_claim_denial
+    policy = dc_replace(DEFAULT_POLICY, route_bounds_verified=False)
+    r = evaluate_claim_denial(claim(code="CO4", days=1.5), NOW, policy)
+    assert KIND == CLAIM_DENIAL and r.level == HIGH and r.label == "High — verify recovery options now"
+
+
+def test_resubmission_receipt_settles_filing():
+    inputs = dict(full_claim(days=2.5), filing_receipt={
+        "ref": "ACK-1", "verified": True, "kind": "policy-required-receipt",
+        "event_at": (NOW + timedelta(hours=1)).isoformat() + "Z", "known_at": (NOW + timedelta(hours=1)).isoformat() + "Z"})
+    later = evaluate(CLAIM_DENIAL, inputs, NOW + timedelta(hours=2))
+    assert later.label == "Filed on time" and later.autopilot_eligible is False
+    before = evaluate(CLAIM_DENIAL, inputs, NOW)                     # receipt not known yet at this time
+    assert before.label == "Critical — act now"

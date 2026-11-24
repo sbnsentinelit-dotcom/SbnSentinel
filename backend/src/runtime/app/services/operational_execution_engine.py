@@ -421,6 +421,7 @@ class OperationalExecutionEngine(BaseService):
                     "message": f"Claim {claim_id} was not resubmitted: evidence not in the EHR: {', '.join(missing)}."}
         acknowledgement = f"ACK-{uuid.uuid4().hex[:8].upper()}"
         payer = inputs.get("payer") or "payer"
+        self._record_filing_receipt(action.target_reference, acknowledgement)
         return {
             "result": ExecutionResult.SUCCESS,
             "error": None,
@@ -429,6 +430,29 @@ class OperationalExecutionEngine(BaseService):
             "submission": {"claim_id": claim_id, "payer": payer, "evidence": required,
                            "acknowledgement": acknowledgement, "connector": "synthetic payer (demo)"},
         }
+
+    @staticmethod
+    def _record_filing_receipt(signal_id: str, acknowledgement: str) -> None:
+        """Stores the payer acknowledgement on the claim so the filing-risk rule can see that the claim was
+        resubmitted: when the qualifying event happened and when Sentinel learned it (the same moment here)."""
+        from datetime import datetime
+        from app.db.database import SessionLocal
+        from app.models.signal import SignalModel
+        db = SessionLocal()
+        try:
+            signal = db.query(SignalModel).filter(SignalModel.id == signal_id).first()
+            if signal is None:
+                return
+            meta = dict(signal.metadata_data or {})
+            inputs = dict(meta.get("risk_inputs") or {})
+            stamp = datetime.utcnow().isoformat() + "Z"
+            inputs["filing_receipt"] = {"ref": acknowledgement, "kind": "policy-required-receipt", "verified": True,
+                                        "event_at": stamp, "known_at": stamp}
+            meta["risk_inputs"] = inputs
+            signal.metadata_data = meta
+            db.commit()
+        finally:
+            db.close()
 
 
 operational_execution_engine = OperationalExecutionEngine()

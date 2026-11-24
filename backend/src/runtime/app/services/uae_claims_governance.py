@@ -11,11 +11,11 @@ The rule IDs, mapping IDs and versions match the five seeded Dubai signals
 from datetime import datetime
 from typing import Dict, Optional
 
-UAE_POLICY_ID = "POL-UAE-DHPO-2026"
+UAE_POLICY_ID = "POL-UAE-CLAIMS-2026"
 UAE_POLICY_VERSION = "2026.04"
 UAE_RULE_VERSION = "2026.1"
 UAE_SCOPE = "UAE"
-UAE_CLAIMS_SOURCE = "DHPO eClaimLink"
+UAE_CLAIMS_SOURCE = "UAE claims feed"  # generic; the clearinghouse name is developer-only
 CLAIM_DENIAL_CONTEXT = "Financial Integrity"
 UAE_POLICY_EFFECTIVE_FROM = datetime(2026, 1, 1)
 

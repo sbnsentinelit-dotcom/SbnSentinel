@@ -2,7 +2,7 @@ from app.api.v1.endpoints import outcomes
 from fastapi import APIRouter, Depends
 # Import subsystem routers here when created
 from app.api.v1.endpoints import runtime, history
-from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, audit, settings, encounters, super_admin, billing, clinics, pasme, pipeline, health, decisions, actions, decision_basis, action_lifecycle, financial_reports, patients, patient_flow
+from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, audit, settings, encounters, super_admin, billing, clinics, pasme, pipeline, health, decisions, actions, decision_basis, action_lifecycle, financial_reports, patients, patient_flow, severity
 
 
 from app.models.user import UserRole
@@ -66,6 +66,13 @@ api_router.include_router(
     patient_flow.router,
     prefix="/patient-flow",
     tags=["005_Patient_Flow"],
+    dependencies=protected)
+
+# Severity checks for the billing dashboard demo (review capacity and payer filing risk)
+api_router.include_router(
+    severity.router,
+    prefix="/severity",
+    tags=["021_Severity_Demo"],
     dependencies=protected)
 
 api_router.include_router(

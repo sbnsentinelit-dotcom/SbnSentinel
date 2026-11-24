@@ -8,6 +8,8 @@ import { fetchWithAuth } from '@/utils/fetchWithAuth';
 import { byRiskPriority, formatExposureTotals, isActionable, isPendingDecision } from '@/utils/signalSummary';
 import { recordSignalReview } from '@/utils/signalReview';
 import { timeLeftText, timeLeftTone } from '@/utils/timeLeft';
+import { SeverityChecksCard } from './SeverityChecksCard';
+import { SeverityExplainPanel, SeverityResult } from './SeverityExplainPanel';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || '';
 
@@ -81,6 +83,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
   // (by a person or by Autopilot) lowers Critical Risks and Total Financial Exposure.
   const pendingEvents = actionableEvents.filter(isPendingDecision);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  const [explainOpen, setExplainOpen] = useState(false);
   // Clock for the time-left badge: it counts down live while the screen is open.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -187,6 +190,9 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
         </div>
       </div>
 
+      {/* Severity checks: review capacity and payer filing risk on the clinic's live data */}
+      <SeverityChecksCard />
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left Side: Smart Inbox */}
         <div className="lg:col-span-4 space-y-6">
@@ -203,7 +209,7 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                 {summary.active_signals} active · {summary.awaiting_decision} awaiting a decision · {actionableEvents.length} shown
               </p>
             )}
-            <div className="space-y-3 overflow-y-auto custom-scrollbar max-h-[600px] pr-2">
+            <div className="space-y-3 overflow-y-auto custom-scrollbar max-h-[600px] p-1 pr-2">
               {actionableEvents.length > 0 ? actionableEvents.map((evt, idx) => (
                 <button
                   key={evt.id || idx}
@@ -217,14 +223,14 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                     <div className={`mt-0.5 p-2 rounded-2xl flex-shrink-0 ${getRiskColor(evt.risk_level || 'Information')}`}>
                       {getRiskIcon(evt.risk_level || 'Information')}
                     </div>
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <h4 className="text-sm font-bold text-white capitalize">{evt.type === 'EHR' ? 'Patient Event' : (evt.type || 'Signal')} Notification</h4>
-                        <span className="text-xs text-white/60 font-medium">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex justify-between items-start gap-2 mb-1">
+                        <h4 className="min-w-0 text-sm font-bold text-white capitalize break-words [overflow-wrap:anywhere]">{evt.type === 'EHR' ? 'Patient Event' : (evt.type || 'Signal')} Notification</h4>
+                        <span className="flex-shrink-0 text-xs text-white/60 font-medium">
                           {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <p className="text-xs text-white/80 line-clamp-2 leading-relaxed">{evt.message}</p>
+                      <p className="text-xs text-white/80 line-clamp-2 leading-relaxed break-words [overflow-wrap:anywhere]">{evt.message}</p>
                     </div>
                   </div>
                 </button>
@@ -259,10 +265,11 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                       <UserCircle2 className="w-4 h-4 text-indigo-200" />
                       <span className="text-xs font-medium text-indigo-200">Patient: <span className="font-bold text-white">{selectedEvent.metadata?.patient_name || 'Unknown'}</span></span>
                     </div>
-                    <div className={`flex items-center gap-2 backdrop-blur-md px-3 py-1.5 rounded-lg border ${getRiskColor(selectedEvent.risk_level || 'Information')}`}>
+                    <button type="button" onClick={() => setExplainOpen(true)} title="Why this level?"
+                      className={`flex items-center gap-2 backdrop-blur-md px-3 py-1.5 rounded-lg border hover:brightness-125 ${getRiskColor(selectedEvent.risk_level || 'Information')}`}>
                       {getRiskIcon(selectedEvent.risk_level || 'Information')}
-                      <span className="text-xs font-medium">Risk Level: <span className="font-bold text-white">{selectedEvent.risk_level || 'Information'}</span></span>
-                    </div>
+                      <span className="text-xs font-medium">Risk Level: <span className="font-bold text-white">{(selectedEvent.risk_evaluation?.label as string | undefined) || selectedEvent.risk_level || 'Information'}</span></span>
+                    </button>
                     {timeLeftText(selectedEvent.risk_evaluation?.deadline, nowMs) && (() => {
                       const tone = timeLeftTone(selectedEvent.risk_evaluation?.deadline, nowMs);
                       const toneClass = tone === 'critical' ? 'bg-red-500/20 text-red-400 border-red-500/30'
@@ -422,6 +429,34 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
           )}
         </div>
       </div>
+      {explainOpen && selectedEvent && (
+        <SeverityExplainPanel title="Risk level" onClose={() => setExplainOpen(false)}
+          result={signalSeverityResult(selectedEvent)} />
+      )}
     </div>
   );
 };
+
+/** The selected signal's recorded evaluation in the shape the explanation panel renders. */
+function signalSeverityResult(evt: { risk_level?: string; problem?: string; reason?: string; recommended_action?: string;
+  id: string; metadata?: any; risk_evaluation?: Record<string, unknown> | null }): SeverityResult {
+  const ev = (evt.risk_evaluation || {}) as Record<string, any>;
+  const inputs = (ev.inputs || {}) as Record<string, any>;
+  const refs = [evt.id, inputs.claim_id, evt.metadata?.claim_id, evt.metadata?.pipeline_event_id]
+    .filter((v, i, a) => v && a.indexOf(v) === i) as string[];
+  return {
+    severity: ev.level || evt.risk_level,
+    label: ev.label || ev.level || evt.risk_level || 'Unavailable',
+    at_risk: ev.problem || evt.problem || null,
+    reason: ev.reason || evt.reason || null,
+    next_action: ev.recommended_action || evt.recommended_action || null,
+    assumption: ev.time_left ? `Time left: ${ev.time_left}` : null,
+    rule_id: ev.rule_id || evt.metadata?.rule_id || null,
+    rule_version: ev.rule_version || null,
+    policy_id: ev.policy_id || null,
+    policy_version: ev.policy_version || null,
+    evidence_refs: refs,
+    evaluated_at: ev.evaluated_at || null,
+    timeline: Array.isArray(ev.timeline) ? ev.timeline : [],
+  };
+}
