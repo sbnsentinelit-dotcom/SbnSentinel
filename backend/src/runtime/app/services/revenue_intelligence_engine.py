@@ -1,6 +1,8 @@
 from typing import Dict, Any
 from app.services.base_service import BaseService
 
+SLOT_DEPENDENCY = "Depends on whether the slot was filled. Status unverified"
+
 
 class RevenueIntelligenceEngine(BaseService):
     """
@@ -50,7 +52,8 @@ class RevenueIntelligenceEngine(BaseService):
                 revenue_risk_category="Operational Capacity Risk",
                 estimated_financial_exposure=None,
                 revenue_confidence="UNAVAILABLE",
-                operational_dependency="Unable to backfill appointment slot in time."
+                # Whether the freed slot was refilled is not known from the no-show record itself.
+                operational_dependency=SLOT_DEPENDENCY
             )
         elif rule_id == "RULE-SCH-002":  # Wait time exceeded
             revenue = RevenueResult(
@@ -100,3 +103,21 @@ class RevenueIntelligenceEngine(BaseService):
 
 
 revenue_intelligence_engine = RevenueIntelligenceEngine()
+
+
+def revenue_fields(rule_id, financial_facts=None) -> Dict[str, Any]:
+    """Risk category, exposure, confidence and operational dependency for a governance rule (the
+    values the engine stores on a signal). Facts are the source's typed facts, e.g. the denied amount."""
+    return revenue_intelligence_engine._process({"finding": {"rule_id": rule_id or ""},
+                                                 "financial_facts": list(financial_facts or [])})
+
+
+def dependency_for_signal(kind, message=None):
+    """Operational dependency of a signal whose stored value is missing, from its risk rule; the slot
+    wording applies to missed appointments only. None when the signal's rule is unknown."""
+    from app.services.risk_level_evaluator import CLAIM_DENIAL, NO_SHOW, WAIT_TIME
+    rule = {CLAIM_DENIAL: "RULE-UAE-", NO_SHOW: "RULE-SCH-001", WAIT_TIME: "RULE-SCH-002"}.get(kind)
+    if kind == NO_SHOW or (not kind and message and any(
+            w in message.lower() for w in ("no-show", "no show", "appointment missed", "missed appointment"))):
+        return SLOT_DEPENDENCY
+    return revenue_fields(rule).get("operational_dependency") if rule else None

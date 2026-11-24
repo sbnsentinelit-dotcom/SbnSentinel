@@ -10,6 +10,9 @@ Each event carries the team that records it (reception, records, nursing, payer,
 team, clinician), when it was known, the handoff identity, and whether the visit's service needs payer
 approval (taken from the patient's workbook encounters).
 
+Completed visits are billed by services/generated_billing.py (the claims part of the feed): each
+follows one of the clinic's workbook claims in the same department (CPT, amount, outcome and timing).
+
 The day plan is deterministic (seeded by clinic and date), so the same day always produces the
 same visits; events are stored only once their time has passed, and only once (event_key).
 Each provider sees one patient at a time and each consultation needs a free room, so waits and
@@ -156,6 +159,15 @@ def plan_day(clinic_id: str, day: date, policy: PatientFlowPolicy = DEFAULT_FLOW
     return visits
 
 
+def history_days(today: date, minimum: int = 14, maximum: int = 60) -> int:
+    """Days of generated history needed to continue from the workbook's last visit up to today."""
+    dates = [e["date"] for e in workbook_dataset.encounters() if e.get("date")]
+    if not dates:
+        return minimum
+    gap = (today - date.fromisoformat(max(dates))).days
+    return max(minimum, min(maximum, gap))
+
+
 def _event_key(clinic_id: str, visit_id: str, event_type: str) -> str:
     return f"gen:{clinic_id}:{visit_id}:{event_type}"
 
@@ -219,5 +231,7 @@ def sync_generated_events(db: Session, clinic_id: str, now: Optional[datetime] =
     db.flush()
     if touched:
         refresh_encounter_cache(db, clinic_id, touched, now)
+    from app.services.generated_billing import update_generated_billing
+    update_generated_billing(db, clinic_id, now, policy)
     db.commit()
     return added

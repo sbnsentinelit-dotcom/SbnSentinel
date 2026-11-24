@@ -4,6 +4,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '@/store';
 import { removeSignal, fetchHistoricalSignals } from '@/store/slices/signalSlice';
 import { formatMoney } from '@/utils/currency';
+import { verificationLevel } from '@/utils/revenueOverview';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
 import { byRiskPriority, formatExposureTotals, isActionable, isPendingDecision } from '@/utils/signalSummary';
 import { recordSignalReview } from '@/utils/signalReview';
@@ -335,13 +336,13 @@ export const IntelligenceView: React.FC<IntelligenceViewProps> = ({ onExecute })
                         </div>
                         <div>
                           <div className="text-xs text-amber-500/50 uppercase tracking-widest font-bold mb-1">Risk Category</div>
-                          <div className="text-amber-100 font-bold">{selectedEvent.revenue_risk_category || 'None'}</div>
+                          <div className="text-amber-100 font-bold">{selectedEvent.revenue_risk_category && selectedEvent.revenue_risk_category !== 'None' ? selectedEvent.revenue_risk_category : 'Not classified'}</div>
                         </div>
                       </div>
                       <div className="mt-4 pt-4 border-t border-amber-500/20 grid grid-cols-2 gap-4">
                         <div>
                           <div className="text-xs text-amber-500/50 uppercase tracking-widest font-bold mb-1">Verification Level</div>
-                          <div className={selectedEvent.revenue_impact_status === 'High' ? 'text-emerald-400 font-bold text-sm' : 'text-amber-300 font-bold text-sm'}>{selectedEvent.revenue_impact_status === 'High' ? 'Verified' : 'Pending Review'}</div>
+                          <div className={verificationLevel(selectedEvent) === 'Verified' ? 'text-emerald-400 font-bold text-sm' : 'text-amber-300 font-bold text-sm'}>{verificationLevel(selectedEvent)}</div>
                         </div>
                         <div>
                           <div className="text-xs text-amber-500/50 uppercase tracking-widest font-bold mb-1">Dependency</div>

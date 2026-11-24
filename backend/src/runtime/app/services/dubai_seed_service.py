@@ -486,6 +486,7 @@ def seed_dubai_data(db: Session):
             primary_context="Financial Integrity",
             secondary_context="UAE Insurance Adjudication",
             estimated_financial_exposure=f"{curr} {exposure:.2f}",
+            **_claim_revenue_fields(code, exposure, curr),
             priority_score=score,
             metadata_data=meta_payload,
         )
@@ -544,6 +545,34 @@ def auto_seed_dubai_if_empty(db: Session):
 # Dubai demo recommendations seeded before this fix carry "ORGANIZATION_ADMINISTRATOR",
 # which is a role, not an AuthorityRequirement; loading them failed with ValueError.
 _INVALID_SEEDED_AUTHORITY = "ORGANIZATION_ADMINISTRATOR"
+
+
+def _claim_revenue_fields(code, amount, currency) -> dict:
+    """Revenue fields the Revenue Intelligence Engine gives a denied claim (rule RULE-UAE-<code>)."""
+    from app.services.revenue_intelligence_engine import revenue_fields
+    facts = [{"key": "denied_amount", "value": amount}, {"key": "currency", "value": currency}]
+    rev = revenue_fields(f"RULE-UAE-{code}", facts)
+    return {"revenue_risk_category": rev["revenue_risk_category"], "revenue_confidence": rev["revenue_confidence"],
+            "operational_dependency": rev["operational_dependency"]}
+
+
+def repair_seeded_revenue_fields(db: Session) -> int:
+    """Fills risk category, confidence and dependency on claim-denial signals stored without them."""
+    from app.services.risk_level_evaluator import CLAIM_DENIAL
+    repaired = 0
+    for sig in db.query(SignalModel).filter(SignalModel.revenue_risk_category.is_(None)).all():
+        meta = sig.metadata_data or {}
+        inputs = meta.get("risk_inputs") or {}
+        if meta.get("risk_kind") != CLAIM_DENIAL or not inputs.get("denial_code"):
+            continue
+        for key, value in _claim_revenue_fields(inputs["denial_code"], inputs.get("denied_amount"),
+                                                inputs.get("currency") or "AED").items():
+            if getattr(sig, key) in (None, ""):
+                setattr(sig, key, value)
+        repaired += 1
+    if repaired:
+        db.commit()
+    return repaired
 
 
 def repair_seeded_authority_requirement(db: Session) -> int:
