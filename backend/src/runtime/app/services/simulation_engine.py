@@ -12,10 +12,8 @@ DEMO_CLINIC_ID = "DXB-CLINIC-01"
 
 # Denied claims sent through the pipeline right away when the demo starts, so the queue is not empty.
 CLAIM_BACKLOG = 20
-# Seconds between events that lead to a recommendation (no-show, long wait, claim denial).
-ACTIONABLE_INTERVAL = (30, 40)
-# Seconds between routine live events (bookings, missed calls, lab emails).
-ROUTINE_INTERVAL = (5, 10)
+# Seconds between live active signals (no-show, long wait, claim denial): about one every 50 seconds.
+ACTIONABLE_INTERVAL = (45, 55)
 
 
 def _spread(key: str, choices):
@@ -76,6 +74,25 @@ def synthetic_ehr_risk_inputs(status, rng=random):
     return None
 
 
+def live_simulation_enabled() -> bool:
+    """Whether the live signal feed may run: its own opt-in, synthetic mode, outside PRODUCTION."""
+    from app.core.config import settings
+    return (bool(getattr(settings, "ENABLE_LIVE_SIMULATION", False))
+            and bool(getattr(settings, "SYNTHETIC_TEST_ENABLED", False))
+            and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION")
+
+
+def _random_workbook_patient() -> dict:
+    from app.services import workbook_dataset
+    rows = [p for p in workbook_dataset.patients() if p.get("patient_ref")]
+    return random.choice(rows) if rows else {}
+
+
+def _workbook_patient_name(patient_ref):
+    from app.services import workbook_dataset
+    return (workbook_dataset.patients_by_ref().get(patient_ref) or {}).get("name") or None
+
+
 class SimulationEngine:
     def __init__(self):
         self.running = False
@@ -83,19 +100,16 @@ class SimulationEngine:
         self.clients = []
         self._used_claim_ids = None
 
-        self.patients = ["John Doe", "Jane Smith", "Michael Johnson", "Emily Davis", "Robert Brown"]
+        # Patients come from the clinic's workbook (name and patient ID), not from a fixed list.
         # "status" is the typed appointment status a real EHR connector sends. The evidence engine
         # never infers a no-show or a long wait from message text, so without it these events can
-        # never match the scheduling rules. Events marked "actionable" lead to a recommendation and
-        # come on their own schedule (ACTIONABLE_INTERVAL); the others follow ROUTINE_INTERVAL.
+        # never match the scheduling rules. Every event here leads to a recommendation and comes on
+        # the ACTIONABLE_INTERVAL schedule (about one every 50 seconds).
         self.events = [
-            {"source": "Practice Fusion", "type": "EHR", "msg_template": "Patient {patient} appointment marked as No-Show.",
+            # The clinic's EHR feed (generic source; vendor names are never shown to the clinic).
+            {"source": "EHR", "type": "EHR", "msg_template": "Patient {patient} appointment marked as No-Show.",
              "status": "NO_SHOW", "weight": 1, "actionable": True},
-            {"source": "Practice Fusion", "type": "EHR", "msg_template": "New appointment booked by {patient}.", "weight": 6},
-            {"source": "Twilio", "type": "Phone", "msg_template": "Missed call from {patient} (+1-555-0198).", "weight": 6},
-            {"source": "Outlook", "type": "Email", "msg_template": "Email received from Lab Corp regarding {patient} results.",
-             "weight": 6},
-            {"source": "Practice Fusion", "type": "EHR", "msg_template": "Patient {patient} wait time has reached {wait} minutes.",
+            {"source": "EHR", "type": "EHR", "msg_template": "Patient {patient} wait time has reached {wait} minutes.",
              "status": "WAIT_TIME_EXCEEDED", "weight": 1, "actionable": True},
             {"claim_denial": True, "weight": 1, "actionable": True},
         ]
@@ -142,7 +156,7 @@ class SimulationEngine:
         code = claim.denial_code
         denied_amount = round((claim.billed_amount or 0.0) - (claim.paid_amount or 0.0), 2)
         currency = claim.currency or "AED"
-        patient = synthetic_patient_name(claim.patient_id)
+        patient = _workbook_patient_name(claim.patient_id) or synthetic_patient_name(claim.patient_id)
         title = UAE_DENIAL_RULES[code][0]
         message = f"[{code}] {title}: Exposure {currency} {denied_amount:,.2f}"
         facts = [
@@ -264,12 +278,9 @@ class SimulationEngine:
             await asyncio.sleep(0.2)
 
     async def generate_realistic_data(self):
+        # A first batch of denied claims, then one active signal about every 50 seconds.
         await self._ingest_claim_backlog()
-        asyncio.create_task(self.generate_actionable_data())
-        routine = [e for e in self.events if not e.get("actionable")]
-        while self.running:
-            await asyncio.sleep(random.uniform(*ROUTINE_INTERVAL))
-            await self._ingest_template(random.choices(routine, weights=[e["weight"] for e in routine])[0])
+        await self.generate_actionable_data()
 
     async def generate_actionable_data(self):
         actionable = [e for e in self.events if e.get("actionable")]
@@ -285,14 +296,17 @@ class SimulationEngine:
                     await self._ingest(*built)
                 return
 
-            patient = random.choice(self.patients)
+            row = _random_workbook_patient()
+            patient = row.get("name") or row.get("patient_ref") or "Unknown patient"
             facts = ([{"entity": "Appointment", "key": "status", "value": event_template["status"],
                        "source": event_template["source"]}] if event_template.get("status") else None)
             risk_inputs = synthetic_ehr_risk_inputs(event_template.get("status"))
             message = event_template["msg_template"].format(
                 patient=patient, wait=(risk_inputs or {}).get("wait_minutes", ""))
-            await self._ingest(event_template["source"], event_template["type"], message, patient, facts,
-                               {"risk_inputs": risk_inputs} if risk_inputs else None)
+            extra = {"patient_ref": row.get("patient_ref"), "mrn": row.get("mrn")}
+            if risk_inputs:
+                extra["risk_inputs"] = risk_inputs
+            await self._ingest(event_template["source"], event_template["type"], message, patient, facts, extra)
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"[SimEngine] Pipeline error: {e}")
@@ -322,11 +336,9 @@ class SimulationEngine:
             await q.put(event.model_dump_json())
 
     def start(self):
-        from app.core.config import settings
-        if (getattr(settings, "SOURCE_PROFILE", "") == "workbook"
-                or not getattr(settings, "ENABLE_PRACTICE_FUSION", False)
-                or not getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
-                or not getattr(settings, "ENABLE_LIVE_SIMULATION", False)):
+        # The live signal feed has its own opt-in (Report 01 §01.1): synthetic mode and
+        # ENABLE_LIVE_SIMULATION, never in PRODUCTION. It needs no vendor connector.
+        if not live_simulation_enabled():
             return
         if not self.running:
             self.running = True

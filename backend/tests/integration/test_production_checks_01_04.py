@@ -150,3 +150,133 @@ def test_provider_list_comes_from_the_clinic_records():
         assert all(p["specialty"] for p in res.json())
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------- live signal feed (demo)
+def _feed_settings(monkeypatch, **values):
+    from app.core.config import settings
+    base = {"ENABLE_LIVE_SIMULATION": True, "SYNTHETIC_TEST_ENABLED": True, "ENVIRONMENT": "DEMO",
+            "SOURCE_PROFILE": "workbook", "ENABLE_PRACTICE_FUSION": False}
+    for key, value in {**base, **values}.items():
+        monkeypatch.setattr(settings, key, value, raising=False)
+
+
+def test_live_feed_has_its_own_opt_in(monkeypatch):
+    from app.services.simulation_engine import live_simulation_enabled
+    _feed_settings(monkeypatch)
+    assert live_simulation_enabled() is True           # workbook profile, no vendor connector needed
+    _feed_settings(monkeypatch, ENABLE_LIVE_SIMULATION=False)
+    assert live_simulation_enabled() is False
+    _feed_settings(monkeypatch, SYNTHETIC_TEST_ENABLED=False)
+    assert live_simulation_enabled() is False
+    _feed_settings(monkeypatch, ENVIRONMENT="PRODUCTION")
+    assert live_simulation_enabled() is False
+
+
+def test_live_feed_sends_only_active_signals_without_vendor_names():
+    from app.services.simulation_engine import ACTIONABLE_INTERVAL, simulation_engine
+    assert 45 <= ACTIONABLE_INTERVAL[0] <= 50 <= ACTIONABLE_INTERVAL[1] <= 55
+    assert all(e.get("actionable") for e in simulation_engine.events)
+    from app.services.uae_claims_governance import UAE_CLAIMS_SOURCE, UAE_POLICY_ID
+    text = (repr(simulation_engine.events) + UAE_CLAIMS_SOURCE + UAE_POLICY_ID).lower()
+    for vendor in ("practice fusion", "twilio", "outlook", "dhpo", "eclaimlink"):
+        assert vendor not in text
+
+
+def test_live_feed_patients_come_from_the_workbook(monkeypatch):
+    import asyncio
+    from app.services import workbook_dataset
+    from app.services.simulation_engine import SimulationEngine, _workbook_patient_name
+    engine = SimulationEngine()
+    sent = []
+
+    async def capture(source, event_type, message, patient, facts=None, extra=None):
+        sent.append((source, message, patient, extra))
+
+    monkeypatch.setattr(engine, "_ingest", capture)
+    no_show = next(e for e in engine.events if e.get("status") == "NO_SHOW")
+    asyncio.run(engine._ingest_template(no_show))
+    source, message, patient, extra = sent[0]
+    by_ref = workbook_dataset.patients_by_ref()
+    assert source == "EHR"
+    assert extra["patient_ref"] in by_ref and by_ref[extra["patient_ref"]]["name"] == patient
+    assert patient in message
+    assert _workbook_patient_name("PAT20260001") == by_ref["PAT20260001"]["name"]
+
+
+# ---------------------------------------------------------------- severity checks API (live data)
+def test_severity_checks_use_the_open_claims_and_roster(clinic):
+    from datetime import timedelta as td
+    from app.models.review_roster import ReviewRosterModel
+    now = datetime.utcnow()
+
+    def denial(sid, code, amount, days):
+        return SignalModel(
+            id=sid, clinic_id=clinic, org_id="ORG-PC", source="Test", type="Claim", message=sid, timestamp=now,
+            risk_level="High", recommended_action="Resubmit claim",
+            metadata_data={"risk_kind": "claim_denial", "risk_inputs": {
+                "claim_id": sid, "payer": "Daman", "denial_code": code, "denied_amount": amount, "currency": "AED",
+                "resubmission_deadline": (now + td(days=days)).isoformat() + "Z" if days is not None else None}})
+
+    db = SessionLocal()
+    db.add_all([denial(f"{clinic}-act", "CO4", "640.00", 1.5), denial(f"{clinic}-cont", "CO16", "700.00", 1.0),
+                denial(f"{clinic}-high", "CO4", "640.00", 4), denial(f"{clinic}-small", "CO4", "100.00", 1),
+                denial(f"{clinic}-nodl", "CO50", "640.00", None)])
+    db.add_all([ReviewRosterModel(clinic_id=clinic, reviewer="Biller A", role="Claims reviewer", qualified=True,
+                                  shift_start="00:00", shift_end="23:59", assigned=True, source="test"),
+                ReviewRosterModel(clinic_id=clinic, reviewer="Biller B", role="Backup reviewer", qualified=True,
+                                  shift_start="00:00", shift_end="23:59", assigned=False, source="test")])
+    db.commit()
+    db.close()
+
+    def manager():
+        return User(id=2, email="m@test.local", role=UserRole.CLINIC_MANAGER.value, org_id="ORG-PC",
+                    clinic_id=clinic, is_active=True, hashed_password="x")
+    app.dependency_overrides[get_current_user] = manager
+    try:
+        body = client.get("/api/v1/severity/checks").json()
+        assert body["claims_evaluated"] == 5
+        totals = {t["label"]: t["count"] for t in body["filing_totals"]}
+        assert totals == {"Critical — act now": 1, "Critical — escalate for containment": 1, "High": 1,
+                          "Unable to evaluate — filing deadline unverified": 1, "No active filing alert": 1}
+        assert body["filing_risk"]["label"] == "Critical — act now"            # most urgent, still savable
+        assert body["filing_risk"]["subject"]["claim"] == f"{clinic}-act"
+        assert body["review_capacity"]["ready_reviews"] == 5
+        assert [r["worker"] for r in body["roster"]] == ["Biller A", "Biller B"]
+        backup = body["roster"][1]
+        preview = client.get("/api/v1/severity/checks", params={"preview_backup": True}).json()
+        assert preview["review_capacity_preview"]["is_preview"] is True
+        assert client.get("/api/v1/severity/checks").json()["roster"][1]["assigned"] is False   # preview saves nothing
+        res = client.post(f"/api/v1/severity/roster/{backup['id']}", json={"assigned": True})
+        assert res.status_code == 200 and res.json()["updated_by"] == "m@test.local"
+        assert client.get("/api/v1/severity/checks").json()["roster"][1]["assigned"] is True
+        assert client.post("/api/v1/severity/roster/999999", json={"assigned": True}).status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+        db = SessionLocal()
+        db.query(ReviewRosterModel).filter(ReviewRosterModel.clinic_id == clinic).delete()
+        db.commit()
+        db.close()
+
+
+def test_resubmission_receipt_marks_the_claim_filed_on_time(clinic):
+    from datetime import timedelta as td
+    from app.services.operational_execution_engine import operational_execution_engine
+    from app.services.risk_level_evaluator import current_evaluation
+    now = datetime.utcnow()
+    sid = f"{clinic}-rcpt"
+    db = SessionLocal()
+    db.add(SignalModel(id=sid, clinic_id=clinic, org_id="ORG-PC", source="Test", type="Claim", message=sid,
+                       timestamp=now, metadata_data={"risk_kind": "claim_denial", "risk_inputs": {
+                           "claim_id": sid, "payer": "Daman", "denial_code": "CO4", "denied_amount": "640.00",
+                           "currency": "AED", "resubmission_deadline": (now + td(days=1.5)).isoformat() + "Z"}}))
+    db.commit()
+    db.close()
+    operational_execution_engine._record_filing_receipt(sid, "ACK-TEST1")
+    db = SessionLocal()
+    try:
+        meta = db.query(SignalModel).filter(SignalModel.id == sid).first().metadata_data
+        assert meta["risk_inputs"]["filing_receipt"]["ref"] == "ACK-TEST1"
+        assert current_evaluation(meta, now + td(minutes=5))["label"] == "Filed on time"
+    finally:
+        db.close()

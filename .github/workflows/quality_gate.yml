@@ -132,6 +132,13 @@ jobs:
       run: |
         pytest tests/integration/test_production_checks_01_04.py -v
 
+    - name: Severity Synthetic Retest 2 (607 reference checks)
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/unit/test_severity_reference.py -v
+
   frontend-quality:
     name: Frontend Quality Assurance
     runs-on: ubuntu-latest

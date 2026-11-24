@@ -50,7 +50,7 @@ _TABLE_MODULES = (
     "audit", "telemetry", "settings", "rule", "evidence", "financial_reporting",
     "collaboration_models", "decision_context_models", "decision_record",
     "evidence_evaluation_models", "explainability_models",
-    "integration", "recommendation_generation_models", "patient_flow",
+    "integration", "recommendation_generation_models", "patient_flow", "review_roster",
     # models/governance.py is not listed: it is unused and redefines the "rules" table of models/rule.py.
 )
 

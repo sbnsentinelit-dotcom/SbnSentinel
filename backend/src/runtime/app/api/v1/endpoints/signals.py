@@ -585,13 +585,8 @@ def retrieve_signal_evidence(signal_id: str, db: Session = Depends(get_db),
 
 @router.on_event("startup")
 async def startup_event():
-    from app.core.config import settings
-    if (getattr(settings, "ENABLE_LIVE_SIMULATION", False)
-            and getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
-            and getattr(settings, "ENABLE_PRACTICE_FUSION", False)
-            and getattr(settings, "SOURCE_PROFILE", "") != "workbook"
-            and getattr(settings, "ENVIRONMENT", "").upper() != "PRODUCTION"):
-        simulation_engine.start()
+    # The live signal feed starts only with its own opt-in (checked inside start()).
+    simulation_engine.start()
     # Patient Flow's synthetic visit events (synthetic mode only; checks its own conditions).
     simulation_engine.start_visit_generator()
 

@@ -356,14 +356,31 @@ def seed_dubai_data(db: Session):
          "Payment delayed past 45-day payment cycle.",
          "Upload signed operative clinical notes directly via DHA unified portal integration.",
          82),
+        ("CO29", "TIMELY_FILING_RISK", "High", 760.0,
+         "Original Claim Filing Deadline",
+         "Original claim filing is due with the payer today; the electronic dispute pack is ready for submission.",
+         "Unrecoverable write-off if the payer filing deadline is missed.",
+         "Submit the electronic dispute pack before the payer filing deadline.",
+         97),
     ]
 
     # Payer resubmission deadline (days from now) as the payer / clearinghouse would report it for each
     # seeded denial; None = not received yet. The risk level is evaluated from this data, not fixed per code.
-    seed_deadline_days = {"CO15": 6, "CO4": 1.5, "CO50": 10, "CO29": 4, "CO16": None}
+    seed_deadline_days = {0: 6, 1: 1.5, 2: 10, 3: 4, 4: None}
+    # The sixth claim's filing deadline is the payer's 5:00 PM UAE cutoff (today, or tomorrow once it has
+    # passed); its one recovery route is the electronic dispute pack submission, 12-18 minutes end to end
+    # (verified bounds from the clearinghouse), with no advance warning lead.
+    local_now = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=4)
+    cutoff_local = local_now.replace(hour=17, minute=0, second=0, microsecond=0)
+    if cutoff_local <= local_now:
+        cutoff_local += timedelta(days=1)
+    filing_deadline_utc = cutoff_local - timedelta(hours=4)
+    route_data = {5: {"recovery_routes": [{"name": "Electronic dispute pack submission", "shortest_minutes": 12,
+                                           "longest_minutes": 18, "verified": True, "ref": "ROUTE-EDP-SUBMIT"}],
+                      "route_inventory_complete": True, "alert_lead_minutes": 0}}
     from app.services.risk_level_evaluator import CLAIM_DENIAL, evaluate as evaluate_risk
     for idx, (code, sig_type, _baseline, exposure, title, prob, impact, action, score) in enumerate(uae_governance_rules):
-        days = seed_deadline_days.get(code)
+        days = seed_deadline_days.get(idx)
         seed_now = datetime.now(timezone.utc).replace(tzinfo=None)
         from app.services.uae_claims_governance import SYNTHETIC_REQUIRED_EVIDENCE
         risk_inputs = {
@@ -378,7 +395,10 @@ def seed_dubai_data(db: Session):
             "currency": curr,
             "remittance_date": (seed_now - timedelta(days=3)).isoformat() + "Z",
             "resubmission_deadline": (seed_now + timedelta(days=days)).isoformat() + "Z" if days is not None else None,
+            **route_data.get(idx, {}),
         }
+        if idx in route_data:
+            risk_inputs["resubmission_deadline"] = filing_deadline_utc.isoformat() + "Z"
         risk_eval = evaluate_risk(CLAIM_DENIAL, risk_inputs, seed_now)
         risk = risk_eval.level
         sig_id = f"SIG-DXB-2026-{idx + 1:02d}"
@@ -473,6 +493,17 @@ def seed_dubai_data(db: Session):
         existing_signals.add(sig_id)
 
     db.commit()
+
+    # The clinic's claim review roster (read by the review-capacity check).
+    from app.models.review_roster import ReviewRosterModel
+    if not db.query(ReviewRosterModel).filter(ReviewRosterModel.clinic_id == clinic_id).first():
+        for reviewer, role, start, end, assigned in (
+                ("Biller A", "Claims reviewer", "08:00", "17:00", True),
+                ("Biller B", "Backup reviewer", "16:45", "17:00", False)):
+            db.add(ReviewRosterModel(clinic_id=clinic_id, reviewer=reviewer, role=role, qualified=True,
+                                     shift_start=start, shift_end=end, assigned=assigned, source="clinic roster",
+                                     updated_at=datetime.utcnow(), updated_by="clinic onboarding"))
+        db.commit()
 
     # The clinic's rooms (their state is calculated from visit events).
     from app.services.patient_flow_service import ensure_rooms
