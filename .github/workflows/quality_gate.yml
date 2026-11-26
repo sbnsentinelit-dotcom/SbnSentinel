@@ -153,6 +153,13 @@ jobs:
       run: |
         pytest tests/integration/test_revenue_overview.py tests/integration/test_generated_billing.py -v
 
+    - name: Legacy Claims Bridge Verification (V3 candidate - assessment rules, intake, scope, exit review)
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/legacy_bridge/ tests/integration/test_legacy_claims_bridge_api.py -v
+
   frontend-quality:
     name: Frontend Quality Assurance
     runs-on: ubuntu-latest

@@ -4,7 +4,7 @@ import { trendFromDaily } from '@/utils/dailyTrend';
 import { uaeGreeting } from '@/utils/greeting';
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, Bell, Mail, Sun, LayoutDashboard, BrainCircuit, Users, Calendar, DollarSign, FileText, BarChart2, Settings, HelpCircle, LogOut, ChevronDown, CheckCircle2, Clock, AlertTriangle, ChevronRight, Plus, Moon, User, Activity, X, Cpu, Check, Menu, Shield, CreditCard, Database, Building2, ClipboardList, MessageSquare } from 'lucide-react';
+import { Search, Bell, Mail, Sun, LayoutDashboard, BrainCircuit, Users, Calendar, DollarSign, FileText, BarChart2, Settings, HelpCircle, LogOut, ChevronDown, CheckCircle2, Clock, AlertTriangle, ChevronRight, Plus, Moon, User, Activity, X, Cpu, Check, Menu, Shield, CreditCard, Database, Building2, ClipboardList, MessageSquare, Archive } from 'lucide-react';
 import { StatCard } from '@/components/CommandCenter/StatCard';
 import { SignalFeed } from '@/components/CommandCenter/SignalFeed';
 import { RevenueImpact } from '@/components/CommandCenter/RevenueImpact';
@@ -14,6 +14,7 @@ import { PatientFlowView } from '@/components/CommandCenter/PatientFlowView';
 import { ScheduleOptimizerView } from '@/components/CommandCenter/ScheduleOptimizerView';
 import { ClinicalLogsView } from '@/components/CommandCenter/ClinicalLogsView';
 import { RevenueReportsView } from '@/components/CommandCenter/RevenueReportsView';
+import { LegacyClaimsView } from '@/components/CommandCenter/LegacyClaimsView';
 import { TeamMessagingView } from '@/components/CommandCenter/TeamMessagingView';
 import { SettingsView } from '@/components/CommandCenter/SettingsView';
 import { HelpSupportView } from '@/components/CommandCenter/HelpSupportView';
@@ -54,6 +55,17 @@ export default function Dashboard() {
   const [activeContact, setActiveContact] = useState<string | null>(null);
   const [userRole, setUserRole] = useState('org_admin');
   const [currentUser, setCurrentUser] = useState<any>(null);
+  // Legacy Claims Bridge (V3 candidate): shown only when the server enables it for this user.
+  const [legacyClaimsEnabled, setLegacyClaimsEnabled] = useState(false);
+  useEffect(() => {
+    if (!currentUser) return;
+    let cancelled = false;
+    fetchWithAuth('/api/v1/legacy-claims/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) setLegacyClaimsEnabled(!!d?.can_view); })
+      .catch(() => { if (!cancelled) setLegacyClaimsEnabled(false); });
+    return () => { cancelled = true; };
+  }, [currentUser]);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // Set dark class immediately to avoid flash of light mode
     if (typeof document !== 'undefined') {
@@ -436,6 +448,9 @@ export default function Dashboard() {
                 <p className="text-[9px] font-black text-white/60 uppercase tracking-[0.2em] mb-3 px-4">Revenue</p>
                 <div className="space-y-1">
                   <SidebarItem icon={DollarSign} label="Revenue Risk" active={activeTab === 'revenue-reports'} onClick={() => { setActiveTab('revenue-reports'); setIsMobileMenuOpen(false); }} />
+                  {legacyClaimsEnabled && (
+                    <SidebarItem icon={Archive} label="Legacy Claims" active={activeTab === 'legacy-claims'} onClick={() => { setActiveTab('legacy-claims'); setIsMobileMenuOpen(false); }} />
+                  )}
                 </div>
               </div>
             )}
@@ -1076,6 +1091,7 @@ export default function Dashboard() {
             {activeTab === 'schedule' && <ScheduleOptimizerView />}
             {activeTab === 'clinical-logs' && <ClinicalLogsView />}
             {activeTab === 'revenue-reports' && (['practice_manager', 'staff'].includes(userRole) ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <RevenueReportsView />)}
+            {activeTab === 'legacy-claims' && (['practice_manager', 'staff'].includes(userRole) || !legacyClaimsEnabled ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <LegacyClaimsView />)}
             {activeTab === 'team-messaging' && <TeamMessagingView currentUser={currentUser} activeContact={activeContact} onContactSelect={setActiveContact} />}
             {activeTab === 'audit-logs' && (['practice_manager', 'staff', 'ops_manager'].includes(userRole) ? <AccessDeniedView onReturn={() => setActiveTab('dashboard')} /> : <AuditLogsView />)}
             {(activeTab === 'settings' || activeTab.startsWith('settings-')) && (

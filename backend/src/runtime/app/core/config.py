@@ -46,6 +46,8 @@ class Settings(BaseSettings):
 
     ENABLE_PRACTICE_FUSION: bool = False
     ENABLE_LIVE_SIMULATION: bool = False
+    # Legacy Claims Continuity Bridge (V3 candidate). Unset: on outside PRODUCTION, off in PRODUCTION.
+    LEGACY_BRIDGE_ENABLED: Optional[bool] = None
 
     # JWT / JWKS — System App (SMART Backend Services)
     # JWT_PRIVATE_KEY must be a PEM-encoded RSA private key.
