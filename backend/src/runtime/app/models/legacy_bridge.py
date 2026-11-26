@@ -39,6 +39,11 @@ class LegacyTransitionModel(Base):
     max_probe_age_days = Column(Integer, nullable=False)
     label = Column(String(160), nullable=True)
     origin = Column(String(16), nullable=False, default="clinic")  # "clinic" | "synthetic"
+    # Clinic ownership policy for hold investigations: {task code: responsible team}; defaults apply
+    # to codes it does not name (app.legacy_bridge.work_policy).
+    ownership_json = Column(Text, nullable=True)
+    # The published assessment that drives work items, ordered by evidence cutoff then revision.
+    current_assessment_id = Column(String(40), nullable=True)
     created_by = Column(String(160), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -132,13 +137,16 @@ class LegacySealModel(Base):
 
 
 class LegacyAssessmentModel(Base):
-    """A versioned assessment result; the same evidence and settings always map to the same row."""
+    """A published, immutable assessment; the same evidence and settings always map to the same row.
+    Revision numbers successive publications for the same evidence cutoff (as_of)."""
     __tablename__ = "legacy_assessments"
-    __table_args__ = (UniqueConstraint("transition_id", "input_digest", name="uq_legacy_assessment_input"),)
+    __table_args__ = (UniqueConstraint("transition_id", "input_digest", name="uq_legacy_assessment_input"),
+                      UniqueConstraint("transition_id", "as_of", "revision", name="uq_legacy_assessment_revision"))
 
     id = Column(String(40), primary_key=True)
     transition_id = Column(String(40), ForeignKey("legacy_transitions.id"), nullable=False, index=True)
     as_of = Column(DateTime, nullable=False)
+    revision = Column(Integer, nullable=False, default=1)
     status = Column(String(24), nullable=False)
     input_digest = Column(String(64), nullable=False)
     policy_version = Column(String(48), nullable=False)
@@ -154,14 +162,17 @@ class LegacyAssessmentModel(Base):
 
 
 class LegacyWorkItemModel(Base):
-    """Continuing work from assessments (an open denial, a provider recovery...) and who accepted it."""
+    """Work from the current published assessment and who accepted it: continuing work (an open denial,
+    a provider recovery...) and one investigation per hold area with its linked hold reasons."""
     __tablename__ = "legacy_work_items"
     __table_args__ = (UniqueConstraint("transition_id", "code", "item", name="uq_legacy_work_item"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     transition_id = Column(String(40), ForeignKey("legacy_transitions.id"), nullable=False, index=True)
+    kind = Column(String(16), nullable=False, default="follow_up")  # "follow_up" | "hold"
     code = Column(String(48), nullable=False)
     item = Column(String(160), nullable=False)
+    issues_json = Column(Text, nullable=True)                 # hold: linked [{"code", "item"}]
     owner = Column(String(96), nullable=True)
     state = Column(String(16), nullable=False, default="OPEN")  # OPEN | ACCEPTED | RESOLVED
     first_assessment_id = Column(String(40), nullable=False)
@@ -171,6 +182,22 @@ class LegacyWorkItemModel(Base):
     accepted_at = Column(DateTime, nullable=True)
     note = Column(Text, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
+
+
+class LegacyWorkItemEventModel(Base):
+    """Every state change of a work item (opened, accepted, resolved, reopened), never edited."""
+    __tablename__ = "legacy_work_item_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    work_item_id = Column(Integer, ForeignKey("legacy_work_items.id"), nullable=False, index=True)
+    transition_id = Column(String(40), ForeignKey("legacy_transitions.id"), nullable=False, index=True)
+    event = Column(String(16), nullable=False)               # OPENED | ACCEPTED | RESOLVED | REOPENED
+    from_state = Column(String(16), nullable=True)
+    to_state = Column(String(16), nullable=False)
+    actor = Column(String(160), nullable=False)
+    assessment_id = Column(String(40), nullable=True)
+    note = Column(Text, nullable=True)
+    at = Column(DateTime, nullable=False)
 
 
 class LegacyExitInventoryModel(Base):

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  Summary, WorkItem, ageLabel, balanceRows, errorText, fromMinor, label, openWork, parseExport, ROLE_LABELS,
-  statusLabel, statusTone,
+  Summary, WorkItem, ageLabel, balanceRows, errorText, fromMinor, label, measured, openWork, parseExport,
+  previousAcceptance, ROLE_LABELS, statusLabel, statusTone,
 } from '@/utils/legacyClaims';
 
 const zero = { payer_ar: 0, patient_ar: 0, credit: 0, unapplied: 0, unbilled: 0, closed_watch: 0 };
@@ -54,6 +54,27 @@ describe('Legacy Claims screen helpers (figures come from the server assessment)
       .toBe('The page was refused; nothing was stored. bank-1: observation time is in the future');
     expect(errorText({ detail: [{ msg: 'Field required' }] }, 'x')).toBe('Field required');
     expect(errorText(null, 'fallback')).toBe('fallback');
+  });
+
+  it('shows missing bank evidence as unknown and qualifies an unproven source (review 07.1)', () => {
+    const fmt = (m: number) => `AED ${m / 100}`;
+    expect(measured(null, 'missing', 'Bank evidence missing', fmt)).toBe('Bank evidence missing');
+    expect(measured(0, 'complete', 'Bank evidence missing', fmt)).toBe('AED 0');
+    expect(measured(90000, 'incomplete', 'Bank evidence missing', fmt)).toBe('AED 900 (coverage not proven)');
+  });
+
+  it('keeps an earlier acceptance visible after resolution and reopening (review 07.3)', () => {
+    const w = {
+      state: 'OPEN',
+      history: [
+        { event: 'OPENED', actor: 'publisher', at: '2026-11-05T18:00:00Z' },
+        { event: 'ACCEPTED', actor: 'finance@clinic.test', at: '2026-11-05T19:00:00Z' },
+        { event: 'RESOLVED', actor: 'publisher', at: '2026-11-06T09:00:00Z' },
+        { event: 'REOPENED', actor: 'publisher', at: '2026-11-06T12:00:00Z' },
+      ],
+    } as unknown as WorkItem;
+    expect(previousAcceptance(w)?.actor).toBe('finance@clinic.test');
+    expect(previousAcceptance({ ...w, state: 'ACCEPTED' } as WorkItem)).toBeNull();
   });
 
   it('shows evidence age in hours, then days', () => {

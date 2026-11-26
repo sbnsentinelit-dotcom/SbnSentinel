@@ -110,7 +110,7 @@ def bridge_status(current_user: User = Depends(get_current_user)):
 @router.get("/transitions")
 def list_transitions(db: Session = Depends(get_db), user: User = Depends(_reader)):
     rows = _scoped(db, user).order_by(LegacyTransitionModel.created_at.desc()).all()
-    return [svc.transition_view(t, svc.latest_assessment(db, t)) for t in rows]
+    return [svc.transition_view(t, svc.current_assessment(db, t)) for t in rows]
 
 
 @router.post("/transitions", status_code=201)
@@ -138,7 +138,7 @@ async def create_transition(request: Request, db: Session = Depends(get_db), use
 @router.get("/transitions/{transition_id}")
 def get_transition(transition_id: str, db: Session = Depends(get_db), user: User = Depends(_reader)):
     t = _transition(db, user, transition_id)
-    return svc.transition_view(t, svc.latest_assessment(db, t))
+    return svc.transition_view(t, svc.current_assessment(db, t))
 
 
 @router.get("/transitions/{transition_id}/sources")
@@ -185,11 +185,27 @@ async def deliver_page(transition_id: str, request: Request, db: Session = Depen
 @router.get("/transitions/{transition_id}/assessment")
 def get_assessment(transition_id: str, as_of: Optional[str] = Query(None), db: Session = Depends(get_db),
                    user: User = Depends(_reader)):
-    """Assess the stored evidence as of an instant (default: the latest completeness statement)."""
+    """Read only. Without as_of: the current published assessment. With as_of: the stored assessment of
+    that evidence, or an unsaved preview. A read never changes work items or the current assessment."""
     t = _transition(db, user, transition_id)
     try:
-        a = svc.assess_transition(db, t, _actor(user), _parse_instant(as_of))
+        a = svc.read_assessment(db, t, _actor(user), _parse_instant(as_of))
     except svc.BridgeError as e:
+        _fail(e)
+    finally:
+        db.rollback()  # nothing a read touched is kept
+    return svc.assessment_view(db, t, a)
+
+
+@router.post("/transitions/{transition_id}/assessments")
+def publish_assessment(transition_id: str, db: Session = Depends(get_db), user: User = Depends(_writer)):
+    """Assess the evidence as of its latest completeness statement and publish it; a newer published
+    assessment becomes current and moves the work items in the same transaction."""
+    t = _transition(db, user, transition_id)
+    try:
+        a = svc.publish_assessment(db, t, _actor(user))
+    except svc.BridgeError as e:
+        db.rollback()
         _fail(e)
     return svc.assessment_view(db, t, a)
 
@@ -209,7 +225,7 @@ def accept_work_item(item_id: int, note: Optional[str] = Body(None, embed=True),
         raise HTTPException(status_code=404, detail="Work item not found.")
     _transition(db, user, w.transition_id)
     try:
-        return svc.work_item_view(svc.accept_work_item(db, w, _actor(user), (note or "").strip() or None))
+        return svc.work_item_view(db, svc.accept_work_item(db, w, _actor(user), (note or "").strip() or None))
     except svc.BridgeError as e:
         _fail(e)
 
@@ -221,8 +237,11 @@ def _inventory_scope(user: User) -> Optional[List[str]]:
 
 
 @router.get("/exit-inventories")
-def list_exit_inventories(db: Session = Depends(get_db), user: User = Depends(_reader)):
-    rows = svc.exit_inventories(db, _inventory_scope(user))
+def list_exit_inventories(transition_id: Optional[str] = Query(None), db: Session = Depends(get_db),
+                          user: User = Depends(_reader)):
+    """With transition_id: only inventories whose required scopes include that transition's scope."""
+    t = _transition(db, user, transition_id) if transition_id else None
+    rows = svc.exit_inventories(db, _inventory_scope(user), t)
     return [{"inventory_id": r.id, "subscription": r.subscription, "as_of": svc.iso(r.as_of),
              "received_at": svc.iso(r.received_at)} for r in rows]
 

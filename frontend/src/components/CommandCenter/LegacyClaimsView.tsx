@@ -1,12 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle, Archive, CheckCircle2, ClipboardCheck, FileUp, Landmark, RefreshCw, Route, ShieldCheck, Wallet,
 } from 'lucide-react';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
 import { formatMoney } from '@/utils/currency';
 import {
-  APPEAL_LABELS, Assessment, AssessmentRow, ExitReview, ROLE_LABELS, ROUTE_LABELS, Source, Transition,
-  ageLabel, balanceRows, errorText, fromMinor, label, openWork, parseExport, shortDate, statusLabel, statusTone,
+  APPEAL_LABELS, Assessment, AssessmentRow, ExitReview, InventoryRow, ROLE_LABELS, ROUTE_LABELS, Source, Transition,
+  ageLabel, balanceRows, errorText, fromMinor, label, measured, openWork, parseExport, previousAcceptance, shortDate,
+  statusLabel, statusTone,
 } from '@/utils/legacyClaims';
 
 const API = '/api/v1/legacy-claims';
@@ -29,12 +30,19 @@ export const LegacyClaimsView: React.FC = () => {
   const [history, setHistory] = useState<AssessmentRow[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [exitReview, setExitReview] = useState<ExitReview | null>(null);
+  const [inventories, setInventories] = useState<InventoryRow[]>([]);
+  const [inventoryId, setInventoryId] = useState<string>('');
+  const inventoryIdRef = useRef('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [uploadSource, setUploadSource] = useState<number | ''>('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  // The selected transition as of now (callbacks never read a stale selection) and a request counter:
+  // a response for a transition that is no longer selected, or an older request, is discarded.
+  const selectedRef = useRef('');
+  const requestSeq = useRef(0);
 
   const getJson = async (url: string) => {
     const res = await fetchWithAuth(url);
@@ -43,22 +51,54 @@ export const LegacyClaimsView: React.FC = () => {
     return body;
   };
 
+  const loadReview = async (id: string, inventory: string, seq: number) => {
+    const review = await getJson(`${API}/exit-inventories/${inventory}/review`);
+    if (seq !== requestSeq.current || selectedRef.current !== id) return;
+    inventoryIdRef.current = inventory;
+    setInventoryId(inventory);
+    setExitReview(review);
+  };
+
   const loadTransition = useCallback(async (id: string) => {
+    const seq = ++requestSeq.current;
+    if (id !== selectedRef.current) {
+      // Switching: clear every panel of the previous transition before the new one arrives.
+      selectedRef.current = id;
+      setAssessment(null);
+      setHistory([]);
+      setSources([]);
+      setInventories([]);
+      inventoryIdRef.current = '';
+      setInventoryId('');
+      setExitReview(null);
+      setUploadSource('');
+      setUploadFile(null);
+    }
     if (!id) return;
     setError(null);
     try {
-      const [a, h, s] = await Promise.all([
+      const [a, h, s, inv] = await Promise.all([
         getJson(`${API}/transitions/${id}/assessment`),
         getJson(`${API}/transitions/${id}/assessments`),
         getJson(`${API}/transitions/${id}/sources`),
+        getJson(`${API}/exit-inventories?transition_id=${encodeURIComponent(id)}`),
       ]);
+      if (seq !== requestSeq.current) return;
       setAssessment(a);
       setHistory(h);
       setSources(s);
+      setInventories(inv);
+      // One qualifying inventory is reviewed directly; with several the reviewer chooses one.
+      const keep = (inv as InventoryRow[]).find((x) => x.inventory_id === inventoryIdRef.current);
+      const pick = keep ?? (inv.length === 1 ? inv[0] : null);
+      if (pick) await loadReview(id, pick.inventory_id, seq);
+      else { inventoryIdRef.current = ''; setInventoryId(''); setExitReview(null); }
     } catch (e: any) {
+      if (seq !== requestSeq.current) return;
       setError(e.message);
       setAssessment(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -73,17 +113,14 @@ export const LegacyClaimsView: React.FC = () => {
       }
       const list: Transition[] = await getJson(`${API}/transitions`);
       setTransitions(list);
-      const id = list.some((t) => t.id === selected) ? selected : list[0]?.id ?? '';
+      const id = list.some((t) => t.id === selectedRef.current) ? selectedRef.current : list[0]?.id ?? '';
       setSelected(id);
-      if (id) await loadTransition(id);
-      const inventories = await getJson(`${API}/exit-inventories`);
-      setExitReview(inventories[0] ? await getJson(`${API}/exit-inventories/${inventories[0].inventory_id}/review`) : null);
+      await loadTransition(id);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadTransition]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -91,6 +128,37 @@ export const LegacyClaimsView: React.FC = () => {
   const selectTransition = async (id: string) => {
     setSelected(id);
     await loadTransition(id);
+  };
+
+  const chooseInventory = async (inventory: string) => {
+    const id = selectedRef.current;
+    inventoryIdRef.current = inventory;
+    setInventoryId(inventory);
+    setExitReview(null);
+    if (!inventory) return;
+    try {
+      await loadReview(id, inventory, requestSeq.current);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  /** Publish an assessment of the evidence received so far for the selected transition. */
+  const publish = async (id: string) => {
+    const res = await fetchWithAuth(`${API}/transitions/${id}/assessments`, { method: 'POST' });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(errorText(body, 'The assessment could not be published.'));
+  };
+
+  const reassess = async () => {
+    const id = selectedRef.current;
+    setError(null);
+    try {
+      if (id && perm?.can_deliver) await publish(id);
+    } catch (e: any) {
+      setError(e.message);
+    }
+    await loadAll();
   };
 
   const flash = (msg: string) => {
@@ -107,7 +175,7 @@ export const LegacyClaimsView: React.FC = () => {
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(errorText(body, 'Could not accept the item.'));
       flash('Ownership accepted and recorded in the audit log.');
-      await loadTransition(selected);
+      await loadTransition(selectedRef.current);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -123,7 +191,8 @@ export const LegacyClaimsView: React.FC = () => {
       const parsed = parseExport(await uploadFile.text());
       const source = sources.find((s) => s.binding_id === uploadSource);
       const previous = source?.streams.find((st) => st.resource === 'export')?.head ?? null;
-      const res = await fetchWithAuth(`${API}/transitions/${selected}/pages`, {
+      const id = selectedRef.current;
+      const res = await fetchWithAuth(`${API}/transitions/${id}/pages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ binding_id: uploadSource, resource: 'export', previous, ...parsed }),
@@ -134,7 +203,8 @@ export const LegacyClaimsView: React.FC = () => {
         ? 'This file was already received; nothing changed.'
         : `Received ${body.records_added} new record(s)${body.seal_stored ? ' with a completeness statement' : ''}.`);
       setUploadFile(null);
-      await loadTransition(selected);
+      if (body.status === 'STAGED') await publish(id);
+      await loadTransition(id);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -146,6 +216,11 @@ export const LegacyClaimsView: React.FC = () => {
   const cur = s?.currency ?? assessment?.transition.scope.currency ?? null;
   const money = (minor: number | null | undefined) => formatMoney(fromMinor(minor), cur);
   const work = assessment ? openWork(assessment.work_items) : [];
+  const fmt = (minor: number) => money(minor);
+  const bank = (minor: number | null | undefined) =>
+    measured(minor, s?.cash.bank_coverage ?? 'missing', 'Bank evidence missing', fmt);
+  const ledger = (minor: number | null | undefined) =>
+    measured(minor, s?.cash.ledger_coverage ?? 'missing', 'Ledger evidence missing', fmt);
 
   return (
     <div className="animate-in fade-in duration-500 max-w-[1600px] mx-auto space-y-8 relative">
@@ -172,7 +247,7 @@ export const LegacyClaimsView: React.FC = () => {
             </select>
           )}
           <button
-            onClick={() => loadAll()}
+            onClick={() => reassess()}
             disabled={loading}
             className="flex items-center gap-2 text-white font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow bg-[#111827] hover:bg-[#1F2937] disabled:opacity-50"
           >
@@ -206,13 +281,16 @@ export const LegacyClaimsView: React.FC = () => {
             <span>· {assessment.policy_version} / {assessment.mapping_version}</span>
             <span className="px-2 py-0.5 rounded-[6px] bg-white/10 text-white/70">{perm?.stage ?? assessment.review_quality}</span>
           </div>
-          <p className="text-[11px] text-white/50 -mt-5">{assessment.authority}</p>
+          <p className="text-[11px] text-white/50 -mt-5">
+            {assessment.authority}
+            {!assessment.published && ' Not yet published: this is a preview of the evidence received so far; work items start when it is published.'}
+          </p>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             {[
               { title: 'Opening payer receivable', value: money(s.opening.payer_ar), sub: `${s.lines.legacy} legacy claim line(s)`, icon: Archive, bg: 'bg-purple-500/20', color: 'text-white' },
               { title: 'Closing payer receivable', value: money(s.closing.payer_ar), sub: `Credits ${money(s.closing.credit)}`, icon: Wallet, bg: 'bg-orange-500/20', color: 'text-orange-400' },
-              { title: 'Bank-confirmed payments', value: money(s.cash.bank_confirmed), sub: `of ${money(s.cash.advised)} advised · ${money(s.cash.ledger_posted)} posted`, icon: Landmark, bg: 'bg-emerald-500/20', color: 'text-emerald-400' },
+              { title: 'Bank-confirmed payments', value: s.cash.bank_confirmed === null ? 'Bank evidence missing' : money(s.cash.bank_confirmed), sub: `of ${money(s.cash.advised)} advised · ${ledger(s.cash.ledger_posted)} posted${s.cash.bank_coverage === 'incomplete' ? ' · bank coverage not proven' : ''}`, icon: Landmark, bg: 'bg-emerald-500/20', color: 'text-emerald-400' },
               { title: 'Open work items', value: String(work.length), sub: `${assessment.issues.length} hold reason(s)`, icon: ClipboardCheck, bg: 'bg-red-500/20', color: 'text-red-400' },
             ].map((c) => (
               <div key={c.title} className={`${card} flex flex-col justify-between`}>
@@ -253,7 +331,18 @@ export const LegacyClaimsView: React.FC = () => {
                           {w.item} · Owner: {w.owner ?? 'not assigned'}
                           {w.state === 'ACCEPTED' && ` · Accepted by ${w.accepted_by} on ${shortDate(w.accepted_at)}`}
                           {w.state === 'RESOLVED' && ` · Resolved ${shortDate(w.resolved_at)}`}
+                          {(() => {
+                            const prev = previousAcceptance(w);
+                            return prev ? ` · Previously accepted by ${prev.actor} on ${shortDate(prev.at)}` : null;
+                          })()}
                         </p>
+                        {w.issues?.length > 0 && (
+                          <ul className="mt-1 space-y-0.5">
+                            {w.issues.map((i) => (
+                              <li key={`${i.code}-${i.item}`} className="text-[11px] text-white/50">• {i.message} ({label(ROLE_LABELS, i.item)})</li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                       {w.state === 'OPEN' && perm?.can_deliver ? (
                         <button disabled={busy} onClick={() => accept(w.id)} className="shrink-0 text-[11px] font-bold px-3 py-1.5 rounded-[8px] bg-white/10 hover:bg-white/20 disabled:opacity-50">Accept ownership</button>
@@ -290,14 +379,16 @@ export const LegacyClaimsView: React.FC = () => {
               <table className="w-full text-xs">
                 <tbody>
                   {[
-                    ['Payer advised (cash)', s.cash.advised],
-                    ['Bank-confirmed', s.cash.bank_confirmed],
-                    ['Posted in the clinic ledger', s.cash.ledger_posted],
-                    ['Provider-level recoveries', s.cash.provider_adjustments],
-                    ['Bank money with no advice', s.cash.unapplied_bank],
+                    ['Payer advised (cash)', money(s.cash.advised)],
+                    ['Bank deposits received', bank(s.cash.bank_observed)],
+                    ['Bank-confirmed', bank(s.cash.bank_confirmed)],
+                    ['Bank money not matched to one advice', bank(s.cash.bank_unmatched)],
+                    ['Posted in the clinic ledger', ledger(s.cash.ledger_posted)],
+                    ['Provider-level recoveries', money(s.cash.provider_adjustments)],
+                    ['Bank money with no advice', bank(s.cash.unapplied_bank)],
                   ].map(([name, v]) => (
-                    <tr key={name as string} className="border-t border-white/10 first:border-0">
-                      <td className="py-2 text-white/70">{name}</td><td className="text-right font-bold">{money(v as number)}</td>
+                    <tr key={name} className="border-t border-white/10 first:border-0">
+                      <td className="py-2 text-white/70">{name}</td><td className="text-right font-bold">{v}</td>
                     </tr>
                   ))}
                   <tr className="border-t border-white/10"><td className="py-2 text-white/70">Non-cash advices</td><td className="text-right font-bold">{s.cash.noncash_advices}</td></tr>
@@ -391,7 +482,22 @@ export const LegacyClaimsView: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className={card}>
               <h3 className="text-base font-bold mb-4">Subscription exit review</h3>
-              {!exitReview ? <Empty text="No subscription inventory has been delivered yet." /> : (
+              {inventories.length > 1 && (
+                <select
+                  aria-label="Subscription inventory"
+                  value={inventoryId}
+                  onChange={(e) => chooseInventory(e.target.value)}
+                  className="mb-3 bg-white/5 border border-white/10 text-white text-xs px-3 py-2 rounded-[12px]"
+                >
+                  <option value="" className="bg-[var(--color-surface)]">Choose the subscription inventory</option>
+                  {inventories.map((x) => (
+                    <option key={x.inventory_id} value={x.inventory_id} className="bg-[var(--color-surface)]">{x.subscription} · as of {shortDate(x.as_of)}</option>
+                  ))}
+                </select>
+              )}
+              {inventories.length === 0 ? (
+                <Empty text={`No subscription inventory names this transition's scope (payer ${assessment.transition.scope.payer}, facility ${assessment.transition.scope.facility}).`} />
+              ) : !exitReview ? <Empty text="Choose which subscription inventory to review for this transition." /> : (
                 <div className="space-y-3 text-xs">
                   <div className="flex items-center gap-3"><Badge status={exitReview.status} /><span className="text-white/70">{exitReview.subscription} · as of {shortDate(exitReview.as_of)}</span></div>
                   <p className="text-white/70">
@@ -414,7 +520,7 @@ export const LegacyClaimsView: React.FC = () => {
                   {history.map((h) => (
                     <tr key={h.assessment_id} className="border-t border-white/10">
                       <td className="py-2">{shortDate(h.computed_at)}</td>
-                      <td>{shortDate(h.as_of)}</td>
+                      <td>{shortDate(h.as_of)}{h.is_current ? ' (current)' : ''}</td>
                       <td><Badge status={h.status} /></td>
                       <td>{h.issues}</td>
                       <td>{h.records}</td>

@@ -109,12 +109,15 @@ def check_coverage(ctx, data, issues):
         issues.add(Issue("CLOSING_SNAPSHOT_BEHIND_DECISION", "control"))
 
 
-def balances(records, at, issues):
+def balances(records, at, issues, overlap_code=None):
     result = {}
     for r in records.values():
         d = r.data
         key = d.line, d.bucket
-        if key in result or d.line.book != "legacy" or r.effective != at:
+        if key in result and overlap_code:
+            # Two rows of one snapshot describe the same position: hold with an explicit reason.
+            issues.add(Issue(overlap_code, line_name(d.line) + "/" + d.bucket))
+        if (key in result and not overlap_code) or d.line.book != "legacy" or r.effective != at:
             issues.add(Issue("INVALID_INVENTORY_ROW", r.key))
         if ((d.bucket in {"credit", "unapplied"} and d.minor > 0)
             or (d.bucket not in {"credit", "unapplied"} and d.minor < 0)
@@ -127,7 +130,7 @@ def balances(records, at, issues):
 def assess_inventory(ctx, data, issues):
     control = balances(data["control"], ctx.cutover, issues)
     opening = balances(data["opening"], ctx.cutover, issues)
-    closing = balances(data["closing"], ctx.snapshot_at, issues)
+    closing = balances(data["closing"], ctx.snapshot_at, issues, overlap_code="CLOSING_SNAPSHOT_OVERLAP")
     if not control:
         issues.add(Issue("NO_CONTROL_POPULATION", "opening"))
     for line, bucket in control.keys() | opening.keys():

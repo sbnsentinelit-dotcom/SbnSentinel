@@ -28,22 +28,37 @@ def summarize(ctx: Context, batch: Batch, result) -> dict:
     legacy_lines = {r.data.line for r in data["control"].values()}
     new_lines = {r.data.line for r in data["new_line"].values()}
 
-    deposits = defaultdict(int)
+    # Each bank record counts once, however many advices name its trace. A deposit is matched only
+    # when exactly one cash advice and exactly one deposit share the trace and the amounts agree.
+    deposits = defaultdict(list)
     for r in data["deposit"].values():
-        deposits[r.data.trace] += r.data.minor
-    advised = bank = posted = adjustments = 0
-    noncash = 0
+        deposits[r.data.trace].append(r.data.minor)
+    cash_advices = defaultdict(list)
+    advised = adjustments = noncash = 0
     for r in data["advice"].values():
         a = r.data
         if a.settlement == "noncash":
             noncash += 1
             continue
         advised += a.net
-        bank += deposits.get(a.trace, 0)
+        cash_advices[a.trace].append(a.net)
         adjustments += sum(p.minor for p in a.parts if p.type == "provider_adjustment")
+    observed = sum(sum(v) for v in deposits.values())
+    matched = sum(v[0] for trace, v in deposits.items()
+                  if len(v) == 1 and cash_advices.get(trace) == [v[0]] and v[0] != 0)
+    advice_traces = {r.data.trace for r in data["advice"].values()}
+    unapplied = sum(sum(v) for trace, v in deposits.items() if trace not in advice_traces)
     posted = sum(r.data.component.minor for r in data["posting"].values())
-    unapplied = sum(v for trace, v in deposits.items()
-                    if trace not in {r.data.trace for r in data["advice"].values()})
+    unproven = {i.item for i in result.issues if i.code == "COVERAGE_UNPROVEN"}
+
+    def coverage(role, rows):
+        if role not in unproven:
+            return "complete"
+        return "incomplete" if rows else "missing"
+
+    bank_coverage = coverage("bank", data["deposit"])
+    ledger_coverage = coverage("ledger", data["posting"])
+    bank_known = bank_coverage != "missing"
 
     appeals = defaultdict(set)
     for r in data["appeal"].values():
@@ -91,8 +106,18 @@ def summarize(ctx: Context, batch: Batch, result) -> dict:
         "control": totals("control"),
         "opening": totals("opening"),
         "closing": totals("closing"),
-        "cash": {"advised": advised, "bank_confirmed": bank, "ledger_posted": posted,
-                 "provider_adjustments": adjustments, "unapplied_bank": unapplied, "noncash_advices": noncash},
+        # bank_* amounts are None when no bank evidence was delivered (unknown, not zero); with a
+        # delivered but unproven bank source the amounts are measured and bank_coverage qualifies them.
+        "cash": {"advised": advised,
+                 "bank_observed": observed if bank_known else None,
+                 "bank_confirmed": matched if bank_known else None,
+                 "bank_unmatched": observed - matched if bank_known else None,
+                 "bank_coverage": bank_coverage,
+                 "ledger_posted": posted if ledger_coverage != "missing" else None,
+                 "ledger_coverage": ledger_coverage,
+                 "provider_adjustments": adjustments,
+                 "unapplied_bank": unapplied if bank_known else None,
+                 "noncash_advices": noncash},
         "denials": denials,
         "routes": routes,
         "sources": source_rows,

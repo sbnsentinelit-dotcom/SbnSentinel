@@ -17,6 +17,7 @@ MESSAGES = {
     "UNKNOWN_ASSIGNED_LINE": "An owner was assigned to a claim line that is not in the transition.",
     "OWNER_MISSING_OR_AMBIGUOUS": "A legacy claim line has no accepted owner, or more than one.",
     "CLOSING_VARIANCE": "Opening balances plus recorded movements do not equal the signed closing balance.",
+    "CLOSING_SNAPSHOT_OVERLAP": "The closing snapshot has more than one balance row for the same claim line and bucket.",
     # Cash proof
     "UNAPPLIED_BANK_CASH": "Money arrived in the bank with no matching payment advice; hold it as unapplied cash.",
     "AMBIGUOUS_PAYMENT_REFERENCE": "More than one payment advice uses the same payment reference.",
@@ -55,6 +56,15 @@ MESSAGES = {
     "OBTAIN_RECEIPT": "The appeal was sent; obtain the payer's receipt.",
     "AWAIT_DECISION": "The payer received the appeal; await its decision.",
     "VERIFY_FINANCIAL_OUTCOME": "The payer decided; verify the financial outcome in the ledger.",
+    # Investigations opened for hold reasons (one task per area; its hold reasons are linked)
+    "RECONCILE_BANK_EVIDENCE": "Obtain and reconcile the bank evidence for the payments on hold.",
+    "RECONCILE_LEDGER": "Reconcile the clinic ledger postings and receivable movements on hold.",
+    "RECONCILE_BALANCES": "Reconcile the opening, movement and closing balances on hold.",
+    "RESOLVE_PAYMENT_ADVICE": "Resolve the payment advice discrepancies on hold with the payer.",
+    "CONFIRM_LINE_OWNERSHIP": "Confirm a single accepted owner for the claim lines and recoveries on hold.",
+    "VERIFY_DENIAL_DEADLINES": "Verify the denial deadlines and appeal steps on hold.",
+    "PROVE_ROUTES": "Run and record the route tests that are not proven.",
+    "RESOLVE_SOURCE_EVIDENCE": "Resolve the source delivery problems on hold with the source owner.",
     # Subscription exit review
     "UNVERIFIED_SUBSCRIPTION_INVENTORY": "The subscription inventory is empty, repeats a scope, or was certified at another time.",
     "INVALID_SCOPE_PACKET": "An assessed scope is not in the inventory, is repeated, or has another assessment time.",

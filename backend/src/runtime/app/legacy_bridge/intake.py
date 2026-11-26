@@ -8,6 +8,8 @@ from pydantic import Field, StringConstraints
 from .contracts import Fact, Identifier, Instant, Model, Positive, Role, Scope
 
 Token = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")]
+HoldTask = Literal["RECONCILE_BANK_EVIDENCE", "RECONCILE_LEDGER", "RECONCILE_BALANCES", "RESOLVE_PAYMENT_ADVICE",
+                   "CONFIRM_LINE_OWNERSHIP", "VERIFY_DENIAL_DEADLINES", "PROVE_ROUTES", "RESOLVE_SOURCE_EVIDENCE"]
 
 # Which source role may deliver each record kind (the assessment re-checks this).
 KIND_ROLE = {
@@ -79,3 +81,5 @@ class TransitionIn(Model):
     max_probe_age_days: Positive = 14
     label: Annotated[str, StringConstraints(min_length=1, max_length=160)] | None = None
     clinic_id: Identifier | None = None  # System Administrators only
+    # Clinic ownership policy for hold investigations: {task code: responsible team}.
+    hold_owners: dict[HoldTask, Identifier] | None = None

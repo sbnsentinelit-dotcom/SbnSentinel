@@ -18,14 +18,25 @@ export type Transition = {
   max_probe_age_days: number;
   origin: string;
   created_at: string;
+  current_assessment_id: string | null;
   latest_status: string | null;
   latest_as_of: string | null;
 };
 
 export type Coded = { code: string; item: string; message: string };
 
+export type WorkEvent = {
+  event: 'OPENED' | 'ACCEPTED' | 'RESOLVED' | 'REOPENED';
+  from_state: string | null; to_state: string; actor: string;
+  assessment_id: string | null; note: string | null; at: string;
+};
+
 export type WorkItem = Coded & {
   id: number;
+  kind: 'follow_up' | 'hold';
+  /** Hold investigations: the hold reasons this task covers. */
+  issues: Coded[];
+  history: WorkEvent[];
   owner: string | null;
   state: 'OPEN' | 'ACCEPTED' | 'RESOLVED';
   accepted_by: string | null;
@@ -33,6 +44,8 @@ export type WorkItem = Coded & {
   note: string | null;
   resolved_at: string | null;
 };
+
+export type Coverage = 'complete' | 'incomplete' | 'missing';
 
 export type Buckets = Record<'payer_ar' | 'patient_ar' | 'credit' | 'unapplied' | 'unbilled' | 'closed_watch', number>;
 
@@ -42,9 +55,13 @@ export type Summary = {
   control: Buckets;
   opening: Buckets;
   closing: Buckets;
+  /** Bank and ledger amounts are null when that evidence was never delivered (unknown, not zero). */
   cash: {
-    advised: number; bank_confirmed: number; ledger_posted: number;
-    provider_adjustments: number; unapplied_bank: number; noncash_advices: number;
+    advised: number;
+    bank_observed: number | null; bank_confirmed: number | null; bank_unmatched: number | null;
+    bank_coverage: Coverage;
+    ledger_posted: number | null; ledger_coverage: Coverage;
+    provider_adjustments: number; unapplied_bank: number | null; noncash_advices: number;
   };
   denials: {
     key: string; line: string; noticed_at: string | null; due: string | null;
@@ -58,9 +75,13 @@ export type Summary = {
 };
 
 export type Assessment = {
-  assessment_id: string;
+  /** null for an unsaved preview (nothing published for that evidence yet). */
+  assessment_id: string | null;
   transition: Transition;
   as_of: string;
+  revision: number | null;
+  published: boolean;
+  is_current: boolean;
   computed_at: string;
   status: 'SAMPLE_REVIEWABLE' | 'HOLD';
   policy_version: string;
@@ -77,9 +98,11 @@ export type Assessment = {
 };
 
 export type AssessmentRow = {
-  assessment_id: string; as_of: string; computed_at: string; status: string;
+  assessment_id: string; as_of: string; revision: number; is_current: boolean; computed_at: string; status: string;
   issues: number; records: number; computed_by: string;
 };
+
+export type InventoryRow = { inventory_id: string; subscription: string; as_of: string; received_at: string };
 
 export type Source = {
   binding_id: number; role: string; valid_from: string; valid_until: string;
@@ -167,6 +190,18 @@ export const balanceRows = (s: Summary) =>
     }));
 
 export const openWork = (items: WorkItem[]) => items.filter((w) => w.state !== 'RESOLVED');
+
+/** The last acceptance of an item that is no longer accepted (resolved, then reopened). */
+export const previousAcceptance = (w: WorkItem): WorkEvent | null =>
+  w.state === 'ACCEPTED' ? null : [...(w.history ?? [])].reverse().find((e) => e.event === 'ACCEPTED') ?? null;
+
+/** A measured amount with its evidence qualifier: unknown when the evidence never arrived. */
+export const measured = (
+  amount: number | null | undefined, coverage: Coverage, missingText: string, format: (minor: number) => string,
+): string => {
+  if (coverage === 'missing' || amount === null || amount === undefined) return missingText;
+  return coverage === 'incomplete' ? `${format(amount)} (coverage not proven)` : format(amount);
+};
 
 /** "2 h", "3 d" since the evidence instant. */
 export const ageLabel = (hours: number) => (hours < 48 ? `${Math.max(0, Math.round(hours))} h` : `${Math.round(hours / 24)} d`);
