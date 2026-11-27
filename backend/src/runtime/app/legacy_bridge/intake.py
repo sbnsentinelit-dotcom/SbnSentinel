@@ -62,7 +62,8 @@ class PageIn(Model):
 
 
 class BindingIn(Model):
-    connector: Identifier
+    # Set by integrations; a source bound from the screen gets a server-made name (never shown).
+    connector: Identifier | None = None
     role: Role
     valid_from: Instant
     valid_until: Instant
@@ -83,3 +84,7 @@ class TransitionIn(Model):
     clinic_id: Identifier | None = None  # System Administrators only
     # Clinic ownership policy for hold investigations: {task code: responsible team}.
     hold_owners: dict[HoldTask, Identifier] | None = None
+
+
+class OwnersIn(Model):
+    hold_owners: dict[HoldTask, Identifier]

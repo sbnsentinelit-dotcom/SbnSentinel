@@ -31,10 +31,11 @@ from app.legacy_bridge.messages import message
 from app.legacy_bridge.portfolio import ExitInventory, prepare_exit
 from app.legacy_bridge.sentinel_adapter import build_review_fact
 from app.legacy_bridge.summary import summarize
-from app.legacy_bridge.work_policy import hold_tasks
+from app.legacy_bridge.work_policy import DEFAULT_OWNERS, PRIORITY, hold_tasks
 from app.models.legacy_bridge import (
     LegacyAssessmentModel, LegacyExitInventoryModel, LegacyPageModel, LegacyRecordModel, LegacySealModel,
-    LegacySourceBindingModel, LegacyStreamHeadModel, LegacyTransitionModel, LegacyWorkItemEventModel,
+    LegacyExitSignoffModel, LegacySourceBindingModel, LegacyStreamHeadModel, LegacyTransitionModel,
+    LegacyWorkItemEventModel,
     LegacyWorkItemModel,
 )
 
@@ -128,7 +129,15 @@ def create_transition(db: Session, data: TransitionIn, *, org_id: str, clinic_id
 def add_binding(db: Session, t: LegacyTransitionModel, data: BindingIn, actor: str) -> LegacySourceBindingModel:
     if data.valid_from >= data.valid_until:
         raise BridgeError(422, "valid_from must be before valid_until")
-    b = LegacySourceBindingModel(transition_id=t.id, connector=data.connector, role=data.role,
+    connector = data.connector
+    if connector is None:      # bound from the screen: a server-made name, unique in the transition
+        taken = {c for (c,) in db.query(LegacySourceBindingModel.connector).filter(
+            LegacySourceBindingModel.transition_id == t.id).all()}
+        connector = f"clinic-{data.role}"
+        n = 2
+        while connector in taken:
+            connector, n = f"clinic-{data.role}-{n}", n + 1
+    b = LegacySourceBindingModel(transition_id=t.id, connector=connector, role=data.role,
                                  valid_from=to_db(data.valid_from), valid_until=to_db(data.valid_until),
                                  created_by=actor, created_at=_utcnow())
     db.add(b)
@@ -196,7 +205,7 @@ def _read_head(db: Session, t: LegacyTransitionModel, connector: str, resource: 
 
 
 def stage_page(db: Session, t: LegacyTransitionModel, page: PageIn, actor: str,
-               now: Optional[datetime] = None) -> Dict:
+               now: Optional[datetime] = None, attestation: Optional[dict] = None) -> Dict:
     """Store one page atomically. Returns {"status": "STAGED" | "ALREADY_STAGED", ...}."""
     from app.models.evidence import EvidenceModel
     now = now or _utcnow()
@@ -259,6 +268,7 @@ def stage_page(db: Session, t: LegacyTransitionModel, page: PageIn, actor: str,
                 resource_kind=f"legacy.{page.resource}", source_version=page_digest,
                 metadata_json=json.dumps({"transition_id": t.id, "role": b.role, "previous": page.previous,
                                           "token": token, "records": len(records),
+                                          "attestation": attestation,
                                           "quality_state": "RESEARCH_ONLY", "eligible_for_decision": False})))
             db.add(LegacyPageModel(id=page_id, transition_id=t.id, connector=b.connector, resource=page.resource,
                                    token=token, previous_token=page.previous, digest=page_digest,
@@ -310,7 +320,7 @@ def latest_seal_instant(db: Session, t: LegacyTransitionModel) -> Optional[datet
 
 
 def build_inputs(db: Session, t: LegacyTransitionModel, as_of: Optional[datetime] = None,
-                 now: Optional[datetime] = None) -> Tuple[Context, Batch]:
+                 now: Optional[datetime] = None, with_rows: bool = False) -> Tuple[Context, Batch]:
     now = now or _utcnow()
     as_of = to_db(as_of) if as_of else (latest_seal_instant(db, t) or now)
     if as_of > now:
@@ -338,11 +348,14 @@ def build_inputs(db: Session, t: LegacyTransitionModel, as_of: Optional[datetime
         "seals": [dict(role=s.role, through=iso(s.through), unique_rows=s.unique_rows, digest=s.digest,
                        receipt=s.receipt) for s in seals],
     }))
-    rows = [r for (r,) in db.query(LegacyRecordModel.record_json).filter(
+    stored = (db.query(LegacyRecordModel).filter(
         LegacyRecordModel.transition_id == t.id, LegacyRecordModel.received_at <= now,
         or_(LegacyRecordModel.kind != "closing", LegacyRecordModel.effective_at == snapshot))
-        .order_by(LegacyRecordModel.id).all()]
-    batch = Batch.model_validate_json('{"version":"legacy-continuity.v1","records":[' + ",".join(rows) + "]}")
+        .order_by(LegacyRecordModel.id).all())
+    batch = Batch.model_validate_json(
+        '{"version":"legacy-continuity.v1","records":[' + ",".join(r.record_json for r in stored) + "]}")
+    if with_rows:
+        return ctx, batch, stored   # batch.records[i] is stored[i]
     return ctx, batch
 
 
@@ -364,7 +377,7 @@ def _evaluate(db: Session, t: LegacyTransitionModel, actor: str, as_of: Optional
         summary_json=json.dumps(summarize(ctx, batch, result)),
         review_fact_json=json.dumps({"observation": observation.model_dump(mode="json"),
                                      "fact": fact.model_dump(mode="json")}),
-        computed_at=now, computed_by=actor)
+        sealed=bool(ctx.seals), computed_at=now, computed_by=actor)
 
 
 def _stored(db: Session, t: LegacyTransitionModel, input_digest: str) -> Optional[LegacyAssessmentModel]:
@@ -391,37 +404,57 @@ def read_assessment(db: Session, t: LegacyTransitionModel, actor: str, as_of: Op
 
 
 def _newer(a: LegacyAssessmentModel, b: Optional[LegacyAssessmentModel]) -> bool:
-    return b is None or (a.as_of, a.revision) > (b.as_of, b.revision)
+    """Only a sealed assessment can become current; it replaces an unsealed placeholder (left by an
+    earlier version) and otherwise orders by evidence cutoff, then revision."""
+    if not a.sealed:
+        return False
+    return b is None or not b.sealed or (a.as_of, a.revision) > (b.as_of, b.revision)
+
+
+def _lock(db: Session, t: LegacyTransitionModel) -> None:
+    """First statement of every publication and acceptance: a write to the transition row. It holds
+    the row lock (PostgreSQL) or the write lock (SQLite) until commit, so concurrent writers of one
+    transition's assessments and work items run one after the other, each on freshly read state."""
+    db.execute(update(LegacyTransitionModel).where(LegacyTransitionModel.id == t.id)
+               .values(lock_version=LegacyTransitionModel.lock_version + 1)
+               .execution_options(synchronize_session=False))
+    db.expire_all()
 
 
 def publish_assessment(db: Session, t: LegacyTransitionModel, actor: str,
                        now: Optional[datetime] = None) -> LegacyAssessmentModel:
-    """Assess the evidence as of its latest completeness statement and publish it. In ONE transaction:
-    the immutable assessment row (once per distinct input; revision numbers new inputs for the same
-    cutoff), the current pointer when it is newer (evidence cutoff, then revision), and the work
-    items it drives. Publishing the same evidence again changes nothing."""
+    """Assess the evidence as of its latest completeness statement and publish it. Under the
+    transition's lock and in ONE transaction: the immutable assessment row (once per distinct input;
+    revision numbers new inputs for the same cutoff), the current pointer when it is newer, and the
+    work items it drives. Before any source has sealed its evidence the result is only a preview
+    (nothing stored, nothing current). Publishing the same evidence again changes nothing; two
+    identical publications at once return the same assessment."""
     now = now or _utcnow()
     for attempt in (1, 2):
-        candidate = _evaluate(db, t, actor, None, now)
-        row = _stored(db, t, candidate.input_digest)
-        if row is None:
-            last = (db.query(LegacyAssessmentModel.revision).filter(
-                LegacyAssessmentModel.transition_id == t.id, LegacyAssessmentModel.as_of == candidate.as_of)
-                .order_by(LegacyAssessmentModel.revision.desc()).first())
-            candidate.id, candidate.revision = _new_id("LCA"), (last[0] + 1 if last else 1)
-            db.add(candidate)
-            row = candidate
-        current = current_assessment(db, t)
-        if row.id != t.current_assessment_id and _newer(row, current):
-            t.current_assessment_id = row.id
-            sync_work_items(db, t, row, actor, now)
         try:
+            _lock(db, t)
+            candidate = _evaluate(db, t, actor, None, now)
+            if not candidate.sealed:
+                db.rollback()
+                return candidate
+            row = _stored(db, t, candidate.input_digest)
+            if row is None:
+                last = (db.query(LegacyAssessmentModel.revision).filter(
+                    LegacyAssessmentModel.transition_id == t.id, LegacyAssessmentModel.as_of == candidate.as_of)
+                    .order_by(LegacyAssessmentModel.revision.desc()).first())
+                candidate.id, candidate.revision = _new_id("LCA"), (last[0] + 1 if last else 1)
+                db.add(candidate)
+                db.flush()
+                row = candidate
+            current = current_assessment(db, t)
+            if row.id != t.current_assessment_id and _newer(row, current):
+                t.current_assessment_id = row.id
+                sync_work_items(db, t, row, actor, now)
             db.commit()
             return row
-        except exc.IntegrityError:  # a concurrent publication stored this input or revision first
+        except exc.IntegrityError:
+            # Only reachable if the lock is bypassed: roll back everything and evaluate again.
             db.rollback()
-            if attempt == 2:
-                raise BridgeError(409, "Another assessment was published at the same time; try again.")
     raise BridgeError(409, "Another assessment was published at the same time; try again.")
 
 
@@ -440,8 +473,9 @@ def sync_work_items(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentMo
                     now: datetime) -> None:
     """Called only when `a` becomes the current published assessment, inside its transaction (no
     commit here). Wanted work = the assessment's follow-up work plus one investigation per hold area.
-    New work opens; work no longer wanted resolves; resolved work wanted again reopens. Every change
-    is an event, so an acceptance stays in the history after a later resolution and reopening."""
+    New work opens; work no longer wanted resolves (outcome resolved_by_evidence); resolved work wanted
+    again reopens. CLOSED work keeps the outcome a reviewer recorded. Every change is an event, so an
+    acceptance stays in the history after a later resolution and reopening."""
     wanted = {}
     for f in json.loads(a.follow_up_json):
         wanted[(f["code"], f["item"])] = ("follow_up", f.get("owner"), None)
@@ -463,11 +497,13 @@ def sync_work_items(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentMo
         w.owner, w.issues_json, w.last_assessment_id = owner, issues_json, a.id
         if w.state == "RESOLVED":
             w.state, w.resolved_at, w.accepted_by, w.accepted_at, w.note = "OPEN", None, None, None, None
+            w.outcome, w.outcome_by, w.outcome_at, w.outcome_note = None, None, None, None
             _event(db, w, "REOPENED", "RESOLVED", actor, now, a.id)
     for key, w in rows.items():
-        if key not in wanted and w.state != "RESOLVED":
+        if key not in wanted and w.state not in ("RESOLVED", "CLOSED"):
             previous = w.state
             w.state, w.resolved_at, w.last_assessment_id = "RESOLVED", now, a.id
+            w.outcome, w.outcome_by, w.outcome_at = "resolved_by_evidence", actor, now
             _event(db, w, "RESOLVED", previous, actor, now, a.id)
 
 
@@ -478,12 +514,27 @@ def work_items(db: Session, t: LegacyTransitionModel) -> List[LegacyWorkItemMode
 
 def accept_work_item(db: Session, w: LegacyWorkItemModel, actor: str, note: Optional[str],
                      now: Optional[datetime] = None) -> LegacyWorkItemModel:
-    if w.state == "RESOLVED":
-        raise BridgeError(409, "This item is already resolved by later evidence.")
-    if w.state == "ACCEPTED":
-        raise BridgeError(409, "This item was already accepted.")
+    """Claim an OPEN item: under the transition's lock, an atomic update from OPEN. Of two reviewers
+    accepting at once exactly one succeeds; the other gets a 409 naming the recorded acceptance, and
+    only the successful claim writes an event and an audit row. A resolution is never overwritten."""
     now = now or _utcnow()
-    w.state, w.accepted_by, w.accepted_at, w.note = "ACCEPTED", actor, now, note
+    item_id, transition_id = w.id, w.transition_id
+    _lock(db, db.get(LegacyTransitionModel, transition_id))
+    claimed = db.execute(
+        update(LegacyWorkItemModel)
+        .where(LegacyWorkItemModel.id == item_id, LegacyWorkItemModel.state == "OPEN")
+        .values(state="ACCEPTED", accepted_by=actor, accepted_at=now, note=note)
+        .execution_options(synchronize_session=False)).rowcount
+    w = db.get(LegacyWorkItemModel, item_id)
+    if claimed != 1:
+        state, by, at = w.state, w.accepted_by, w.accepted_at
+        db.rollback()
+        if state == "RESOLVED":
+            raise BridgeError(409, {"message": "This item is already resolved by later evidence.", "state": state})
+        if state == "CLOSED":
+            raise BridgeError(409, {"message": "This item is already closed with an outcome.", "state": state})
+        raise BridgeError(409, {"message": "This item was already accepted.", "state": state,
+                                "accepted_by": by, "accepted_at": iso(at)})
     _event(db, w, "ACCEPTED", "OPEN", actor, now, w.last_assessment_id, note)
     from app.services.data_audit_engine import data_audit_engine
     data_audit_engine._log_internal(db, user_system=actor, action="LEGACY_WORK_ITEM_ACCEPTED",
@@ -494,19 +545,193 @@ def accept_work_item(db: Session, w: LegacyWorkItemModel, actor: str, note: Opti
     return w
 
 
+def _audit(db: Session, actor: str, action: str, w: LegacyWorkItemModel) -> None:
+    from app.services.data_audit_engine import data_audit_engine
+    data_audit_engine._log_internal(db, user_system=actor, action=action, module="Legacy Claims Bridge",
+                                    correlation_id=f"{w.transition_id}:{w.id}", should_commit=False)
+
+
+def _locked_item(db: Session, w: LegacyWorkItemModel) -> LegacyWorkItemModel:
+    """Take the transition lock, then reread the item: every work action sees the latest state."""
+    item_id = w.id
+    _lock(db, db.get(LegacyTransitionModel, w.transition_id))
+    return db.get(LegacyWorkItemModel, item_id)
+
+
+def assignees(db: Session, t: LegacyTransitionModel) -> List[dict]:
+    """Who a task can be assigned to: the clinic's responsible teams (ownership policy, defaults and the
+    owners named in its evidence) and the clinic's active users who can work legacy claims."""
+    from app.models.user import User, UserRole
+    teams = set(DEFAULT_OWNERS.values()) | set(_ownership(t).values()) | {
+        o for (o,) in db.query(LegacyWorkItemModel.owner).filter(LegacyWorkItemModel.transition_id == t.id).all() if o}
+    writers = {UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value,
+               UserRole.CLINIC_MANAGER.value}
+    users = (db.query(User).filter(User.clinic_id == t.clinic_id, User.is_active.is_(True), User.role.in_(writers))
+             .order_by(User.email).all())
+    return ([{"value": name, "label": name, "kind": "team"} for name in sorted(teams)]
+            + [{"value": u.email, "label": f"{u.full_name or u.email} ({u.email})", "kind": "user"}
+               for u in users if u.email])
+
+
+def assign_work_item(db: Session, w: LegacyWorkItemModel, assignee: str, actor: str, note: Optional[str] = None,
+                     now: Optional[datetime] = None) -> LegacyWorkItemModel:
+    now = now or _utcnow()
+    w = _locked_item(db, w)
+    t = db.get(LegacyTransitionModel, w.transition_id)
+    if assignee not in {a["value"] for a in assignees(db, t)}:
+        db.rollback()
+        raise BridgeError(422, "Assign the task to one of the clinic's teams or users.")
+    if w.state in ("RESOLVED", "CLOSED"):
+        state = w.state
+        db.rollback()
+        raise BridgeError(409, {"message": "This item is already closed.", "state": state})
+    previous = w.assigned_to
+    w.assigned_to = assignee
+    _event(db, w, "ASSIGNED", w.state, actor, now, w.last_assessment_id,
+           f"Assigned to {assignee}" + (f" (was {previous})" if previous else "") + (f": {note}" if note else ""))
+    _audit(db, actor, "LEGACY_WORK_ITEM_ASSIGNED", w)
+    db.commit()
+    db.refresh(w)
+    return w
+
+
+def note_work_item(db: Session, w: LegacyWorkItemModel, note: str, actor: str,
+                   now: Optional[datetime] = None) -> LegacyWorkItemModel:
+    now = now or _utcnow()
+    w = _locked_item(db, w)
+    _event(db, w, "NOTE", w.state, actor, now, w.last_assessment_id, note)
+    _audit(db, actor, "LEGACY_WORK_ITEM_NOTE", w)
+    db.commit()
+    db.refresh(w)
+    return w
+
+
+def release_work_item(db: Session, w: LegacyWorkItemModel, actor: str, may_release_others: bool,
+                      note: Optional[str] = None, now: Optional[datetime] = None) -> LegacyWorkItemModel:
+    """Give an accepted task back: ACCEPTED -> OPEN, by the reviewer who accepted it or an administrator.
+    The acceptance stays in the history."""
+    now = now or _utcnow()
+    w = _locked_item(db, w)
+    if w.state != "ACCEPTED":
+        state = w.state
+        db.rollback()
+        raise BridgeError(409, {"message": "Only an accepted item can be released.", "state": state})
+    if w.accepted_by != actor and not may_release_others:
+        db.rollback()
+        raise BridgeError(403, "Only the reviewer who accepted this item, or an administrator, can release it.")
+    w.state, w.accepted_by, w.accepted_at = "OPEN", None, None
+    _event(db, w, "RELEASED", "ACCEPTED", actor, now, w.last_assessment_id, note)
+    _audit(db, actor, "LEGACY_WORK_ITEM_RELEASED", w)
+    db.commit()
+    db.refresh(w)
+    return w
+
+
+OUTCOMES = ("collected", "written_off", "risk_accepted")
+
+
+def allowed_outcomes(w: LegacyWorkItemModel) -> List[str]:
+    """Collection and write-off close a denial only after the payer decided (financial closure stays
+    separate from the payer's decision); any open work can be closed by an accepted risk."""
+    if w.state in ("RESOLVED", "CLOSED"):
+        return []
+    return list(OUTCOMES) if w.code == "VERIFY_FINANCIAL_OUTCOME" else ["risk_accepted"]
+
+
+def _money(minor: int, currency: str) -> str:
+    return f"{currency} {minor / 100:,.2f}"
+
+
+def _outcome_proof(db: Session, t: LegacyTransitionModel, w: LegacyWorkItemModel, outcome: str) -> str:
+    """The ledger evidence a collection or write-off rests on, from the current assessment's records:
+    a movement on the denied claim line dated at or after the payer's decision (payer cash for a
+    collection; an approved adjustment with its approval for a write-off)."""
+    from app.services.legacy_bridge_evidence import _Evidence
+    a = current_assessment(db, t)
+    if a is None:
+        raise BridgeError(409, "There is no published assessment to prove the outcome from.")
+    ev = _Evidence(db, t, a)
+    denial = ev.data["denial"].get(w.item)
+    if denial is None:
+        raise BridgeError(409, "The denial is not in the current assessment.")
+    decided = [r for r in ev.data["appeal"].values() if r.data.denial == w.item and r.data.stage == "decided"]
+    if not decided:
+        raise BridgeError(409, "The payer has not decided yet; a decision comes before the financial outcome.")
+    since = min(r.effective for r in decided)
+    reason = "payer_cash" if outcome == "collected" else "approved_adjustment"
+    moves = [r for r in ev.data["movement"].values()
+             if r.data.line == denial.data.line and r.data.reason == reason and r.effective >= since
+             and (reason == "payer_cash" or r.data.link in ev.data["approval"])]
+    if not moves:
+        what = ("payer cash posted to this claim line" if outcome == "collected"
+                else "an approved adjustment, with its approval, on this claim line")
+        raise BridgeError(422, f"No evidence of {what} after the payer's decision.")
+    return "; ".join(f"{r.key} {_money(abs(r.data.minor), t.currency)} on {iso(r.effective)}"
+                     for r in sorted(moves, key=lambda r: r.key))
+
+
+def record_outcome(db: Session, w: LegacyWorkItemModel, outcome: str, actor: str, is_admin: bool,
+                   note: Optional[str] = None, now: Optional[datetime] = None) -> LegacyWorkItemModel:
+    """Close work with one of the separate outcomes. A collection or write-off must be proven by ledger
+    evidence; an accepted risk is a named administrator's decision with a reason and changes no
+    finding (the assessment still holds on the evidence)."""
+    now = now or _utcnow()
+    w = _locked_item(db, w)
+    t = db.get(LegacyTransitionModel, w.transition_id)
+    try:
+        if outcome not in OUTCOMES:
+            raise BridgeError(422, "Unknown outcome.")
+        if w.state in ("RESOLVED", "CLOSED"):
+            raise BridgeError(409, {"message": "This item is already closed.", "state": w.state, "outcome": w.outcome})
+        if outcome not in allowed_outcomes(w):
+            raise BridgeError(422, "A collection or write-off closes a denial only after the payer's decision.")
+        if outcome == "risk_accepted":
+            if not is_admin:
+                raise BridgeError(403, "Only an administrator can accept a risk.")
+            if not note:
+                raise BridgeError(422, "Give the reason for accepting the risk.")
+            proof = None
+        else:
+            proof = _outcome_proof(db, t, w, outcome)
+    except BridgeError:
+        db.rollback()
+        raise
+    previous = w.state
+    w.state, w.outcome, w.outcome_by, w.outcome_at = "CLOSED", outcome, actor, now
+    w.outcome_note = "; ".join(x for x in (note, f"Evidence: {proof}" if proof else None) if x)
+    _event(db, w, "OUTCOME", previous, actor, now, w.last_assessment_id,
+           f"{outcome.replace('_', ' ').capitalize()}" + (f": {w.outcome_note}" if w.outcome_note else ""))
+    _audit(db, actor, "LEGACY_WORK_ITEM_OUTCOME", w)
+    db.commit()
+    db.refresh(w)
+    return w
+
+
 def work_item_view(db: Session, w: LegacyWorkItemModel) -> dict:
     events = (db.query(LegacyWorkItemEventModel).filter(LegacyWorkItemEventModel.work_item_id == w.id)
               .order_by(LegacyWorkItemEventModel.at, LegacyWorkItemEventModel.id).all())
     links = json.loads(w.issues_json) if w.issues_json else []
-    return {"id": w.id, "kind": w.kind, "code": w.code, "item": w.item, "owner": w.owner, "state": w.state,
+    return {"id": w.id, "kind": w.kind, "code": w.code, "item": w.item, "owner": w.owner,
+            "assigned_to": w.assigned_to, "state": w.state, "priority": "high" if w.code in PRIORITY else "normal",
             "message": message(w.code),
             "issues": [{**i, "message": message(i["code"])} for i in links],
             "first_assessment_id": w.first_assessment_id,
             "last_assessment_id": w.last_assessment_id, "created_at": iso(w.created_at),
             "accepted_by": w.accepted_by, "accepted_at": iso(w.accepted_at), "note": w.note,
             "resolved_at": iso(w.resolved_at),
+            "outcome": w.outcome, "outcome_by": w.outcome_by, "outcome_at": iso(w.outcome_at),
+            "outcome_note": w.outcome_note, "allowed_outcomes": allowed_outcomes(w),
             "history": [{"event": e.event, "from_state": e.from_state, "to_state": e.to_state, "actor": e.actor,
                          "assessment_id": e.assessment_id, "note": e.note, "at": iso(e.at)} for e in events]}
+
+
+def set_hold_owners(db: Session, t: LegacyTransitionModel, hold_owners: Dict[str, str], actor: str) -> None:
+    """The clinic's ownership policy for hold investigations; the next publication routes by it."""
+    t.ownership_json = json.dumps(dict(sorted(hold_owners.items()))) if hold_owners else None
+    from app.services.data_audit_engine import data_audit_engine
+    data_audit_engine._log_internal(db, user_system=actor, action="LEGACY_OWNERSHIP_POLICY_SET",
+                                    module="Legacy Claims Bridge", correlation_id=t.id, should_commit=False)
+    db.commit()
 
 
 def transition_view(t: LegacyTransitionModel, latest: Optional[LegacyAssessmentModel] = None) -> dict:
@@ -515,6 +740,7 @@ def transition_view(t: LegacyTransitionModel, latest: Optional[LegacyAssessmentM
                        "archive": t.archive_route},
             "max_probe_age_days": t.max_probe_age_days, "origin": t.origin, "created_at": iso(t.created_at),
             "current_assessment_id": t.current_assessment_id,
+            "hold_owners": {**DEFAULT_OWNERS, **_ownership(t)},
             "latest_status": latest.status if latest else None,
             "latest_as_of": iso(latest.as_of) if latest else None}
 
@@ -536,8 +762,10 @@ def assessment_view(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentMo
         "last_received_at": iso(last_received[0]) if last_received else None,
         "issues": json.loads(a.issues_json),
         # Work follows the current published assessment only; an earlier or unsaved one has none.
-        "work_items": [work_item_view(db, w) for w in work_items(db, t)] if is_current else [],
+        "work_items": sorted((work_item_view(db, w) for w in work_items(db, t)),
+                             key=lambda v: (v["state"] in ("RESOLVED", "CLOSED"), v["priority"] != "high", v["id"])) if is_current else [],
         "evidence_count": len(json.loads(a.evidence_json)),
+        "evidence_ids": json.loads(a.evidence_json),
         "summary": json.loads(a.summary_json),
         "authority": "Review only. Sentinel does not post money, submit claims or end a subscription.",
     }
@@ -576,13 +804,60 @@ def store_exit_inventory(db: Session, raw: bytes, *, org_id: str, clinic_id: str
                                    subscription=inv.subscription, as_of=to_db(inv.as_of), digest=d,
                                    inventory_json=inv.model_dump_json(), received_at=now, received_by=actor)
     db.add(row)
-    db.commit()
+    try:
+        db.commit()
+    except exc.IntegrityError:   # the same inventory delivered twice at once: keep the stored one
+        db.rollback()
+        return db.query(LegacyExitInventoryModel).filter(
+            LegacyExitInventoryModel.clinic_id == clinic_id, LegacyExitInventoryModel.subscription == inv.subscription,
+            LegacyExitInventoryModel.digest == d).one()
     db.refresh(row)
     return row
 
 
+SIGNOFF_ROLES = ("finance", "revenue_cycle", "records", "contract_owner")
+
+
+def exit_signoffs(db: Session, row: LegacyExitInventoryModel) -> List[LegacyExitSignoffModel]:
+    return (db.query(LegacyExitSignoffModel).filter(LegacyExitSignoffModel.inventory_id == row.id)
+            .order_by(LegacyExitSignoffModel.signed_at, LegacyExitSignoffModel.id).all())
+
+
+def sign_exit(db: Session, row: LegacyExitInventoryModel, role: str, actor: str, note: Optional[str] = None,
+              now: Optional[datetime] = None) -> LegacyExitSignoffModel:
+    """One named sign-off for a role. It requests nothing outside Sentinel; the review only reports
+    whether every required sign-off is present."""
+    if role not in SIGNOFF_ROLES:
+        raise BridgeError(422, "Unknown sign-off role.")
+    inv = ExitInventory.model_validate_json(row.inventory_json)
+    if role in inv.signoffs or any(s.role == role for s in exit_signoffs(db, row)):
+        raise BridgeError(409, "This role has already signed off this inventory.")
+    s = LegacyExitSignoffModel(inventory_id=row.id, role=role,
+                               decision_ref=f"signoff-{role.replace('_', '-')}-{uuid.uuid4().hex[:12]}",
+                               signed_by=actor, signed_at=now or _utcnow(), note=note)
+    from app.services.data_audit_engine import data_audit_engine
+    try:
+        # The unique (inventory, role) key decides between two reviewers signing at once; the audit row is
+        # written only for the sign-off that was stored.
+        db.add(s)
+        db.flush()
+        data_audit_engine._log_internal(db, user_system=actor, action="LEGACY_EXIT_SIGNOFF",
+                                        module="Legacy Claims Bridge", correlation_id=f"{row.id}:{role}",
+                                        should_commit=False)
+        db.commit()
+    except exc.IntegrityError:
+        db.rollback()
+        raise BridgeError(409, "This role has already signed off this inventory.")
+    db.refresh(s)
+    return s
+
+
 def exit_review(db: Session, row: LegacyExitInventoryModel, now: Optional[datetime] = None) -> dict:
     inv = ExitInventory.model_validate_json(row.inventory_json)
+    screen = exit_signoffs(db, row)
+    signed = {s.role: s for s in screen}
+    if screen:   # the inventory's own sign-offs plus those given on the screen
+        inv = inv.model_copy(update={"signoffs": {**inv.signoffs, **{s.role: s.decision_ref for s in screen}}})
     packets, scopes = [], []
     for s in inv.required_scopes:
         sd = s.model_dump()
@@ -609,6 +884,11 @@ def exit_review(db: Session, row: LegacyExitInventoryModel, now: Optional[dateti
         "scopes": scopes,
         "dependencies": [d.model_dump(mode="json") for d in inv.dependencies],
         "signoffs": sorted(inv.signoffs),
+        "signoff_details": [{"role": r, "decision_ref": inv.signoffs[r],
+                             "signed_by": signed[r].signed_by if r in signed else None,
+                             "signed_at": iso(signed[r].signed_at) if r in signed else None,
+                             "given_on_screen": r in signed} for r in sorted(inv.signoffs)],
+        "missing_signoffs": [r for r in SIGNOFF_ROLES if r not in inv.signoffs],
         "savings": {"currency": inv.currency, "avoided": inv.avoided_minor, "incremental": inv.incremental_minor,
                     "net": inv.avoided_minor - inv.incremental_minor},
         "authority": "A positive review requests human sign-off; it never cancels a license.",
@@ -640,10 +920,23 @@ def _clinic_org(db: Session, clinic_id: str) -> str:
     return row[0] if row and row[0] else clinic_id
 
 
+def synthetic_step_minutes() -> int:
+    from app.core.config import settings
+    value = getattr(settings, "LEGACY_SYNTHETIC_STEP_MINUTES", None)
+    return int(value) if value else 30
+
+
 def deliver_synthetic(db: Session, clinic_id: str, now: Optional[datetime] = None) -> Optional[str]:
-    """Synthetic mode only: the eight scenario sources deliver their pages through stage_page (the same
-    path as the API), each with its own completeness seal, and the contract owner delivers the
-    subscription inventory. Idempotent: on restart every page is ALREADY_STAGED."""
+    """Synthetic mode only. The eight scenario sources deliver through stage_page (the same path as the
+    API) and every delivery is published, exactly as real sources and a reviewer would:
+
+    - delivery 1: the auditor's scenario, sealed through its cutoff, plus the subscription inventory;
+    - deliveries 2..: one run-off step every LEGACY_SYNTHETIC_STEP_MINUTES (default 30) after the
+      transition was opened (scenario.STEPS), each source re-stating its population with a fresh seal
+      and the control source a new closing snapshot.
+
+    Only steps whose time has come are delivered, each received and published at its own time, so the
+    history fills in order. Idempotent: delivered pages come back ALREADY_STAGED and are skipped."""
     from app.core.config import get_deployment_currency
     from app.legacy_bridge import scenario
     from app.legacy_bridge.assessment import digest_rows
@@ -668,26 +961,60 @@ def deliver_synthetic(db: Session, clinic_id: str, now: Optional[datetime] = Non
                 "connector": f"synthetic-{role}", "role": role, "valid_from": iso(cutover - timedelta(days=30)),
                 "valid_until": iso(cutover + timedelta(days=365))})), SYNTHETIC_ACTOR)
     scope = scope_of(t)
-    end = scenario.instants(t.cutover)["end"]
-    by_role = scenario.records_by_role(t.cutover)
-    for b in bindings(db, t):
-        if not b.connector.startswith("synthetic-"):
-            continue
-        rows = by_role.get(b.role, [])
-        sealed = [Record.model_validate_json(json.dumps({**r, "scope": scope, "connector": b.connector}))
-                  for r in rows]
-        seal = IncomingSeal(through=end.replace(tzinfo=timezone.utc), unique_rows=len(sealed),
-                            digest=digest_rows(sealed), receipt=f"seal-{b.role}")
-        page = PageIn.model_validate_json(json.dumps({
-            "binding_id": b.id, "resource": "export", "token": f"synthetic-{b.role}-1",
-            "records": rows, "seal": seal.model_dump(mode="json")}))
-        try:
-            stage_page(db, t, page, SYNTHETIC_ACTOR, now)
-        except BridgeError as e:
-            if e.status != 409:
-                raise
-    inventory = scenario.exit_inventory(scope, t.cutover, f"legacy-billing-{clinic_id.lower()}")
-    store_exit_inventory(db, json.dumps(inventory).encode(), org_id=t.org_id, clinic_id=clinic_id,
-                         actor=SYNTHETIC_ACTOR, now=now)
-    publish_assessment(db, t, SYNTHETIC_ACTOR, now=now)
-    return t.id
+    tid, cutover, created_at, org_id = t.id, t.cutover, t.created_at, t.org_id
+    end = scenario.instants(cutover)["end"]
+    sources = {b.role: (b.id, b.connector) for b in bindings(db, t) if b.connector.startswith("synthetic-")}
+    staged = {tok for (tok,) in db.query(LegacyPageModel.token).filter(
+        LegacyPageModel.transition_id == tid, LegacyPageModel.connector == "synthetic-control").all()}
+
+    def deliver(n: int, at: datetime, new_by_role: dict, received: datetime) -> bool:
+        """Delivery n of every source at instant `at`; False when it was delivered before. Delivery 1
+        is the scenario on the `export` stream; later deliveries use the sources' own `feed` stream, so
+        a file a reviewer uploads to the same source never blocks them. Each seal states the source's
+        whole population at `at` (what it holds, including such uploads, plus this delivery), the same
+        rule as a completeness statement made with an upload."""
+        from app.services.legacy_bridge_uploads import _population
+
+        def feed_head(connector):
+            head = _read_head(db, db.get(LegacyTransitionModel, tid), connector, "feed")
+            return head.head_token if head else None
+        if f"synthetic-control-{n}" in staged:
+            return False
+        for role, (binding_id, connector) in sources.items():
+            new = new_by_role.get(role, [])
+            records = [Record.model_validate_json(json.dumps({**r, "scope": scope, "connector": connector})) for r in new]
+            if n == 1:
+                sealed = records
+            else:
+                sealed = _population(db, db.get(LegacyTransitionModel, tid),
+                                     db.get(LegacySourceBindingModel, binding_id), records, at)
+            seal = IncomingSeal(through=at.replace(tzinfo=timezone.utc), unique_rows=len(sealed),
+                                digest=digest_rows(sealed), receipt=f"seal-{role}" + (f"-{n}" if n > 1 else ""))
+            page = PageIn.model_validate_json(json.dumps({
+                "binding_id": binding_id, "resource": "export" if n == 1 else "feed", "token": f"synthetic-{role}-{n}",
+                "previous": None if n == 1 else feed_head(connector),
+                "records": new, "seal": seal.model_dump(mode="json")}))
+            try:
+                stage_page(db, db.get(LegacyTransitionModel, tid), page, SYNTHETIC_ACTOR, received)
+            except BridgeError as e:
+                db.rollback()
+                if e.status != 409:
+                    raise
+        return True
+
+    if deliver(1, end, scenario.records_by_role(cutover), now):
+        inventory = scenario.exit_inventory(scope, cutover, f"legacy-billing-{clinic_id.lower()}")
+        store_exit_inventory(db, json.dumps(inventory).encode(), org_id=org_id, clinic_id=clinic_id,
+                             actor=SYNTHETIC_ACTOR, now=now)
+        publish_assessment(db, db.get(LegacyTransitionModel, tid), SYNTHETIC_ACTOR, now=now)
+    anchor = max(end, created_at)
+    step = timedelta(minutes=synthetic_step_minutes())
+    for k in range(1, len(scenario.STEPS) + 1):
+        at = (anchor + k * step).replace(microsecond=0)
+        if at > now:
+            break
+        records = scenario.step_records(cutover, k, at)
+        records["control"] = records.get("control", []) + scenario.closing_snapshot(k, at)
+        if deliver(k + 1, at, records, at):
+            publish_assessment(db, db.get(LegacyTransitionModel, tid), SYNTHETIC_ACTOR, now=at)
+    return tid

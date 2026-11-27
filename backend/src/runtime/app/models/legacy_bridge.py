@@ -10,7 +10,7 @@ subscription from these tables: assessments and work items are review material f
 """
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 
 from app.db.database import Base
 
@@ -44,6 +44,9 @@ class LegacyTransitionModel(Base):
     ownership_json = Column(Text, nullable=True)
     # The published assessment that drives work items, ordered by evidence cutoff then revision.
     current_assessment_id = Column(String(40), nullable=True)
+    # Bumped by every publication and work item acceptance as their first statement: the row lock
+    # serializes concurrent writers of one transition's assessments and work items.
+    lock_version = Column(Integer, nullable=False, default=0)
     created_by = Column(String(160), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -141,12 +144,14 @@ class LegacyAssessmentModel(Base):
     Revision numbers successive publications for the same evidence cutoff (as_of)."""
     __tablename__ = "legacy_assessments"
     __table_args__ = (UniqueConstraint("transition_id", "input_digest", name="uq_legacy_assessment_input"),
-                      UniqueConstraint("transition_id", "as_of", "revision", name="uq_legacy_assessment_revision"))
+                      Index("uq_legacy_assessment_revision", "transition_id", "as_of", "revision", unique=True))
 
     id = Column(String(40), primary_key=True)
     transition_id = Column(String(40), ForeignKey("legacy_transitions.id"), nullable=False, index=True)
     as_of = Column(DateTime, nullable=False)
     revision = Column(Integer, nullable=False, default=1)
+    # True when every source's completeness seal is through as_of; only sealed assessments become current.
+    sealed = Column(Boolean, nullable=False, default=False)
     status = Column(String(24), nullable=False)
     input_digest = Column(String(64), nullable=False)
     policy_version = Column(String(48), nullable=False)
@@ -173,7 +178,15 @@ class LegacyWorkItemModel(Base):
     code = Column(String(48), nullable=False)
     item = Column(String(160), nullable=False)
     issues_json = Column(Text, nullable=True)                 # hold: linked [{"code", "item"}]
-    owner = Column(String(96), nullable=True)
+    owner = Column(String(96), nullable=True)                 # responsible team from evidence or policy
+    assigned_to = Column(String(160), nullable=True)          # a person or team a reviewer assigned
+    # How the work ended, kept separate (INTEGRATION.md slice 4): collected | written_off (both proven by
+    # ledger evidence after the payer's decision) | risk_accepted (a named administrator's decision) |
+    # resolved_by_evidence (later evidence cleared it). A CLOSED item is not reopened by publication.
+    outcome = Column(String(24), nullable=True)
+    outcome_by = Column(String(160), nullable=True)
+    outcome_at = Column(DateTime, nullable=True)
+    outcome_note = Column(Text, nullable=True)
     state = Column(String(16), nullable=False, default="OPEN")  # OPEN | ACCEPTED | RESOLVED
     first_assessment_id = Column(String(40), nullable=False)
     last_assessment_id = Column(String(40), nullable=False)
@@ -191,13 +204,29 @@ class LegacyWorkItemEventModel(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     work_item_id = Column(Integer, ForeignKey("legacy_work_items.id"), nullable=False, index=True)
     transition_id = Column(String(40), ForeignKey("legacy_transitions.id"), nullable=False, index=True)
-    event = Column(String(16), nullable=False)               # OPENED | ACCEPTED | RESOLVED | REOPENED
+    # OPENED | ACCEPTED | RESOLVED | REOPENED | ASSIGNED | NOTE | RELEASED | OUTCOME
+    event = Column(String(16), nullable=False)
     from_state = Column(String(16), nullable=True)
     to_state = Column(String(16), nullable=False)
     actor = Column(String(160), nullable=False)
     assessment_id = Column(String(40), nullable=True)
     note = Column(Text, nullable=True)
     at = Column(DateTime, nullable=False)
+
+
+class LegacyExitSignoffModel(Base):
+    """A sign-off given on the screen for one role of a subscription inventory, by a named user. It
+    joins the inventory's own sign-offs in the exit review; the inventory itself is never edited."""
+    __tablename__ = "legacy_exit_signoffs"
+    __table_args__ = (UniqueConstraint("inventory_id", "role", name="uq_legacy_exit_signoff"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    inventory_id = Column(String(40), ForeignKey("legacy_exit_inventories.id"), nullable=False, index=True)
+    role = Column(String(24), nullable=False)        # finance | revenue_cycle | records | contract_owner
+    decision_ref = Column(String(96), nullable=False)
+    signed_by = Column(String(160), nullable=False)
+    signed_at = Column(DateTime, nullable=False)
+    note = Column(Text, nullable=True)
 
 
 class LegacyExitInventoryModel(Base):

@@ -5,7 +5,7 @@ settlement and ledger posting are reported separately: each answers a different 
 """
 from collections import defaultdict
 
-from .assessment import STAGES, index_records, line_name
+from .assessment import STAGES, index_records, line_name, positions, trace_matches
 from .contracts import Batch, Context
 
 BUCKETS = ("payer_ar", "patient_ar", "credit", "unapplied", "unbilled", "closed_watch")
@@ -19,21 +19,28 @@ def summarize(ctx: Context, batch: Batch, result) -> dict:
     data, _refs = index_records(ctx, batch.records, set())
     bindings = {b.connector: b.role for b in ctx.bindings}
 
-    def totals(kind):
+    # Displayed balances come only from validated unique positions. A duplicated, conflicting or
+    # invalid position is left out of its bucket total, the bucket is marked unverified and its rows
+    # are listed, so a held position never inflates a figure.
+    unverified = {}
+
+    def totals(kind, at):
         out = {b: 0 for b in BUCKETS}
-        for r in data[kind].values():
-            out[r.data.bucket] += r.data.minor
+        valid, disputed = positions(data[kind], at)
+        for (_line, bucket), minor in valid.items():
+            out[bucket] += minor
+        for (line, bucket), rows in sorted(disputed.items(), key=lambda kv: (line_name(kv[0][0]), kv[0][1])):
+            unverified.setdefault(kind, {}).setdefault(bucket, []).extend(
+                {"key": r.key, "line": line_name(line), "minor": r.data.minor, "effective": _iso(r.effective)}
+                for r in sorted(rows, key=lambda x: x.key))
         return out
 
     legacy_lines = {r.data.line for r in data["control"].values()}
     new_lines = {r.data.line for r in data["new_line"].values()}
 
-    # Each bank record counts once, however many advices name its trace. A deposit is matched only
-    # when exactly one cash advice and exactly one deposit share the trace and the amounts agree.
-    deposits = defaultdict(list)
-    for r in data["deposit"].values():
-        deposits[r.data.trace].append(r.data.minor)
-    cash_advices = defaultdict(list)
+    # Each bank record counts once as observed. Confirmed cash uses the same trace eligibility as the
+    # rules (trace_matches): an ambiguous trace, cash or noncash, stays unmatched until reconciled.
+    matches = trace_matches(data)
     advised = adjustments = noncash = 0
     for r in data["advice"].values():
         a = r.data
@@ -41,13 +48,10 @@ def summarize(ctx: Context, batch: Batch, result) -> dict:
             noncash += 1
             continue
         advised += a.net
-        cash_advices[a.trace].append(a.net)
         adjustments += sum(p.minor for p in a.parts if p.type == "provider_adjustment")
-    observed = sum(sum(v) for v in deposits.values())
-    matched = sum(v[0] for trace, v in deposits.items()
-                  if len(v) == 1 and cash_advices.get(trace) == [v[0]] and v[0] != 0)
-    advice_traces = {r.data.trace for r in data["advice"].values()}
-    unapplied = sum(sum(v) for trace, v in deposits.items() if trace not in advice_traces)
+    observed = sum(r.data.minor for r in data["deposit"].values())
+    matched = sum(d[0].data.minor for d, _a, eligible in matches.values() if eligible)
+    unapplied = sum(r.data.minor for d, a, _ok in matches.values() if not a for r in d)
     posted = sum(r.data.component.minor for r in data["posting"].values())
     unproven = {i.item for i in result.issues if i.code == "COVERAGE_UNPROVEN"}
 
@@ -103,9 +107,10 @@ def summarize(ctx: Context, batch: Batch, result) -> dict:
     return {
         "currency": ctx.scope.currency,
         "lines": {"legacy": len(legacy_lines), "new": len(new_lines)},
-        "control": totals("control"),
-        "opening": totals("opening"),
-        "closing": totals("closing"),
+        "control": totals("control", ctx.cutover),
+        "opening": totals("opening", ctx.cutover),
+        "closing": totals("closing", ctx.snapshot_at),
+        "unverified": unverified,
         # bank_* amounts are None when no bank evidence was delivered (unknown, not zero); with a
         # delivered but unproven bank source the amounts are measured and bank_coverage qualifies them.
         "cash": {"advised": advised,
@@ -121,4 +126,8 @@ def summarize(ctx: Context, batch: Batch, result) -> dict:
         "denials": denials,
         "routes": routes,
         "sources": source_rows,
+        # The control population this assessment used: signed controls and opening at the cutover,
+        # the closing snapshot at snapshot_at (record keys, as delivered).
+        "control_ids": {kind: sorted(data[kind]) for kind in ("control", "opening", "closing")},
+        "snapshot_at": _iso(ctx.snapshot_at),
     }

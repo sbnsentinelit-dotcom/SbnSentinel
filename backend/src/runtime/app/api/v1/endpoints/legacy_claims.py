@@ -11,15 +11,21 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.database import get_db
-from app.legacy_bridge.intake import BindingIn, PageIn, TransitionIn
-from app.models.legacy_bridge import LegacyExitInventoryModel, LegacyTransitionModel, LegacyWorkItemModel
+from app.legacy_bridge import csv_intake
+from app.legacy_bridge.intake import BindingIn, OwnersIn, PageIn, TransitionIn
+from app.models.legacy_bridge import (
+    LegacyAssessmentModel, LegacyExitInventoryModel, LegacyTransitionModel, LegacyWorkItemModel,
+)
 from app.models.user import User, UserRole
+from app.services import legacy_bridge_evidence as evidence
 from app.services import legacy_bridge_service as svc
+from app.services import legacy_bridge_uploads as uploads
 
 router = APIRouter()
 
@@ -104,6 +110,7 @@ def bridge_status(current_user: User = Depends(get_current_user)):
             "can_view": enabled and current_user.role in READ_ROLES,
             "can_deliver": enabled and current_user.role in WRITE_ROLES,
             "can_configure": enabled and current_user.role in ADMIN_ROLES,
+            "me": _actor(current_user),
             "stage": "V3 research candidate - review only"}
 
 
@@ -210,6 +217,117 @@ def publish_assessment(transition_id: str, db: Session = Depends(get_db), user: 
     return svc.assessment_view(db, t, a)
 
 
+def _assessment(db: Session, t: LegacyTransitionModel, assessment_id: str) -> LegacyAssessmentModel:
+    a = db.query(LegacyAssessmentModel).filter(LegacyAssessmentModel.id == assessment_id,
+                                               LegacyAssessmentModel.transition_id == t.id).first()
+    if not a:
+        raise HTTPException(status_code=404, detail="Assessment not found for this transition.")
+    return a
+
+
+@router.get("/transitions/{transition_id}/pulse")
+def transition_pulse(transition_id: str, db: Session = Depends(get_db), user: User = Depends(_reader)):
+    """A small fingerprint (current assessment, last delivery, last work change). The screen polls it and
+    re-reads its panels only when it changes."""
+    return evidence.pulse(db, _transition(db, user, transition_id))
+
+
+@router.get("/transitions/{transition_id}/evidence")
+def figure_evidence(transition_id: str, figure: str = Query(..., max_length=200),
+                    assessment_id: Optional[str] = Query(None), db: Session = Depends(get_db),
+                    user: User = Depends(_reader)):
+    """The stored records behind one figure of an assessment (default: the current one), with their source
+    role, delivered page, who delivered it and the evidence custody row."""
+    t = _transition(db, user, transition_id)
+    a = _assessment(db, t, assessment_id) if assessment_id else svc.current_assessment(db, t)
+    if a is None:
+        raise HTTPException(status_code=404, detail="No published assessment yet.")
+    try:
+        return evidence.figure_evidence(db, t, a, figure)
+    except svc.BridgeError as e:
+        _fail(e)
+    finally:
+        db.rollback()
+
+
+@router.get("/transitions/{transition_id}/assessments/{assessment_id}")
+def get_assessment_by_id(transition_id: str, assessment_id: str, db: Session = Depends(get_db),
+                         user: User = Depends(_reader)):
+    """One stored assessment, read only (an earlier one shows no live work items)."""
+    t = _transition(db, user, transition_id)
+    return svc.assessment_view(db, t, _assessment(db, t, assessment_id))
+
+
+@router.get("/transitions/{transition_id}/assessments/{assessment_id}/compare")
+def compare_assessments(transition_id: str, assessment_id: str, with_: str = Query("current", alias="with"),
+                        db: Session = Depends(get_db), user: User = Depends(_reader)):
+    """What changed from this assessment to another (default: the current one)."""
+    t = _transition(db, user, transition_id)
+    a = _assessment(db, t, assessment_id)
+    b = svc.current_assessment(db, t) if with_ == "current" else _assessment(db, t, with_)
+    if b is None:
+        raise HTTPException(status_code=404, detail="No current assessment to compare with.")
+    return evidence.compare(a, b)
+
+
+@router.get("/templates/{role}")
+def csv_template(role: str, user: User = Depends(_reader)):
+    """The CSV template of one evidence source (header and example rows)."""
+    if role not in csv_intake.ROLE_KINDS:
+        raise HTTPException(status_code=404, detail="Unknown evidence source.")
+    return PlainTextResponse(csv_intake.template(role), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="legacy-{role}-template.csv"'})
+
+
+@router.get("/transitions/{transition_id}/roles")
+def list_roles(transition_id: str, db: Session = Depends(get_db), user: User = Depends(_reader)):
+    """Every evidence role with its bound sources; an administrator binds the missing ones."""
+    return uploads.source_roles(db, _transition(db, user, transition_id))
+
+
+@router.put("/transitions/{transition_id}/owners")
+async def set_owners(transition_id: str, request: Request, db: Session = Depends(get_db), user: User = Depends(_writer)):
+    """The clinic's responsible team for each kind of hold investigation (used from the next publication)."""
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Only administrators can change the ownership policy.")
+    t = _transition(db, user, transition_id)
+    data = await _body(request, OwnersIn)
+    svc.set_hold_owners(db, t, dict(data.hold_owners), _actor(user))
+    return svc.transition_view(t, svc.current_assessment(db, t))
+
+
+@router.post("/transitions/{transition_id}/uploads/preview")
+def preview_upload(transition_id: str, binding_id: int = Body(..., embed=True), content: str = Body(..., embed=True),
+                   db: Session = Depends(get_db), user: User = Depends(_writer)):
+    """Read a CSV export and say what would be stored; nothing is stored."""
+    t = _transition(db, user, transition_id)
+    try:
+        return uploads.preview(db, t, binding_id, content)
+    except svc.BridgeError as e:
+        _fail(e)
+    finally:
+        db.rollback()
+
+
+@router.post("/transitions/{transition_id}/uploads")
+def upload_csv(transition_id: str, binding_id: int = Body(..., embed=True), content: str = Body(..., embed=True),
+               filename: str = Body("export.csv", embed=True), complete_through: Optional[str] = Body(None, embed=True),
+               db: Session = Depends(get_db), user: User = Depends(_writer)):
+    """Store a CSV export as the source's next page. With complete_through the user states the file
+    completes the source's export through that instant; the statement is recorded in their name."""
+    t = _transition(db, user, transition_id)
+    try:
+        return uploads.upload(db, t, binding_id, content, filename, _actor(user), _parse_instant(complete_through))
+    except svc.BridgeError as e:
+        db.rollback()
+        _fail(e)
+
+
+@router.get("/transitions/{transition_id}/assignees")
+def list_assignees(transition_id: str, db: Session = Depends(get_db), user: User = Depends(_writer)):
+    return svc.assignees(db, _transition(db, user, transition_id))
+
+
 @router.get("/transitions/{transition_id}/assessments")
 def list_assessments(transition_id: str, limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db),
                      user: User = Depends(_reader)):
@@ -217,15 +335,86 @@ def list_assessments(transition_id: str, limit: int = Query(20, ge=1, le=100), d
     return svc.assessment_history(db, t, limit)
 
 
-@router.post("/work-items/{item_id}/accept")
-def accept_work_item(item_id: int, note: Optional[str] = Body(None, embed=True), db: Session = Depends(get_db),
-                     user: User = Depends(_writer)):
+def _work_item(db: Session, user: User, item_id: int) -> LegacyWorkItemModel:
     w = db.query(LegacyWorkItemModel).filter(LegacyWorkItemModel.id == item_id).first()
     if not w:
         raise HTTPException(status_code=404, detail="Work item not found.")
-    _transition(db, user, w.transition_id)
+    _transition(db, user, w.transition_id)        # scope check
+    return w
+
+
+def _text(value: Optional[str], name: str, required: bool) -> Optional[str]:
+    value = (value or "").strip()
+    if required and not value:
+        raise HTTPException(status_code=422, detail=f"{name} is required.")
+    if len(value) > 2000:
+        raise HTTPException(status_code=422, detail=f"{name} is too long (2000 characters at most).")
+    return value or None
+
+
+@router.get("/work-items/{item_id}")
+def get_work_item(item_id: int, db: Session = Depends(get_db), user: User = Depends(_reader)):
+    """A task with its timeline and the records behind it in the current assessment."""
+    w = _work_item(db, user, item_id)
+    t = db.get(LegacyTransitionModel, w.transition_id)
     try:
-        return svc.work_item_view(db, svc.accept_work_item(db, w, _actor(user), (note or "").strip() or None))
+        return {**svc.work_item_view(db, w),
+                "evidence": evidence.work_item_evidence(db, t, svc.current_assessment(db, t), w)}
+    finally:
+        db.rollback()
+
+
+@router.post("/work-items/{item_id}/assign")
+def assign_work_item(item_id: int, assignee: str = Body(..., embed=True), note: Optional[str] = Body(None, embed=True),
+                     db: Session = Depends(get_db), user: User = Depends(_writer)):
+    w = _work_item(db, user, item_id)
+    try:
+        return svc.work_item_view(db, svc.assign_work_item(db, w, assignee.strip(), _actor(user),
+                                                           _text(note, "Note", False)))
+    except svc.BridgeError as e:
+        _fail(e)
+
+
+@router.post("/work-items/{item_id}/notes")
+def add_work_item_note(item_id: int, note: str = Body(..., embed=True), db: Session = Depends(get_db),
+                       user: User = Depends(_writer)):
+    w = _work_item(db, user, item_id)
+    try:
+        return svc.work_item_view(db, svc.note_work_item(db, w, _text(note, "Note", True), _actor(user)))
+    except svc.BridgeError as e:
+        _fail(e)
+
+
+@router.post("/work-items/{item_id}/release")
+def release_work_item(item_id: int, note: Optional[str] = Body(None, embed=True), db: Session = Depends(get_db),
+                      user: User = Depends(_writer)):
+    w = _work_item(db, user, item_id)
+    try:
+        return svc.work_item_view(db, svc.release_work_item(db, w, _actor(user), user.role in ADMIN_ROLES,
+                                                            _text(note, "Note", False)))
+    except svc.BridgeError as e:
+        _fail(e)
+
+
+@router.post("/work-items/{item_id}/outcome")
+def record_work_item_outcome(item_id: int, outcome: str = Body(..., embed=True), note: Optional[str] = Body(None, embed=True),
+                             db: Session = Depends(get_db), user: User = Depends(_writer)):
+    """Close work with a separate outcome: collected or written_off (proven by ledger evidence after the
+    payer's decision) or risk_accepted (an administrator's decision with a reason)."""
+    w = _work_item(db, user, item_id)
+    try:
+        return svc.work_item_view(db, svc.record_outcome(db, w, outcome, _actor(user), user.role in ADMIN_ROLES,
+                                                         _text(note, "Note", False)))
+    except svc.BridgeError as e:
+        _fail(e)
+
+
+@router.post("/work-items/{item_id}/accept")
+def accept_work_item(item_id: int, note: Optional[str] = Body(None, embed=True), db: Session = Depends(get_db),
+                     user: User = Depends(_writer)):
+    w = _work_item(db, user, item_id)
+    try:
+        return svc.work_item_view(db, svc.accept_work_item(db, w, _actor(user), _text(note, "Note", False)))
     except svc.BridgeError as e:
         _fail(e)
 
@@ -260,6 +449,24 @@ async def deliver_exit_inventory(request: Request, db: Session = Depends(get_db)
     except svc.BridgeError as e:
         _fail(e)
     return {"inventory_id": row.id, "subscription": row.subscription, "as_of": svc.iso(row.as_of)}
+
+
+@router.post("/exit-inventories/{inventory_id}/signoffs")
+def sign_exit_inventory(inventory_id: str, role: str = Body(..., embed=True), note: Optional[str] = Body(None, embed=True),
+                        db: Session = Depends(get_db), user: User = Depends(_writer)):
+    """A named sign-off for one role (finance, revenue_cycle, records, contract_owner)."""
+    scope = _inventory_scope(user)
+    q = db.query(LegacyExitInventoryModel).filter(LegacyExitInventoryModel.id == inventory_id)
+    if scope is not None:
+        q = q.filter(LegacyExitInventoryModel.clinic_id.in_(scope))
+    row = q.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Inventory not found in your scope.")
+    try:
+        svc.sign_exit(db, row, role, _actor(user), _text(note, "Note", False))
+    except svc.BridgeError as e:
+        _fail(e)
+    return svc.exit_review(db, row)
 
 
 @router.get("/exit-inventories/{inventory_id}/review")

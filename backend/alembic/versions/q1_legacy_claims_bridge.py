@@ -1,7 +1,7 @@
 """q1_legacy_claims_bridge
 
 Legacy Claims Continuity Bridge (V3 candidate): transitions, bound sources, stream heads, received
-pages, normalized records, completeness seals, versioned assessments, work items with their event history and subscription
+pages, normalized records, completeness seals, versioned assessments, work items and subscription
 exit inventories. Additive only; no existing table changes.
 
 Revision ID: q1_legacy_claims_bridge
@@ -42,8 +42,6 @@ def _tables():
             sa.Column("max_probe_age_days", sa.Integer(), nullable=False),
             sa.Column("label", S(160), nullable=True),
             sa.Column("origin", S(16), nullable=False),
-            sa.Column("ownership_json", sa.Text(), nullable=True),
-            sa.Column("current_assessment_id", S(40), nullable=True),
             sa.Column("created_by", S(160), nullable=False),
             sa.Column("created_at", DT(), nullable=False),
             sa.UniqueConstraint("deployment", "org_id", "clinic_id", "facility", "payee", "payer", "currency",
@@ -118,7 +116,6 @@ def _tables():
             sa.Column("id", S(40), primary_key=True),
             sa.Column("transition_id", S(40), sa.ForeignKey(T), nullable=False),
             sa.Column("as_of", DT(), nullable=False),
-            sa.Column("revision", sa.Integer(), nullable=False),
             sa.Column("status", S(24), nullable=False),
             sa.Column("input_digest", S(64), nullable=False),
             sa.Column("policy_version", S(48), nullable=False),
@@ -132,15 +129,12 @@ def _tables():
             sa.Column("computed_at", DT(), nullable=False),
             sa.Column("computed_by", S(160), nullable=False),
             sa.UniqueConstraint("transition_id", "input_digest", name="uq_legacy_assessment_input"),
-            sa.UniqueConstraint("transition_id", "as_of", "revision", name="uq_legacy_assessment_revision"),
         ], ["transition_id"]),
         ("legacy_work_items", [
             sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
             sa.Column("transition_id", S(40), sa.ForeignKey(T), nullable=False),
-            sa.Column("kind", S(16), nullable=False),
             sa.Column("code", S(48), nullable=False),
             sa.Column("item", S(160), nullable=False),
-            sa.Column("issues_json", sa.Text(), nullable=True),
             sa.Column("owner", S(96), nullable=True),
             sa.Column("state", S(16), nullable=False),
             sa.Column("first_assessment_id", S(40), nullable=False),
@@ -152,18 +146,6 @@ def _tables():
             sa.Column("resolved_at", DT(), nullable=True),
             sa.UniqueConstraint("transition_id", "code", "item", name="uq_legacy_work_item"),
         ], ["transition_id"]),
-        ("legacy_work_item_events", [
-            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-            sa.Column("work_item_id", sa.Integer(), sa.ForeignKey("legacy_work_items.id"), nullable=False),
-            sa.Column("transition_id", S(40), sa.ForeignKey(T), nullable=False),
-            sa.Column("event", S(16), nullable=False),
-            sa.Column("from_state", S(16), nullable=True),
-            sa.Column("to_state", S(16), nullable=False),
-            sa.Column("actor", S(160), nullable=False),
-            sa.Column("assessment_id", S(40), nullable=True),
-            sa.Column("note", sa.Text(), nullable=True),
-            sa.Column("at", DT(), nullable=False),
-        ], ["work_item_id", "transition_id"]),
         ("legacy_exit_inventories", [
             sa.Column("id", S(40), primary_key=True),
             sa.Column("org_id", S(96), nullable=False),

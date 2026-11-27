@@ -109,6 +109,49 @@ def check_coverage(ctx, data, issues):
         issues.add(Issue("CLOSING_SNAPSHOT_BEHIND_DECISION", "control"))
 
 
+def sign_ok(bucket, minor):
+    return not ((bucket in {"credit", "unapplied"} and minor > 0)
+                or (bucket not in {"credit", "unapplied"} and minor < 0)
+                or (bucket == "closed_watch" and minor != 0))
+
+
+def positions(records, at):
+    """Validated positions for display: ({(line, bucket): minor} for positions with exactly one valid
+    row, {(line, bucket): [rows]} for duplicated, conflicting or invalid positions). The rules in
+    balances() hold on every row that is not in the first set."""
+    groups = defaultdict(list)
+    for r in records.values():
+        groups[r.data.line, r.data.bucket].append(r)
+    valid, disputed = {}, {}
+    for key, rows in groups.items():
+        r = rows[0]
+        if (len(rows) == 1 and r.data.line.book == "legacy" and r.effective == at
+                and sign_ok(r.data.bucket, r.data.minor)):
+            valid[key] = r.data.minor
+        else:
+            disputed[key] = rows
+    return valid, disputed
+
+
+def trace_matches(data):
+    """Per payment trace, computed once for the rules and the summary: (deposits, advices, eligible).
+    All advices count when detecting collisions, cash or noncash. A trace is eligible as confirmed
+    cash only with exactly one advice, which is a nonzero cash advice, and exactly one deposit of the
+    same amount."""
+    deposits, advices = defaultdict(list), defaultdict(list)
+    for r in data["deposit"].values():
+        deposits[r.data.trace].append(r)
+    for r in data["advice"].values():
+        advices[r.data.trace].append(r)
+    out = {}
+    for trace in set(deposits) | set(advices):
+        d, a = deposits[trace], advices[trace]
+        eligible = (len(a) == 1 and a[0].data.settlement == "cash" and a[0].data.net != 0
+                    and len(d) == 1 and d[0].data.minor == a[0].data.net)
+        out[trace] = (d, a, eligible)
+    return out
+
+
 def balances(records, at, issues, overlap_code=None):
     result = {}
     for r in records.values():
@@ -119,9 +162,7 @@ def balances(records, at, issues, overlap_code=None):
             issues.add(Issue(overlap_code, line_name(d.line) + "/" + d.bucket))
         if (key in result and not overlap_code) or d.line.book != "legacy" or r.effective != at:
             issues.add(Issue("INVALID_INVENTORY_ROW", r.key))
-        if ((d.bucket in {"credit", "unapplied"} and d.minor > 0)
-            or (d.bucket not in {"credit", "unapplied"} and d.minor < 0)
-                or (d.bucket == "closed_watch" and d.minor != 0)):
+        if not sign_ok(d.bucket, d.minor):
             issues.add(Issue("INVALID_BALANCE_SIGN", r.key))
         result[key] = d.minor
     return result
@@ -156,15 +197,12 @@ def assess_inventory(ctx, data, issues):
 
 
 def check_cash(ctx, data, lines, issues, follow):
-    deposits = defaultdict(list)
+    matches = trace_matches(data)
+    deposits = defaultdict(list, {trace: d for trace, (d, _a, _ok) in matches.items() if d})
+    traces = defaultdict(list, {trace: a for trace, (_d, a, _ok) in matches.items() if a})
     postings = defaultdict(list)
-    traces = defaultdict(list)
-    for r in data["deposit"].values():
-        deposits[r.data.trace].append(r)
     for r in data["posting"].values():
         postings[r.data.advice, r.data.component.part].append(r)
-    for r in data["advice"].values():
-        traces[r.data.trace].append(r)
     for trace in set(deposits) - set(traces):
         issues.add(Issue("UNAPPLIED_BANK_CASH", trace))
     parts = {}

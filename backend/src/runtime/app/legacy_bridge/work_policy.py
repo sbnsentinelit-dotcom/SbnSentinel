@@ -76,6 +76,8 @@ BY_COVERAGE_ROLE = {
     "legacy": "RECONCILE_BALANCES",
 }
 FALLBACK = "RESOLVE_SOURCE_EVIDENCE"
+# A failed route or an unknown deadline is priority work (INTEGRATION.md, slice 4).
+PRIORITY = {"VERIFY_DENIAL_DEADLINES", "PROVE_ROUTES"}
 
 
 def task_for(code: str, item: str) -> str:
