@@ -355,9 +355,41 @@ class SimulationEngine:
             self.visit_generator_running = True
             asyncio.create_task(self.generate_dynamic_encounters())
 
+    def start_legacy_claims_sources(self):
+        """Synthetic mode only (never PRODUCTION, only with the Legacy Claims Bridge enabled): every
+        minute the synthetic legacy-claims sources deliver the run-off steps whose time has come, through
+        the bridge intake, and publish them (services/legacy_bridge_service.py deliver_synthetic)."""
+        from app.core.config import settings
+        from app.services.legacy_bridge_service import bridge_enabled
+        if (not getattr(settings, "SYNTHETIC_TEST_ENABLED", False)
+                or getattr(settings, "ENVIRONMENT", "").upper() == "PRODUCTION" or not bridge_enabled()):
+            return
+        if not getattr(self, "legacy_sources_running", False):
+            self.legacy_sources_running = True
+            asyncio.create_task(self.deliver_legacy_claims_steps())
+
+    async def deliver_legacy_claims_steps(self):
+        from app.db.database import SessionLocal
+        from app.models.clinic import ClinicModel
+        from app.services.legacy_bridge_service import deliver_synthetic
+        while getattr(self, "legacy_sources_running", False):
+            await asyncio.sleep(60)
+            db = SessionLocal()
+            try:
+                for (clinic_id,) in db.query(ClinicModel.id).all():
+                    try:
+                        deliver_synthetic(db, clinic_id)
+                    except Exception as e:
+                        db.rollback()
+                        import logging
+                        logging.getLogger(__name__).error(f"[Legacy claims sources] {clinic_id}: {e}")
+            finally:
+                db.close()
+
     def stop(self):
         self.running = False
         self.visit_generator_running = False
+        self.legacy_sources_running = False
 
     def add_client(self, queue: asyncio.Queue):
         self.clients.append(queue)

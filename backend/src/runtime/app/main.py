@@ -54,6 +54,25 @@ def create_app() -> FastAPI:
     def seed_data():
         run_startup_seeding()
 
+    @app.on_event("startup")
+    def legacy_claims_rules_update():
+        # Legacy Claims Bridge: replace current assessments computed under earlier rules (07.T1). Runs in
+        # every environment where the bridge is enabled; a second start changes nothing.
+        from app.db.database import SessionLocal
+        from app.services.legacy_bridge_service import bridge_enabled, supersede_outdated
+        if not bridge_enabled():
+            return
+        db = SessionLocal()
+        try:
+            replaced = supersede_outdated(db)
+            if replaced:
+                print(f"[INFO] Legacy claims: {len(replaced)} assessment(s) re-evaluated under the current rules.")
+        except Exception as err:
+            db.rollback()
+            print(f"[WARNING] Legacy claims rules update: {err}")
+        finally:
+            db.close()
+
     return app
 
 
@@ -162,6 +181,16 @@ def run_startup_seeding():
                         added = sync_generated_events(db, clinic_id, days=days)
                         if added:
                             print(f"[INFO] Stored {added} synthetic visit events for {clinic_id}.")
+                    # Legacy Claims Bridge (V3 candidate): the synthetic sources deliver the auditor's
+                    # transition through the bridge intake (idempotent on restart).
+                    from app.services.legacy_bridge_service import bridge_enabled, deliver_synthetic
+                    if bridge_enabled():
+                        for (clinic_id,) in db.query(ClinicModel.id).all():
+                            try:
+                                deliver_synthetic(db, clinic_id)
+                            except Exception as bridge_err:
+                                db.rollback()
+                                print(f"[WARNING] Legacy claims synthetic sources for {clinic_id}: {bridge_err}")
             except Exception as seed_err:
                 print(f"[WARNING] Could not auto-seed dubai data: {seed_err}")
 

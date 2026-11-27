@@ -1,0 +1,376 @@
+/**
+ * Legacy Claims Bridge screen helpers. Every figure, status, issue and message comes from
+ * GET /api/v1/legacy-claims/...; this file only types the responses, converts the server's integer
+ * minor units (fils / cents) to amounts, and names the fixed evidence roles and route tests.
+ */
+
+export type Scope = {
+  deployment: string; region: string; org: string; clinic: string;
+  facility: string; payee: string; payer: string; currency: string;
+};
+
+export type Transition = {
+  id: string;
+  label: string | null;
+  scope: Scope;
+  cutover: string;
+  routes: { new: string; old: string; fallback: string; archive: string };
+  max_probe_age_days: number;
+  origin: string;
+  created_at: string;
+  current_assessment_id: string | null;
+  /** Responsible team per kind of hold investigation (defaults plus the clinic's policy). */
+  hold_owners?: Record<string, string>;
+  latest_status: string | null;
+  latest_as_of: string | null;
+};
+
+export type Coded = { code: string; item: string; message: string };
+
+export type WorkEvent = {
+  event: 'OPENED' | 'ACCEPTED' | 'RESOLVED' | 'REOPENED' | 'ASSIGNED' | 'NOTE' | 'RELEASED' | 'OUTCOME';
+  from_state: string | null; to_state: string; actor: string;
+  assessment_id: string | null; note: string | null; at: string;
+};
+
+export type WorkItem = Coded & {
+  id: number;
+  kind: 'follow_up' | 'hold';
+  /** Hold investigations: the hold reasons this task covers. */
+  issues: Coded[];
+  history: WorkEvent[];
+  owner: string | null;
+  /** A team or person a reviewer assigned the task to. */
+  assigned_to?: string | null;
+  /** 'high' for a failed route or an unknown deadline. */
+  priority?: 'high' | 'normal';
+  state: 'OPEN' | 'ACCEPTED' | 'RESOLVED' | 'CLOSED';
+  /** How the work ended: collected | written_off | risk_accepted | resolved_by_evidence. */
+  outcome?: string | null;
+  outcome_by?: string | null;
+  outcome_at?: string | null;
+  outcome_note?: string | null;
+  /** The outcomes a reviewer may record now (collection and write-off only after the payer's decision). */
+  allowed_outcomes?: string[];
+  /** Money the reconciliation proved for this task's collection or write-off so far (minor units). */
+  outcome_amount?: number | null;
+  /** The assessment the outcome was proven from. */
+  outcome_assessment_id?: string | null;
+  /** The proven movements: movement, posting, advice and deposit, or movement and approval. */
+  outcome_proof?: { kind: string; amount: number; refs: Record<string, string> }[];
+  /** The discrepancies an accepted risk covers. */
+  outcome_scope?: { assessment_id: string | null; discrepancies: [string, string][] } | null;
+  accepted_by: string | null;
+  accepted_at: string | null;
+  note: string | null;
+  resolved_at: string | null;
+};
+
+export type Coverage = 'complete' | 'incomplete' | 'missing';
+
+export type Buckets = Record<'payer_ar' | 'patient_ar' | 'credit' | 'unapplied' | 'unbilled' | 'closed_watch', number>;
+
+export type Bucket = keyof Buckets;
+
+export type DisputedRow = { key: string; line: string; minor: number; effective: string | null };
+
+export type Summary = {
+  currency: string;
+  lines: { legacy: number; new: number };
+  /** Bucket totals of validated unique positions only (undisputed subtotals). */
+  control: Buckets;
+  opening: Buckets;
+  closing: Buckets;
+  /** Duplicated, conflicting or invalid positions, left out of the totals above, with their rows. */
+  unverified?: Partial<Record<'control' | 'opening' | 'closing', Partial<Record<Bucket, DisputedRow[]>>>>;
+  /** Bank and ledger amounts are null when that evidence was never delivered (unknown, not zero). */
+  cash: {
+    advised: number;
+    bank_observed: number | null; bank_confirmed: number | null; bank_unmatched: number | null;
+    bank_coverage: Coverage;
+    ledger_posted: number | null; ledger_coverage: Coverage;
+    provider_adjustments: number; unapplied_bank: number | null; noncash_advices: number;
+  };
+  denials: {
+    key: string; line: string; noticed_at: string | null; due: string | null;
+    rule_verified: boolean; appeal_stage: string | null; owner: string | null;
+  }[];
+  routes: { stage: string; proved: boolean }[];
+  sources: {
+    role: string; rows: number; last_effective: string | null;
+    sealed_through: string | null; sealed_rows: number | null; coverage_proved: boolean;
+  }[];
+};
+
+export type Assessment = {
+  /** null for an unsaved preview (nothing published for that evidence yet). */
+  assessment_id: string | null;
+  transition: Transition;
+  as_of: string;
+  revision: number | null;
+  published: boolean;
+  is_current: boolean;
+  computed_at: string;
+  status: 'SAMPLE_REVIEWABLE' | 'HOLD';
+  policy_version: string;
+  /** False for an assessment computed under earlier rules; it was replaced by one under the current rules. */
+  rules_current?: boolean;
+  /** The assessment this one replaced (a new revision or a re-evaluation under updated rules). */
+  supersedes_id?: string | null;
+  mapping_version: string;
+  review_quality: string;
+  record_count: number;
+  source_age_hours: number;
+  last_received_at: string | null;
+  issues: Coded[];
+  work_items: WorkItem[];
+  evidence_count: number;
+  summary: Summary;
+  authority: string;
+};
+
+export type AssessmentRow = {
+  assessment_id: string; as_of: string; revision: number; is_current: boolean; computed_at: string; status: string;
+  issues: number; records: number; computed_by: string;
+};
+
+export type InventoryRow = { inventory_id: string; subscription: string; as_of: string; received_at: string };
+
+export type Source = {
+  binding_id: number; role: string; valid_from: string; valid_until: string;
+  streams: { resource: string; head: string; updated_at: string }[];
+};
+
+export type ExitReview = {
+  inventory_id: string;
+  subscription: string;
+  as_of: string;
+  received_at: string;
+  status: 'HUMAN_EXIT_REVIEW' | 'HOLD';
+  issues: Coded[];
+  scopes: { scope: Scope; transition_id: string | null; label: string | null; status: string | null }[];
+  dependencies: { key: string; kind: string; proof_ref: string | null; accepted_by: string | null; valid_through: string }[];
+  signoffs: string[];
+  savings: { currency: string; avoided: number; incremental: number; net: number };
+  authority: string;
+  signoff_details?: { role: string; decision_ref: string; signed_by: string | null; signed_at: string | null; given_on_screen: boolean }[];
+  missing_signoffs?: string[];
+};
+
+/** Server amounts are integer minor units: 100000 fils = AED 1,000.00. */
+export const fromMinor = (minor: number | null | undefined): number | null =>
+  typeof minor === 'number' ? minor / 100 : null;
+
+export const STATUS_LABELS: Record<string, string> = {
+  SAMPLE_REVIEWABLE: 'Reviewable',
+  HOLD: 'On hold',
+  HUMAN_EXIT_REVIEW: 'Ready for sign-off review',
+};
+
+export const statusLabel = (status: string | null | undefined) =>
+  status ? STATUS_LABELS[status] ?? status : 'Not assessed';
+
+export const statusTone = (status: string | null | undefined): 'good' | 'bad' | 'none' =>
+  status === 'SAMPLE_REVIEWABLE' || status === 'HUMAN_EXIT_REVIEW' ? 'good' : status === 'HOLD' ? 'bad' : 'none';
+
+export const ROLE_LABELS: Record<string, string> = {
+  control: 'Signed control reports',
+  legacy: 'Old billing export',
+  destination: 'Replacement billing',
+  payer: 'Payer responses',
+  bank: 'Bank statements',
+  ledger: 'Clinic ledger',
+  operations: 'Clinic operations',
+  archive: 'Records archive',
+};
+
+export const ROUTE_LABELS: Record<string, string> = {
+  old_retrieval: 'Recover an old response before the switch',
+  old_claim_new_route: 'Old claim answered on the new route',
+  new_claim_new_route: 'New claim answered on the new route',
+  archive_restore: 'Restore an original claim from the archive',
+  fallback_recovery: 'Recover through the fallback route',
+  denial_route: 'Work a legacy denial through a surviving route',
+};
+
+export const BUCKET_LABELS: Record<string, string> = {
+  payer_ar: 'Payer receivable',
+  patient_ar: 'Patient receivable',
+  credit: 'Credits',
+  unapplied: 'Unapplied cash',
+  unbilled: 'Unbilled',
+  closed_watch: 'Settled (reversal watch)',
+};
+
+export const APPEAL_LABELS: Record<string, string> = {
+  sent: 'Appeal sent',
+  received: 'Payer received appeal',
+  decided: 'Payer decided',
+};
+
+export const label = (map: Record<string, string>, key: string) => map[key] ?? key.replace(/_/g, ' ');
+
+/** True when the bucket has a disputed position in that balance set. */
+export const isUnverified = (s: Summary, set: 'control' | 'opening' | 'closing', bucket: Bucket) =>
+  (s.unverified?.[set]?.[bucket]?.length ?? 0) > 0;
+
+/** Every disputed row, for listing under the balances. */
+export const disputedRows = (s: Summary) =>
+  (['control', 'opening', 'closing'] as const).flatMap((set) =>
+    Object.entries(s.unverified?.[set] ?? {}).flatMap(([bucket, rows]) =>
+      (rows ?? []).map((r) => ({ set, bucket: bucket as Bucket, ...r }))));
+
+/** Buckets with any amount or any disputed position, in a fixed order. */
+export const balanceRows = (s: Summary) =>
+  (Object.keys(BUCKET_LABELS) as Bucket[])
+    .filter((b) => s.control[b] !== 0 || s.opening[b] !== 0 || s.closing[b] !== 0
+      || isUnverified(s, 'control', b) || isUnverified(s, 'opening', b) || isUnverified(s, 'closing', b))
+    .map((b) => ({
+      bucket: b,
+      label: BUCKET_LABELS[b],
+      control: s.control[b],
+      opening: s.opening[b],
+      closing: s.closing[b],
+      variance: s.opening[b] - s.control[b],
+      unverified: {
+        control: isUnverified(s, 'control', b),
+        opening: isUnverified(s, 'opening', b),
+        closing: isUnverified(s, 'closing', b),
+      },
+    }));
+
+export const openWork = (items: WorkItem[]) => items.filter((w) => w.state !== 'RESOLVED' && w.state !== 'CLOSED');
+
+export const OUTCOME_LABELS: Record<string, string> = {
+  collected: 'Collected', written_off: 'Written off', risk_accepted: 'Risk accepted', resolved_by_evidence: 'Resolved by evidence',
+};
+
+/** The last acceptance of an item that is no longer accepted (resolved, then reopened). */
+export const previousAcceptance = (w: WorkItem): WorkEvent | null =>
+  w.state === 'ACCEPTED' ? null : [...(w.history ?? [])].reverse().find((e) => e.event === 'ACCEPTED') ?? null;
+
+/** A measured amount with its evidence qualifier: unknown when the evidence never arrived. */
+export const measured = (
+  amount: number | null | undefined, coverage: Coverage, missingText: string, format: (minor: number) => string,
+): string => {
+  if (coverage === 'missing' || amount === null || amount === undefined) return missingText;
+  return coverage === 'incomplete' ? `${format(amount)} (coverage not proven)` : format(amount);
+};
+
+/** "2 h", "3 d" since the evidence instant. */
+export const ageLabel = (hours: number) => (hours < 48 ? `${Math.max(0, Math.round(hours))} h` : `${Math.round(hours / 24)} d`);
+
+export const shortDate = (iso: string | null | undefined): string => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+/** Reads an uploaded export: either {records, seal} or the bridge's full page shape. */
+export const parseExport = (text: string): { records: unknown[]; seal?: unknown; token?: string } => {
+  const data = JSON.parse(text);
+  if (!data || typeof data !== 'object' || !Array.isArray(data.records)) {
+    throw new Error('The file must be JSON with a "records" list.');
+  }
+  return { records: data.records, seal: data.seal ?? undefined, token: typeof data.token === 'string' ? data.token : undefined };
+};
+
+/** Message from an API error body: FastAPI detail string, list or {message}. */
+export const errorText = (body: any, fallback: string): string => {
+  const d = body?.detail;
+  if (!d) return fallback;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) return d.map((e: any) => e?.msg ?? String(e)).join('; ');
+  if (typeof d === 'object') {
+    const records = Array.isArray(d.records) ? ` ${d.records.map((r: any) => `${r.key}: ${r.reason}`).join('; ')}` : '';
+    const unproven = Array.isArray(d.unproven) ? ` ${d.unproven.map((r: any) => `${r.movement}: ${r.reason}`).join('; ')}` : '';
+    return `${d.message ?? fallback}${records}${unproven}`;
+  }
+  return fallback;
+};
+
+// ---------------------------------------------------------------- drill-down, work actions, history
+
+export type EvidenceRecord = {
+  key: string; kind: string; source: string | null; effective: string | null; seen: string | null;
+  received_at: string | null; received_by: string | null; page_token: string | null;
+  custody_evidence_id: string | null; evidence_ref: string; fields: Record<string, unknown>; status: string | null;
+};
+
+export type FigureEvidence = {
+  figure: string; label: string; assessment_id: string; as_of: string; total: number | null; rule: string | null;
+  records: EvidenceRecord[];
+  seals?: { through: string; unique_rows: number; received_at: string; receipt: string; applies: boolean; superseded?: boolean }[];
+  /** Why the detail of this assessment cannot be rebuilt (earlier rules or no input manifest). */
+  unavailable?: string;
+};
+
+export type WorkItemDetail = WorkItem & { evidence: EvidenceRecord[] };
+
+export type Assignee = { value: string; label: string; kind: 'team' | 'user' };
+
+export type Comparison = {
+  from: { assessment_id: string; as_of: string; revision: number; status: string };
+  to: { assessment_id: string; as_of: string; revision: number; status: string };
+  issues_added: Coded[]; issues_removed: Coded[];
+  figures_changed: { figure: string; from: number | null; to: number | null }[];
+  records: { from: number; to: number };
+};
+
+export type Pulse = {
+  transition_id: string; current_assessment_id: string | null; last_received_at: string | null;
+  last_work_event: number | null; lock_version: number;
+};
+
+export const samePulse = (a: Pulse | null, b: Pulse | null) => JSON.stringify(a) === JSON.stringify(b);
+
+export const EVENT_LABELS: Record<string, string> = {
+  OPENED: 'Opened', ACCEPTED: 'Accepted', RESOLVED: 'Resolved by evidence', REOPENED: 'Reopened by evidence',
+  ASSIGNED: 'Assigned', NOTE: 'Note', RELEASED: 'Released', OUTCOME: 'Outcome recorded', PARTIAL: 'Partial outcome',
+};
+
+const CASH_LABELS: Record<string, string> = {
+  advised: 'Payer advised (cash)', bank_observed: 'Bank deposits received', bank_confirmed: 'Bank-confirmed',
+  bank_unmatched: 'Bank money not matched to one advice', ledger_posted: 'Posted in the clinic ledger',
+  provider_adjustments: 'Provider-level recoveries', unapplied_bank: 'Bank money with no advice',
+  observed: 'Bank deposits received', confirmed: 'Bank-confirmed', unmatched: 'Bank money not matched to one advice',
+  unapplied: 'Bank money with no advice', noncash_advices: 'Non-cash advices',
+};
+
+/** Human name of a figure id such as "balance:closing:payer_ar" or "cash:bank_confirmed". */
+export const figureLabel = (figure: string): string => {
+  const [head, a, b] = figure.split(':');
+  if (head === 'balance') return `${label(BUCKET_LABELS, b)} · ${a === 'control' ? 'signed control' : a === 'opening' ? 'old platform' : 'closing'}`;
+  if (head === 'cash') return CASH_LABELS[a] ?? label({}, a);
+  if (head === 'route') return label(ROUTE_LABELS, a);
+  if (head === 'source') return label(ROLE_LABELS, a);
+  if (head === 'routes') return 'Routes proven';
+  if (head === 'denials') return 'Legacy denials';
+  return figure;
+};
+
+const MONEY_FIELDS = new Set(['minor', 'net']);
+const FIELD_NAMES: Record<string, string> = { minor: 'amount', net: 'net amount', originated_at: 'originated' };
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+const lineText = (v: unknown) =>
+  v && typeof v === 'object' && 'book' in (v as any) ? `${(v as any).book}/${(v as any).claim}/${(v as any).line}` : String(v);
+
+/** A record's fields as readable text: amounts formatted, claim lines as book/claim/line, payment parts one by one. */
+export const fieldText = (fields: Record<string, unknown>, money: (minor: number) => string = (m) => String(m)): string =>
+  Object.entries(fields)
+    .map(([k, v]) => {
+      const name = FIELD_NAMES[k] ?? k.replace(/_/g, ' ');
+      if (MONEY_FIELDS.has(k) && typeof v === 'number') return `${name}: ${money(v)}`;
+      if (k === 'parts' && Array.isArray(v)) {
+        return `parts: ${v.map((p: any) => `${p.part} ${String(p.type).replace(/_/g, ' ')} ${money(p.minor)}${p.line ? ` on ${lineText(p.line)}` : ''}${p.adjustment_ref ? ` (${p.adjustment_ref})` : ''}`).join('; ')}`;
+      }
+      if (k === 'component' && v && typeof v === 'object') {
+        const p = v as any;
+        return `component: ${p.part} ${String(p.type).replace(/_/g, ' ')} ${money(p.minor)}${p.line ? ` on ${lineText(p.line)}` : ''}`;
+      }
+      if (v && typeof v === 'object') return `${name}: ${'book' in (v as any) ? lineText(v) : JSON.stringify(v)}`;
+      if (typeof v === 'string' && ISO_INSTANT.test(v)) return `${name}: ${shortDate(v)}`;
+      return `${name}: ${String(v)}`;
+    })
+    .join(' · ');

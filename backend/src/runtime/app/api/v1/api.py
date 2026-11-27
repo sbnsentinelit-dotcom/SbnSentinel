@@ -2,7 +2,7 @@ from app.api.v1.endpoints import outcomes
 from fastapi import APIRouter, Depends
 # Import subsystem routers here when created
 from app.api.v1.endpoints import runtime, history
-from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, audit, settings, encounters, super_admin, billing, clinics, pasme, pipeline, health, decisions, actions, decision_basis, action_lifecycle, financial_reports, patients, patient_flow, severity
+from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, audit, settings, encounters, super_admin, billing, clinics, pasme, pipeline, health, decisions, actions, decision_basis, action_lifecycle, financial_reports, patients, patient_flow, severity, legacy_claims
 
 
 from app.models.user import UserRole
@@ -152,6 +152,14 @@ api_router.include_router(
     history.router,
     prefix="/history",
     tags=["016_D8_History"],
+    dependencies=protected)
+
+
+# V3 candidate - Legacy Claims Continuity Bridge (read-only review; feature flag LEGACY_BRIDGE_ENABLED)
+api_router.include_router(
+    legacy_claims.router,
+    prefix="/legacy-claims",
+    tags=["017_V3_LegacyClaimsBridge"],
     dependencies=protected)
 
 

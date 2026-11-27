@@ -590,6 +590,8 @@ async def startup_event():
     simulation_engine.start()
     # Patient Flow's synthetic visit events (synthetic mode only; checks its own conditions).
     simulation_engine.start_visit_generator()
+    # Legacy Claims Bridge synthetic sources: the run-off continues step by step (synthetic mode only).
+    simulation_engine.start_legacy_claims_sources()
 
 
 @router.on_event("shutdown")
