@@ -52,6 +52,14 @@ export type WorkItem = Coded & {
   outcome_note?: string | null;
   /** The outcomes a reviewer may record now (collection and write-off only after the payer's decision). */
   allowed_outcomes?: string[];
+  /** Money the reconciliation proved for this task's collection or write-off so far (minor units). */
+  outcome_amount?: number | null;
+  /** The assessment the outcome was proven from. */
+  outcome_assessment_id?: string | null;
+  /** The proven movements: movement, posting, advice and deposit, or movement and approval. */
+  outcome_proof?: { kind: string; amount: number; refs: Record<string, string> }[];
+  /** The discrepancies an accepted risk covers. */
+  outcome_scope?: { assessment_id: string | null; discrepancies: [string, string][] } | null;
   accepted_by: string | null;
   accepted_at: string | null;
   note: string | null;
@@ -105,6 +113,10 @@ export type Assessment = {
   computed_at: string;
   status: 'SAMPLE_REVIEWABLE' | 'HOLD';
   policy_version: string;
+  /** False for an assessment computed under earlier rules; it was replaced by one under the current rules. */
+  rules_current?: boolean;
+  /** The assessment this one replaced (a new revision or a re-evaluation under updated rules). */
+  supersedes_id?: string | null;
   mapping_version: string;
   review_quality: string;
   record_count: number;
@@ -272,7 +284,8 @@ export const errorText = (body: any, fallback: string): string => {
   if (Array.isArray(d)) return d.map((e: any) => e?.msg ?? String(e)).join('; ');
   if (typeof d === 'object') {
     const records = Array.isArray(d.records) ? ` ${d.records.map((r: any) => `${r.key}: ${r.reason}`).join('; ')}` : '';
-    return `${d.message ?? fallback}${records}`;
+    const unproven = Array.isArray(d.unproven) ? ` ${d.unproven.map((r: any) => `${r.movement}: ${r.reason}`).join('; ')}` : '';
+    return `${d.message ?? fallback}${records}${unproven}`;
   }
   return fallback;
 };
@@ -288,7 +301,9 @@ export type EvidenceRecord = {
 export type FigureEvidence = {
   figure: string; label: string; assessment_id: string; as_of: string; total: number | null; rule: string | null;
   records: EvidenceRecord[];
-  seals?: { through: string; unique_rows: number; received_at: string; receipt: string; applies: boolean }[];
+  seals?: { through: string; unique_rows: number; received_at: string; receipt: string; applies: boolean; superseded?: boolean }[];
+  /** Why the detail of this assessment cannot be rebuilt (earlier rules or no input manifest). */
+  unavailable?: string;
 };
 
 export type WorkItemDetail = WorkItem & { evidence: EvidenceRecord[] };
@@ -312,7 +327,7 @@ export const samePulse = (a: Pulse | null, b: Pulse | null) => JSON.stringify(a)
 
 export const EVENT_LABELS: Record<string, string> = {
   OPENED: 'Opened', ACCEPTED: 'Accepted', RESOLVED: 'Resolved by evidence', REOPENED: 'Reopened by evidence',
-  ASSIGNED: 'Assigned', NOTE: 'Note', RELEASED: 'Released', OUTCOME: 'Outcome recorded',
+  ASSIGNED: 'Assigned', NOTE: 'Note', RELEASED: 'Released', OUTCOME: 'Outcome recorded', PARTIAL: 'Partial outcome',
 };
 
 const CASH_LABELS: Record<string, string> = {

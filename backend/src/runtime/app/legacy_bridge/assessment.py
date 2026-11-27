@@ -336,6 +336,63 @@ def check_denials(ctx, data, lines, issues, follow):
         follow.add(FollowUp(state, key, line_owner(data, d.line)))
 
 
+def movement_proofs(data, issues):
+    """Whether each ledger movement proves money for its claim line, with the reconciliation rules'
+    own links (07.T2). A collection (payer_cash) needs its posting on the same line and amount, the
+    posting's advice, a single eligible bank deposit for the advice's trace, and no cash, ledger or
+    bank finding against any of them. A write-off (approved_adjustment) needs an earlier approval with
+    the same line, bucket, direction, amount and reason, and no approval finding.
+    Returns {movement key: {kind, proven, reason, amount, refs}}; amount is the receivable reduction."""
+    found = {(i.code, i.item) for i in issues}
+    matches = trace_matches(data)
+    out = {}
+    for key, r in data["movement"].items():
+        d = r.data
+        if d.reason == "payer_cash":
+            entry = {"kind": "collection", "proven": False, "amount": -d.minor, "refs": {"movement": key}}
+            posting = data["posting"].get(d.link)
+            advice = data["advice"].get(posting.data.advice) if posting else None
+            m = matches.get(advice.data.trace) if advice else None
+            if posting is None:
+                entry["reason"] = "its payment posting is missing"
+            elif (posting.data.component.line != d.line or posting.data.component.minor != -d.minor
+                  or d.bucket != "payer_ar" or posting.effective != r.effective):
+                entry["reason"] = "it does not match its payment posting"
+            elif advice is None:
+                entry["reason"] = "the posting's payment advice is missing"
+            elif not m or not m[2]:
+                entry["reason"] = "the advice has no single matching bank deposit"
+            elif ({("CASH_MOVEMENT_MISMATCH", d.link), ("ORPHAN_CASH_MOVEMENT", d.link),
+                   ("BANK_PROOF_INCOMPLETE", posting.data.advice),
+                   ("LEDGER_PROOF_INCOMPLETE", posting.data.advice + "/" + posting.data.component.part)} & found):
+                entry["reason"] = "the reconciliation holds its posting, advice or deposit"
+            elif d.minor >= 0:
+                entry["reason"] = "it does not reduce the receivable"
+            else:
+                entry.update(proven=True, reason=None,
+                             refs={"movement": key, "posting": d.link, "advice": posting.data.advice,
+                                   "deposit": m[0][0].key})
+            out[key] = entry
+        elif d.reason == "approved_adjustment":
+            entry = {"kind": "write_off", "proven": False, "amount": -d.minor, "refs": {"movement": key}}
+            approval = data["approval"].get(d.link)
+            if approval is None:
+                entry["reason"] = "its approval is missing"
+            elif (approval.data.line, approval.data.bucket, approval.data.minor, approval.data.reason) != (
+                    d.line, d.bucket, d.minor, d.reason):
+                entry["reason"] = "its approval differs in line, bucket, direction or amount"
+            elif approval.effective > r.effective:
+                entry["reason"] = "its approval is dated after it"
+            elif ("APPROVAL_UNPROVEN", key) in found:
+                entry["reason"] = "the reconciliation holds its approval"
+            elif d.bucket != "payer_ar" or d.minor >= 0:
+                entry["reason"] = "it does not reduce the payer receivable"
+            else:
+                entry.update(proven=True, reason=None, refs={"movement": key, "approval": d.link})
+            out[key] = entry
+    return out
+
+
 def check_probes(ctx, data, lines, issues):
     proved = set()
     for r in data["probe"].values():

@@ -54,6 +54,25 @@ def create_app() -> FastAPI:
     def seed_data():
         run_startup_seeding()
 
+    @app.on_event("startup")
+    def legacy_claims_rules_update():
+        # Legacy Claims Bridge: replace current assessments computed under earlier rules (07.T1). Runs in
+        # every environment where the bridge is enabled; a second start changes nothing.
+        from app.db.database import SessionLocal
+        from app.services.legacy_bridge_service import bridge_enabled, supersede_outdated
+        if not bridge_enabled():
+            return
+        db = SessionLocal()
+        try:
+            replaced = supersede_outdated(db)
+            if replaced:
+                print(f"[INFO] Legacy claims: {len(replaced)} assessment(s) re-evaluated under the current rules.")
+        except Exception as err:
+            db.rollback()
+            print(f"[WARNING] Legacy claims rules update: {err}")
+        finally:
+            db.close()
+
     return app
 
 

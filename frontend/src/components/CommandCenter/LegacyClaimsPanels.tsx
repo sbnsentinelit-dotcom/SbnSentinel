@@ -94,13 +94,14 @@ export const EvidencePanel: React.FC<{
             <p>Assessment {data.assessment_id} · evidence as of {shortDate(data.as_of)}</p>
             {data.rule && <p className="text-white/50">{data.rule}</p>}
           </div>
-          <Records records={data.records} money={(m) => money(m)} empty="No record contributes to this figure in this assessment." />
+          {data.unavailable && <p className="text-xs text-amber-300">{data.unavailable}</p>}
+          <Records records={data.records} money={(m) => money(m)} empty={data.unavailable ? 'The records behind this assessment cannot be shown.' : 'No record contributes to this figure in this assessment.'} />
           {data.seals && (
             <div className="text-xs">
               <p className="font-bold mb-1">Completeness statements</p>
               <ul className="space-y-1 text-white/70">
                 {data.seals.map((s) => (
-                  <li key={`${s.receipt}-${s.through}`}>{s.unique_rows} rows through {shortDate(s.through)} · received {shortDate(s.received_at)}{s.applies ? ' · used by this assessment' : ''}</li>
+                  <li key={`${s.receipt}-${s.through}`}>{s.unique_rows} rows through {shortDate(s.through)} · received {shortDate(s.received_at)}{s.applies ? ' · used by this assessment' : ''}{s.superseded ? ' · replaced by a later statement' : ''}</li>
                 ))}
               </ul>
             </div>
@@ -168,6 +169,12 @@ export const WorkPanel: React.FC<{
               <p className="text-emerald-300">Outcome: <b>{OUTCOME_LABELS[item.outcome ?? ''] ?? item.outcome}</b> · {item.outcome_by} · {shortDate(item.outcome_at)}
                 {item.outcome_note ? <span className="block text-white/60 break-words">{item.outcome_note}</span> : null}</p>
             )}
+            {item.state !== 'CLOSED' && (item.outcome_amount ?? 0) !== 0 && (
+              <p className="text-amber-300">Partial outcome so far: <b>{money(item.outcome_amount)}</b> proven; the claim line still has a balance, so the task stays open.</p>
+            )}
+            {(item.outcome_proof ?? []).length > 0 && (
+              <p className="text-white/60 break-words">Proof{item.outcome_assessment_id ? ` (assessment ${item.outcome_assessment_id})` : ''}: {(item.outcome_proof ?? []).map((p) => `${Object.values(p.refs).join(' → ')} ${money(p.amount)}`).join('; ')}</p>
+            )}
           </div>
 
           {item.issues.length > 0 && (
@@ -209,7 +216,7 @@ export const WorkPanel: React.FC<{
                 </div>
               )}
               <p className="text-[11px] text-white/50">
-                The task closes by itself when later evidence shows the discrepancy is gone. Collected and written off need ledger evidence after the payer&apos;s decision; an accepted risk needs an administrator and a reason (use the note).
+                The task closes by itself when later evidence shows the discrepancy is gone. Collected and written off need ledger evidence after the payer&apos;s decision; only the amount the reconciliation proves is applied, and the task closes when the claim line&apos;s payer balance is zero. An accepted risk needs an administrator and a reason (use the note) and covers only the discrepancies it names.
               </p>
             </div>
           )}
@@ -268,6 +275,10 @@ export const AssessmentPanel: React.FC<{
             <span>Evidence as of {shortDate(a.as_of)} · revision {a.revision} · {a.record_count} records · computed {shortDate(a.computed_at)}</span>
           </div>
           {!a.is_current && <p className="text-[11px] text-orange-300">Read only. Work items follow the current assessment.</p>}
+          {a.rules_current === false && (
+            <p className="text-[11px] text-amber-300">Computed under earlier rules ({a.policy_version}). Its figures are shown as recorded; its record-level detail cannot be rebuilt. The assessment under the current rules replaced it.</p>
+          )}
+          {a.supersedes_id && <p className="text-[11px] text-white/50">Replaces assessment {a.supersedes_id}.</p>}
           <div className="text-xs">
             <p className="font-bold mb-1">Hold reasons ({a.issues.length})</p>
             {a.issues.length === 0 ? <p className="text-white/50">None.</p> : (

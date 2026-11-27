@@ -216,7 +216,7 @@ def test_r1_a_populated_q1_database_upgrades_and_stays_readable(shape):
         populate_q1(engine, updated_shape=shape == "q1-780144a")
 
         migrate(url, "head")
-        assert version(engine) == "q2_legacy_bridge_review"
+        assert version(engine) == "q3_legacy_bridge_review3"
         current_id, view, counts = read_back(engine)
         assert counts == EXPECTED_COUNTS
         # The sealed assessment is current; the clock-time placeholder never is.

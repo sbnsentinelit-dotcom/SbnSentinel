@@ -39,7 +39,11 @@ from app.models.legacy_bridge import (
     LegacyWorkItemModel,
 )
 
-POLICY_VERSION = "legacy-continuity-policy.v1"
+# The rules, summary and evidence semantics. It is part of every input digest, so an assessment stored
+# under earlier rules is never returned for the same evidence; supersede_outdated() replaces it.
+# v1: d40da770 and 780144a. v2: one trace eligibility for rules and summary, validated positions,
+# snapshot by ingestion cutoff, input manifest (6c3f4b5 and later).
+POLICY_VERSION = "legacy-continuity-policy.v2"
 MAPPING_VERSION = "legacy-continuity.v1"
 
 
@@ -225,7 +229,9 @@ def stage_page(db: Session, t: LegacyTransitionModel, page: PageIn, actor: str,
             LegacyPageModel.resource == page.resource, LegacyPageModel.token == token).first()
         if old is None:
             return None
-        if (old.previous_token, old.digest) != (page.previous, page_digest):
+        # The same contents under the same token are a replay, whatever predecessor the sender names now
+        # (for example the same file uploaded again after later pages); different contents conflict.
+        if old.digest != page_digest:
             raise BridgeError(409, "A different page was already received under this token.")
         return {"status": "ALREADY_STAGED", "page_id": old.id, "token": token,
                 "records_added": 0, "seal_stored": False}
@@ -292,13 +298,22 @@ def stage_page(db: Session, t: LegacyTransitionModel, page: PageIn, actor: str,
             seal_stored = False
             if page.seal is not None:
                 s = page.seal
-                dup = db.query(LegacySealModel.id).filter(
+                # One completeness statement per source, instant and population (07.T4): the same rows and
+                # digest stated again, under any receipt, file name or uploader, is the same statement and
+                # is not stored twice. A different population for the same instant replaces the earlier
+                # statement, which stays on record as superseded.
+                earlier = (db.query(LegacySealModel).filter(
                     LegacySealModel.transition_id == t.id, LegacySealModel.connector == b.connector,
-                    LegacySealModel.through == to_db(s.through), LegacySealModel.receipt == s.receipt).first()
-                if not dup:
-                    db.add(LegacySealModel(transition_id=t.id, page_id=page_id, connector=b.connector, role=b.role,
-                                           through=to_db(s.through), unique_rows=s.unique_rows, digest=s.digest,
-                                           receipt=s.receipt, received_at=now))
+                    LegacySealModel.through == to_db(s.through), LegacySealModel.superseded_by_id.is_(None))
+                    .order_by(LegacySealModel.id).all())
+                if not any(e.digest == s.digest and e.unique_rows == s.unique_rows for e in earlier):
+                    new_seal = LegacySealModel(transition_id=t.id, page_id=page_id, connector=b.connector, role=b.role,
+                                               through=to_db(s.through), unique_rows=s.unique_rows, digest=s.digest,
+                                               receipt=s.receipt, received_at=now)
+                    db.add(new_seal)
+                    db.flush()
+                    for e in earlier:
+                        e.superseded_by_id = new_seal.id
                     seal_stored = True
             db.commit()
             return {"status": "STAGED", "page_id": page_id, "token": token, "records_added": added,
@@ -319,53 +334,103 @@ def latest_seal_instant(db: Session, t: LegacyTransitionModel) -> Optional[datet
     return row[0] if row else None
 
 
-def build_inputs(db: Session, t: LegacyTransitionModel, as_of: Optional[datetime] = None,
-                 now: Optional[datetime] = None, with_rows: bool = False) -> Tuple[Context, Batch]:
-    now = now or _utcnow()
+def _context(t: LegacyTransitionModel, as_of: datetime, snapshot: datetime, seals, binding_rows) -> Context:
+    scope = scope_of(t)
+    return Context.model_validate_json(json.dumps({
+        "scope": scope, "cutover": iso(t.cutover), "as_of": iso(as_of), "snapshot_at": iso(snapshot),
+        "new_route": t.new_route, "old_route": t.old_route, "fallback_route": t.fallback_route,
+        "archive_route": t.archive_route, "max_probe_age_days": t.max_probe_age_days,
+        "bindings": [dict(connector=b.connector, role=b.role, scope=scope, valid_from=iso(b.valid_from),
+                          valid_until=iso(b.valid_until)) for b in binding_rows],
+        "seals": [dict(role=s.role, through=iso(s.through), unique_rows=s.unique_rows, digest=s.digest,
+                       receipt=s.receipt) for s in seals],
+    }))
+
+
+def _batch(stored) -> Batch:
+    return Batch.model_validate_json(
+        '{"version":"legacy-continuity.v1","records":[' + ",".join(r.record_json for r in stored) + "]}")
+
+
+def _effective_seals(db: Session, t: LegacyTransitionModel, as_of: datetime, now: datetime):
+    """Completeness statements through as_of that had arrived by `now`; for one source and instant the
+    latest statement replaces earlier ones (an identical statement is never stored twice)."""
+    rows = (db.query(LegacySealModel).filter(LegacySealModel.transition_id == t.id, LegacySealModel.through == as_of,
+                                             LegacySealModel.received_at <= now)
+            .order_by(LegacySealModel.id).all())
+    latest = {}
+    for seal in rows:
+        latest[seal.connector] = seal
+    return sorted(latest.values(), key=lambda x: x.id)
+
+
+def _inputs(db: Session, t: LegacyTransitionModel, as_of: Optional[datetime], now: datetime) -> dict:
+    """Everything an assessment at as_of may use, limited to what had been received by `now` (the
+    ingestion cutoff): the closing snapshot, the seals, the bindings and the records."""
     as_of = to_db(as_of) if as_of else (latest_seal_instant(db, t) or now)
     if as_of > now:
         raise BridgeError(422, "The assessment time cannot be in the future.")
     if as_of < t.cutover:
         raise BridgeError(422, "The assessment time is before the transition cutover.")
-    # The designated closing snapshot for this cutoff: the latest closing date known at as_of. Only its
-    # rows enter the batch, so successive snapshots of an unchanged balance are never added together,
-    # and reading an earlier cutoff reproduces the population it had then.
+    # The designated closing snapshot for this cutoff: the latest closing date known at as_of among the
+    # records received by `now`. Only its rows enter the batch, so successive snapshots of an unchanged
+    # balance are never added together, and a record delivered later never changes this assessment.
     closing = (db.query(LegacyRecordModel.effective_at).filter(
         LegacyRecordModel.transition_id == t.id, LegacyRecordModel.kind == "closing",
         LegacyRecordModel.effective_at <= as_of, LegacyRecordModel.seen_at <= as_of,
-        LegacyRecordModel.effective_at >= t.cutover)
+        LegacyRecordModel.received_at <= now, LegacyRecordModel.effective_at >= t.cutover)
         .order_by(LegacyRecordModel.effective_at.desc()).first())
     snapshot = closing[0] if closing else t.cutover
-    scope = scope_of(t)
-    seals = db.query(LegacySealModel).filter(LegacySealModel.transition_id == t.id,
-                                             LegacySealModel.through == as_of).order_by(LegacySealModel.id).all()
-    ctx = Context.model_validate_json(json.dumps({
-        "scope": scope, "cutover": iso(t.cutover), "as_of": iso(as_of), "snapshot_at": iso(snapshot),
-        "new_route": t.new_route, "old_route": t.old_route, "fallback_route": t.fallback_route,
-        "archive_route": t.archive_route, "max_probe_age_days": t.max_probe_age_days,
-        "bindings": [dict(connector=b.connector, role=b.role, scope=scope, valid_from=iso(b.valid_from),
-                          valid_until=iso(b.valid_until)) for b in bindings(db, t)],
-        "seals": [dict(role=s.role, through=iso(s.through), unique_rows=s.unique_rows, digest=s.digest,
-                       receipt=s.receipt) for s in seals],
-    }))
+    seals = _effective_seals(db, t, as_of, now)
+    binding_rows = bindings(db, t)
     stored = (db.query(LegacyRecordModel).filter(
         LegacyRecordModel.transition_id == t.id, LegacyRecordModel.received_at <= now,
         or_(LegacyRecordModel.kind != "closing", LegacyRecordModel.effective_at == snapshot))
         .order_by(LegacyRecordModel.id).all())
-    batch = Batch.model_validate_json(
-        '{"version":"legacy-continuity.v1","records":[' + ",".join(r.record_json for r in stored) + "]}")
+    return {"ctx": _context(t, as_of, snapshot, seals, binding_rows), "batch": _batch(stored), "stored": stored,
+            "seals": seals, "bindings": binding_rows, "snapshot": snapshot, "as_of": as_of}
+
+
+def build_inputs(db: Session, t: LegacyTransitionModel, as_of: Optional[datetime] = None,
+                 now: Optional[datetime] = None, with_rows: bool = False) -> Tuple[Context, Batch]:
+    got = _inputs(db, t, as_of, now or _utcnow())
     if with_rows:
-        return ctx, batch, stored   # batch.records[i] is stored[i]
-    return ctx, batch
+        return got["ctx"], got["batch"], got["stored"]   # batch.records[i] is stored[i]
+    return got["ctx"], got["batch"]
+
+
+class HistoryUnavailable(Exception):
+    """A published assessment whose exact inputs or rules cannot be reconstructed."""
+
+
+def inputs_of(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentModel):
+    """The exact inputs of a published assessment, from its manifest: (ctx, batch, stored records).
+    Raises HistoryUnavailable for an assessment stored before manifests or under other rules."""
+    if a.policy_version != POLICY_VERSION:
+        raise HistoryUnavailable(f"This assessment was computed under {a.policy_version}; its detail cannot be "
+                                 f"rebuilt under {POLICY_VERSION}. Its stored figures are shown as recorded.")
+    if not a.manifest_json or a.snapshot_at is None:
+        raise HistoryUnavailable("This assessment was stored without its input manifest; its detail is unavailable.")
+    m = json.loads(a.manifest_json)
+    stored = (db.query(LegacyRecordModel).filter(LegacyRecordModel.id.in_(m["records"]))
+              .order_by(LegacyRecordModel.id).all()) if m["records"] else []
+    seals = (db.query(LegacySealModel).filter(LegacySealModel.id.in_(m["seals"]))
+             .order_by(LegacySealModel.id).all()) if m["seals"] else []
+    binding_rows = (db.query(LegacySourceBindingModel).filter(LegacySourceBindingModel.id.in_(m["bindings"]))
+                    .order_by(LegacySourceBindingModel.id).all()) if m["bindings"] else []
+    return _context(t, a.as_of, a.snapshot_at, seals, binding_rows), _batch(stored), stored
 
 
 def _issue_rows(result: Result):
     return [{"code": i.code, "item": i.item, "message": message(i.code)} for i in result.issues]
 
 
-def _evaluate(db: Session, t: LegacyTransitionModel, actor: str, as_of: Optional[datetime], now: datetime):
-    """The assessment of the stored evidence as of an instant, as an unsaved row. No write effects."""
-    ctx, batch = build_inputs(db, t, as_of, now)
+def _evaluate(db: Session, t: LegacyTransitionModel, actor: str, as_of: Optional[datetime], now: datetime,
+              inputs_until: Optional[datetime] = None):
+    """The assessment of the stored evidence as of an instant, as an unsaved row with its input manifest.
+    inputs_until limits the inputs to what had been received by then (default: now). No write effects."""
+    got = _inputs(db, t, as_of, inputs_until or now)
+    ctx, batch = got["ctx"], got["batch"]
     observation, fact, result = build_review_fact(ctx, batch, sample_id=t.id, archive_ref=f"assessment-{t.id}")
     input_digest = digest([observation.source_version, list(result.evidence), POLICY_VERSION])
     return LegacyAssessmentModel(
@@ -377,7 +442,10 @@ def _evaluate(db: Session, t: LegacyTransitionModel, actor: str, as_of: Optional
         summary_json=json.dumps(summarize(ctx, batch, result)),
         review_fact_json=json.dumps({"observation": observation.model_dump(mode="json"),
                                      "fact": fact.model_dump(mode="json")}),
-        sealed=bool(ctx.seals), computed_at=now, computed_by=actor)
+        sealed=bool(ctx.seals), computed_at=now, computed_by=actor, snapshot_at=got["snapshot"],
+        manifest_json=json.dumps({"records": [r.id for r in got["stored"]], "seals": [x.id for x in got["seals"]],
+                                  "bindings": [b.id for b in got["bindings"]],
+                                  "inputs_until": iso(inputs_until or now)}))
 
 
 def _stored(db: Session, t: LegacyTransitionModel, input_digest: str) -> Optional[LegacyAssessmentModel]:
@@ -448,6 +516,8 @@ def publish_assessment(db: Session, t: LegacyTransitionModel, actor: str,
                 row = candidate
             current = current_assessment(db, t)
             if row.id != t.current_assessment_id and _newer(row, current):
+                if current is not None and row.supersedes_id is None:
+                    row.supersedes_id = current.id
                 t.current_assessment_id = row.id
                 sync_work_items(db, t, row, actor, now)
             db.commit()
@@ -456,6 +526,44 @@ def publish_assessment(db: Session, t: LegacyTransitionModel, actor: str,
             # Only reachable if the lock is bypassed: roll back everything and evaluate again.
             db.rollback()
     raise BridgeError(409, "Another assessment was published at the same time; try again.")
+
+
+RULES_UPDATE_ACTOR = "rules update"
+
+
+def supersede_outdated(db: Session, now: Optional[datetime] = None) -> List[str]:
+    """Replace every current assessment computed under earlier rules (07.T1): re-evaluate its own cutoff
+    from its original inputs (the records and seals received by the time it was computed) under the
+    current rules, store it as the next revision with a link to the replaced one, move the current
+    pointer and the work in one transaction. The replaced assessment, its result and the decisions
+    already taken stay as they were. Running it again changes nothing. Returns the new assessment IDs."""
+    now = now or _utcnow()
+    done = []
+    for (tid,) in db.query(LegacyTransitionModel.id).filter(LegacyTransitionModel.current_assessment_id.isnot(None)).all():
+        t = db.get(LegacyTransitionModel, tid)
+        _lock(db, t)
+        old = current_assessment(db, t)
+        if old is None or old.policy_version == POLICY_VERSION:
+            db.rollback()
+            continue
+        candidate = _evaluate(db, t, RULES_UPDATE_ACTOR, old.as_of, now, inputs_until=max(old.computed_at, old.as_of))
+        if not candidate.sealed:
+            db.rollback()
+            continue
+        row = _stored(db, t, candidate.input_digest)
+        if row is None:
+            last = (db.query(LegacyAssessmentModel.revision).filter(
+                LegacyAssessmentModel.transition_id == t.id, LegacyAssessmentModel.as_of == candidate.as_of)
+                .order_by(LegacyAssessmentModel.revision.desc()).first())
+            candidate.id, candidate.revision, candidate.supersedes_id = _new_id("LCA"), (last[0] + 1 if last else 1), old.id
+            db.add(candidate)
+            db.flush()
+            row = candidate
+        t.current_assessment_id = row.id
+        sync_work_items(db, t, row, RULES_UPDATE_ACTOR, now)
+        db.commit()
+        done.append(row.id)
+    return done
 
 
 def _event(db: Session, w: LegacyWorkItemModel, event: str, from_state: Optional[str], actor: str,
@@ -495,6 +603,18 @@ def sync_work_items(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentMo
             _event(db, w, "OPENED", None, actor, now, a.id)
             continue
         w.owner, w.issues_json, w.last_assessment_id = owner, issues_json, a.id
+        if w.state == "CLOSED" and w.outcome == "risk_accepted":
+            # An accepted risk covers only the discrepancies it named (07.T5): a new one opens a new
+            # decision cycle; the earlier decision stays in the history.
+            accepted = {tuple(x) for x in json.loads(w.outcome_scope_json or "{}").get("discrepancies", [])}
+            new = sorted(set(_scope_of(w)) - accepted)
+            if new:
+                w.state, w.accepted_by, w.accepted_at, w.note = "OPEN", None, None, None
+                w.outcome, w.outcome_by, w.outcome_at, w.outcome_note = None, None, None, None
+                w.outcome_scope_json = None
+                _event(db, w, "REOPENED", "CLOSED", actor, now, a.id,
+                       "New discrepancy after an accepted risk: " + "; ".join(f"{c} {i}" for c, i in new))
+            continue
         if w.state == "RESOLVED":
             w.state, w.resolved_at, w.accepted_by, w.accepted_at, w.note = "OPEN", None, None, None, None
             w.outcome, w.outcome_by, w.outcome_at, w.outcome_note = None, None, None, None
@@ -642,15 +762,20 @@ def _money(minor: int, currency: str) -> str:
     return f"{currency} {minor / 100:,.2f}"
 
 
-def _outcome_proof(db: Session, t: LegacyTransitionModel, w: LegacyWorkItemModel, outcome: str) -> str:
-    """The ledger evidence a collection or write-off rests on, from the current assessment's records:
-    a movement on the denied claim line dated at or after the payer's decision (payer cash for a
-    collection; an approved adjustment with its approval for a write-off)."""
+def _outcome_proof(db: Session, t: LegacyTransitionModel, w: LegacyWorkItemModel, outcome: str) -> dict:
+    """The proof for a collection or write-off of a decided denial, from the reconciliation rules applied
+    to the current assessment's exact inputs: proven movements on the denied claim line dated at or
+    after the payer's decision that earlier outcomes have not used, their applied amount and the
+    line's remaining payer balance (None when that position is unverified)."""
+    from app.legacy_bridge.assessment import Issue, movement_proofs, positions
     from app.services.legacy_bridge_evidence import _Evidence
     a = current_assessment(db, t)
     if a is None:
         raise BridgeError(409, "There is no published assessment to prove the outcome from.")
-    ev = _Evidence(db, t, a)
+    try:
+        ev = _Evidence(db, t, a)
+    except HistoryUnavailable as e:
+        raise BridgeError(409, f"{e} Reassess first.")
     denial = ev.data["denial"].get(w.item)
     if denial is None:
         raise BridgeError(409, "The denial is not in the current assessment.")
@@ -658,23 +783,38 @@ def _outcome_proof(db: Session, t: LegacyTransitionModel, w: LegacyWorkItemModel
     if not decided:
         raise BridgeError(409, "The payer has not decided yet; a decision comes before the financial outcome.")
     since = min(r.effective for r in decided)
-    reason = "payer_cash" if outcome == "collected" else "approved_adjustment"
-    moves = [r for r in ev.data["movement"].values()
-             if r.data.line == denial.data.line and r.data.reason == reason and r.effective >= since
-             and (reason == "payer_cash" or r.data.link in ev.data["approval"])]
-    if not moves:
-        what = ("payer cash posted to this claim line" if outcome == "collected"
-                else "an approved adjustment, with its approval, on this claim line")
-        raise BridgeError(422, f"No evidence of {what} after the payer's decision.")
-    return "; ".join(f"{r.key} {_money(abs(r.data.minor), t.currency)} on {iso(r.effective)}"
-                     for r in sorted(moves, key=lambda r: r.key))
+    kind = "collection" if outcome == "collected" else "write_off"
+    issues = {Issue(i["code"], i["item"]) for i in json.loads(a.issues_json)}
+    proofs = movement_proofs(ev.data, issues)
+    used = {p["refs"]["movement"] for p in (json.loads(w.outcome_proof_json) if w.outcome_proof_json else [])}
+    relevant = [(k, p) for k, p in sorted(proofs.items())
+                if p["kind"] == kind and ev.data["movement"][k].data.line == denial.data.line
+                and ev.data["movement"][k].effective >= since and k not in used]
+    proven = [dict(p, refs=p["refs"]) for _k, p in relevant if p["proven"]]
+    if not proven:
+        what = "payer cash posted to this claim line" if kind == "collection" else "an approved write-off on this claim line"
+        reasons = "; ".join(f"{k}: {p['reason']}" for k, p in relevant if not p["proven"])
+        raise BridgeError(422, {"message": f"No proven {what} after the payer's decision.",
+                                "unproven": [{"movement": k, "reason": p["reason"]} for k, p in relevant if not p["proven"]],
+                                "detail": reasons or "no movement after the decision"})
+    valid, _disputed = positions(ev.data["closing"], ev.ctx.snapshot_at)
+    remaining = valid.get((denial.data.line, "payer_ar"))
+    return {"assessment_id": a.id, "proofs": proven, "amount": sum(p["amount"] for p in proven), "remaining": remaining}
+
+
+def _scope_of(w: LegacyWorkItemModel) -> list:
+    """The discrepancies a risk decision covers: the hold reasons linked to the task, or the task itself."""
+    links = json.loads(w.issues_json) if w.issues_json else [{"code": w.code, "item": w.item}]
+    return sorted({(i["code"], i["item"]) for i in links})
 
 
 def record_outcome(db: Session, w: LegacyWorkItemModel, outcome: str, actor: str, is_admin: bool,
                    note: Optional[str] = None, now: Optional[datetime] = None) -> LegacyWorkItemModel:
-    """Close work with one of the separate outcomes. A collection or write-off must be proven by ledger
-    evidence; an accepted risk is a named administrator's decision with a reason and changes no
-    finding (the assessment still holds on the evidence)."""
+    """Record an outcome (07.T2, 07.T5). A collection or write-off applies only the amount the
+    reconciliation rules prove; it closes the task when the claim line's payer balance is zero, and
+    otherwise is recorded as a partial outcome with the task left open. An accepted risk is a named
+    administrator's decision with a reason, bound to the discrepancies it covers; it changes no finding.
+    The assessment ID, proof records and applied amount are stored with the outcome in one transaction."""
     now = now or _utcnow()
     w = _locked_item(db, w)
     t = db.get(LegacyTransitionModel, w.transition_id)
@@ -697,10 +837,29 @@ def record_outcome(db: Session, w: LegacyWorkItemModel, outcome: str, actor: str
         db.rollback()
         raise
     previous = w.state
-    w.state, w.outcome, w.outcome_by, w.outcome_at = "CLOSED", outcome, actor, now
-    w.outcome_note = "; ".join(x for x in (note, f"Evidence: {proof}" if proof else None) if x)
-    _event(db, w, "OUTCOME", previous, actor, now, w.last_assessment_id,
-           f"{outcome.replace('_', ' ').capitalize()}" + (f": {w.outcome_note}" if w.outcome_note else ""))
+    if proof is None:
+        w.state, w.outcome, w.outcome_by, w.outcome_at = "CLOSED", outcome, actor, now
+        w.outcome_assessment_id = w.last_assessment_id
+        w.outcome_scope_json = json.dumps({"assessment_id": w.last_assessment_id, "discrepancies": _scope_of(w)})
+        w.outcome_note = note
+        _event(db, w, "OUTCOME", previous, actor, now, w.last_assessment_id, f"Risk accepted: {note}")
+    else:
+        earlier = json.loads(w.outcome_proof_json) if w.outcome_proof_json else []
+        w.outcome_proof_json = json.dumps(earlier + proof["proofs"])
+        w.outcome_amount = (w.outcome_amount or 0) + proof["amount"]
+        w.outcome_assessment_id = proof["assessment_id"]
+        records = "; ".join(f"{p['refs']['movement']} {_money(p['amount'], t.currency)}" for p in proof["proofs"])
+        label = "Collected" if outcome == "collected" else "Written off"
+        if proof["remaining"] == 0:
+            w.state, w.outcome, w.outcome_by, w.outcome_at = "CLOSED", outcome, actor, now
+            w.outcome_note = "; ".join(x for x in (note, f"Proof: {records} (assessment {proof['assessment_id']})") if x)
+            _event(db, w, "OUTCOME", previous, actor, now, proof["assessment_id"],
+                   f"{label} {_money(w.outcome_amount, t.currency)} in total; this delivery {records}")
+        else:
+            left = "unverified" if proof["remaining"] is None else _money(proof["remaining"], t.currency)
+            _event(db, w, "PARTIAL", previous, actor, now, proof["assessment_id"],
+                   f"{label} {_money(proof['amount'], t.currency)} ({records}); the line still owes {left}"
+                   + (f"; {note}" if note else ""))
     _audit(db, actor, "LEGACY_WORK_ITEM_OUTCOME", w)
     db.commit()
     db.refresh(w)
@@ -721,6 +880,9 @@ def work_item_view(db: Session, w: LegacyWorkItemModel) -> dict:
             "resolved_at": iso(w.resolved_at),
             "outcome": w.outcome, "outcome_by": w.outcome_by, "outcome_at": iso(w.outcome_at),
             "outcome_note": w.outcome_note, "allowed_outcomes": allowed_outcomes(w),
+            "outcome_amount": w.outcome_amount, "outcome_assessment_id": w.outcome_assessment_id,
+            "outcome_proof": json.loads(w.outcome_proof_json) if w.outcome_proof_json else [],
+            "outcome_scope": json.loads(w.outcome_scope_json) if w.outcome_scope_json else None,
             "history": [{"event": e.event, "from_state": e.from_state, "to_state": e.to_state, "actor": e.actor,
                          "assessment_id": e.assessment_id, "note": e.note, "at": iso(e.at)} for e in events]}
 
@@ -755,6 +917,7 @@ def assessment_view(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentMo
     return {
         "assessment_id": a.id, "transition": transition_view(t, current_assessment(db, t)), "as_of": iso(a.as_of),
         "revision": a.revision, "published": a.id is not None, "is_current": is_current,
+        "supersedes_id": a.supersedes_id, "rules_current": a.policy_version == POLICY_VERSION,
         "computed_at": iso(a.computed_at), "status": a.status,
         "policy_version": a.policy_version, "mapping_version": a.mapping_version,
         "review_quality": fact.get("quality_state"), "record_count": a.record_count,
@@ -774,7 +937,8 @@ def assessment_view(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentMo
 def assessment_history(db: Session, t: LegacyTransitionModel, limit: int = 20) -> List[dict]:
     rows = (db.query(LegacyAssessmentModel).filter(LegacyAssessmentModel.transition_id == t.id)
             .order_by(LegacyAssessmentModel.as_of.desc(), LegacyAssessmentModel.revision.desc()).limit(limit).all())
-    return [{"assessment_id": a.id, "as_of": iso(a.as_of), "revision": a.revision,
+    return [{"assessment_id": a.id, "as_of": iso(a.as_of), "revision": a.revision, "supersedes_id": a.supersedes_id,
+             "policy_version": a.policy_version,
              "is_current": a.id == t.current_assessment_id, "computed_at": iso(a.computed_at), "status": a.status,
              "issues": len(json.loads(a.issues_json)), "records": a.record_count, "computed_by": a.computed_by}
             for a in rows]

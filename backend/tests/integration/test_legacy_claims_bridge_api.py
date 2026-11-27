@@ -1411,39 +1411,107 @@ def _appeal_steps(rows, decided=True):
                                   revision=1, data=dict(kind="appeal", denial="den1", stage="decided", receipt="r-dec")))
 
 
-def test_a_write_off_after_the_payers_decision_is_a_proven_separate_outcome(clinic):
-    t, bindings = _open(clinic)
+def _write_off(rows, approval_minor, movement_minor, closing, at_hour=4):
+    _appeal_steps(rows)
+    at = _z(AT["day"] + timedelta(hours=at_hour))
+    rows["operations"].append(dict(key="approval-wo", evidence="ev-approval-wo", effective=at, seen=at, revision=1,
+                                   data=dict(kind="approval", line=_line("C7"), bucket="payer_ar", minor=approval_minor,
+                                             reason="approved_adjustment")))
+    rows["ledger"].append(dict(key="delta-wo", evidence="ev-delta-wo", effective=at, seen=at, revision=1,
+                               data=dict(kind="movement", line=_line("C7"), bucket="payer_ar", minor=movement_minor,
+                                         reason="approved_adjustment", link="approval-wo")))
+    next(r for r in rows["control"] if r["key"] == "closing-ar")["data"]["minor"] = closing
 
-    def decided_then_written_off(rows):
-        _appeal_steps(rows)
-        at = _z(AT["day"] + timedelta(hours=4))
-        rows["operations"].append(dict(key="approval-wo", evidence="ev-approval-wo", effective=at, seen=at, revision=1,
-                                       data=dict(kind="approval", line=_line("C7"), bucket="payer_ar", minor=-2000,
-                                                 reason="approved_adjustment")))
-        rows["ledger"].append(dict(key="delta-wo", evidence="ev-delta-wo", effective=at, seen=at, revision=1,
-                                   data=dict(kind="movement", line=_line("C7"), bucket="payer_ar", minor=-2000,
-                                             reason="approved_adjustment", link="approval-wo")))
-        next(r for r in rows["control"] if r["key"] == "closing-ar")["data"]["minor"] = 28000
-    _deliver(t, bindings, change=decided_then_written_off)
+
+def _outcome_rows(tid):
+    db = SessionLocal()
+    events = [e for (e,) in db.query(m.LegacyWorkItemEventModel.event).filter(
+        m.LegacyWorkItemEventModel.transition_id == tid).all()]
+    audits = db.query(AuditLogModel).filter(AuditLogModel.action == "LEGACY_WORK_ITEM_OUTCOME",
+                                            AuditLogModel.correlation_id.like(f"{tid}:%")).count()
+    db.close()
+    return events, audits
+
+
+def test_a_proven_partial_write_off_is_recorded_and_the_task_stays_open(clinic):
+    t, bindings = _open(clinic)
+    _deliver(t, bindings, change=lambda rows: _write_off(rows, -2000, -2000, 28000))
     a = _assess(t)
     assert a["status"] == "SAMPLE_REVIEWABLE", a["issues"]
     task = _items(a)[("VERIFY_FINANCIAL_OUTCOME", "den1")]
     assert task["allowed_outcomes"] == ["collected", "written_off", "risk_accepted"]
     url = f"{API}/work-items/{task['id']}/outcome"
     refused = client.post(url, json={"outcome": "collected"})
-    assert refused.status_code == 422 and "payer cash" in refused.json()["detail"]   # the base payment predates the decision
+    assert refused.status_code == 422 and "payer cash" in json.dumps(refused.json())   # the base payment predates the decision
+    part = client.post(url, json={"outcome": "written_off", "note": "Approved by finance"}).json()
+    # 07.T2: only the proven amount is applied; the claim line still owes AED 280, so the task stays open.
+    assert part["state"] == "OPEN" and part["outcome"] is None
+    assert part["outcome_amount"] == 2000 and part["outcome_assessment_id"] == a["assessment_id"]
+    assert [p["refs"] for p in part["outcome_proof"]] == [{"movement": "delta-wo", "approval": "approval-wo"}]
+    assert part["history"][-1]["event"] == "PARTIAL" and "AED 280.00" in part["history"][-1]["note"]
+    # The same movement is never applied twice.
+    assert client.post(url, json={"outcome": "written_off"}).status_code == 422
+    assert _items(_read(t))[("VERIFY_FINANCIAL_OUTCOME", "den1")]["outcome_amount"] == 2000
+    events, audits = _outcome_rows(t["id"])
+    assert events.count("PARTIAL") == 1 and "OUTCOME" not in events and audits == 1
+
+
+def test_a_proven_write_off_of_the_whole_balance_closes_the_task_with_its_proof(clinic):
+    t, bindings = _open(clinic)
+    _deliver(t, bindings, change=lambda rows: _write_off(rows, -30000, -30000, 0))
+    a = _assess(t)
+    assert a["status"] == "SAMPLE_REVIEWABLE", a["issues"]
+    task = _items(a)[("VERIFY_FINANCIAL_OUTCOME", "den1")]
+    url = f"{API}/work-items/{task['id']}/outcome"
     done = client.post(url, json={"outcome": "written_off", "note": "Approved by finance"}).json()
     assert done["state"] == "CLOSED" and done["outcome"] == "written_off" and done["outcome_by"] == _user(clinic).email
-    assert "delta-wo AED 20.00" in done["outcome_note"] and done["allowed_outcomes"] == []
-    assert done["history"][-1]["event"] == "OUTCOME"
+    assert done["outcome_amount"] == 30000 and done["outcome_assessment_id"] == a["assessment_id"]
+    assert [p["refs"] for p in done["outcome_proof"]] == [{"movement": "delta-wo", "approval": "approval-wo"}]
+    assert "delta-wo AED 300.00" in done["outcome_note"] and a["assessment_id"] in done["outcome_note"]
+    assert done["allowed_outcomes"] == [] and done["history"][-1]["event"] == "OUTCOME"
     assert client.post(url, json={"outcome": "risk_accepted", "note": "x"}).status_code == 409
     assert client.post(f"{API}/work-items/{task['id']}/accept", json={}).status_code == 409
     again = _items(_assess(t))[("VERIFY_FINANCIAL_OUTCOME", "den1")]
     assert again["state"] == "CLOSED" and again["outcome"] == "written_off"           # publication keeps it closed
-    db = SessionLocal()
-    assert db.query(AuditLogModel).filter(AuditLogModel.action == "LEGACY_WORK_ITEM_OUTCOME",
-                                          AuditLogModel.correlation_id == f"{t['id']}:{task['id']}").count() == 1
-    db.close()
+    assert _outcome_rows(t["id"])[1] == 1
+
+
+def test_07_T2_cash_on_a_missing_posting_cannot_record_a_collection(clinic):
+    t, bindings = _open(clinic)
+
+    def orphan(rows):
+        _appeal_steps(rows)
+        at = _z(AT["day"] + timedelta(hours=4))
+        rows["ledger"].append(dict(key="delta-orphan", evidence="ev-delta-orphan", effective=at, seen=at, revision=1,
+                                   data=dict(kind="movement", line=_line("C7"), bucket="payer_ar", minor=-2000,
+                                             reason="payer_cash", link="ledger-missing")))
+        next(r for r in rows["control"] if r["key"] == "closing-ar")["data"]["minor"] = 28000
+    _deliver(t, bindings, change=orphan)
+    a = _assess(t)
+    assert "ORPHAN_CASH_MOVEMENT" in {i["code"] for i in a["issues"]}
+    task = _items(a)[("VERIFY_FINANCIAL_OUTCOME", "den1")]
+    r = client.post(f"{API}/work-items/{task['id']}/outcome", json={"outcome": "collected"})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["unproven"] == [{"movement": "delta-orphan", "reason": "its payment posting is missing"}]
+    after = _items(_read(t))[("VERIFY_FINANCIAL_OUTCOME", "den1")]
+    assert after["state"] == "OPEN" and after["outcome"] is None and after["outcome_amount"] is None
+    events, audits = _outcome_rows(t["id"])
+    assert "OUTCOME" not in events and "PARTIAL" not in events and audits == 0
+
+
+def test_07_T2_a_write_off_larger_than_its_approval_cannot_record_a_write_off(clinic):
+    t, bindings = _open(clinic)
+    _deliver(t, bindings, change=lambda rows: _write_off(rows, -1000, -2000, 28000))
+    a = _assess(t)
+    assert "APPROVAL_UNPROVEN" in {i["code"] for i in a["issues"]}
+    task = _items(a)[("VERIFY_FINANCIAL_OUTCOME", "den1")]
+    r = client.post(f"{API}/work-items/{task['id']}/outcome", json={"outcome": "written_off"})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["unproven"][0]["movement"] == "delta-wo"
+    after = _items(_read(t))[("VERIFY_FINANCIAL_OUTCOME", "den1")]
+    assert after["state"] == "OPEN" and after["outcome"] is None
+    events, audits = _outcome_rows(t["id"])
+    assert "OUTCOME" not in events and "PARTIAL" not in events and audits == 0
 
 
 def test_collection_needs_payer_cash_after_the_decision_and_comes_only_after_it(clinic, monkeypatch):
@@ -1470,7 +1538,11 @@ def test_collection_needs_payer_cash_after_the_decision_and_comes_only_after_it(
     db.close()
     collected = client.post(f"{API}/work-items/{verify['id']}/outcome", json={"outcome": "collected"}).json()
     assert collected["state"] == "CLOSED" and collected["outcome"] == "collected"
-    assert "delta-4A" in collected["outcome_note"] and " 50.00 on " in collected["outcome_note"]   # the deployment currency
+    # The proof is the posting, its advice and the bank deposit the reconciliation matched (07.T2).
+    [proof] = collected["outcome_proof"]
+    assert proof["refs"]["movement"] == "delta-4A" and proof["refs"]["posting"] and proof["refs"]["deposit"]
+    assert collected["outcome_amount"] == proof["amount"] == 5000
+    assert "delta-4A" in collected["outcome_note"] and " 50.00" in collected["outcome_note"]   # the deployment currency
 
 
 def test_an_accepted_risk_is_an_administrators_decision_and_changes_no_finding(clinic):
@@ -1497,3 +1569,168 @@ def test_an_accepted_risk_is_an_administrators_decision_and_changes_no_finding(c
     # Work that later evidence clears records that as its outcome.
     resolved = [w for w in _read(t)["work_items"] if w["state"] == "RESOLVED"]
     assert all(w["outcome"] == "resolved_by_evidence" for w in resolved)
+
+
+# ---------------------------------------------------------------- third review (07.T1-T5)
+
+def test_07_T1_a_current_assessment_from_earlier_rules_is_replaced_once_and_decisions_stay(clinic):
+    t, bindings = _open(clinic)
+
+    def two_cash(rows):
+        twin = copy.deepcopy(next(r for r in rows["payer"] if r["key"] == "advice-1"))
+        twin.update(key="advice-2", evidence="ev-advice-2")
+        rows["payer"].append(twin)
+    _deliver(t, bindings, change=two_cash)
+    a = _assess(t)
+    task = next(w for w in a["work_items"] if w["state"] == "OPEN")
+    assert client.post(f"{API}/work-items/{task['id']}/accept", json={}).status_code == 200
+    # The row as the v1 rules stored it (d40da770, 780144a): its own digest and the cash it reported.
+    db = SessionLocal()
+    old = db.get(m.LegacyAssessmentModel, a["assessment_id"])
+    summary = json.loads(old.summary_json)
+    summary["cash"]["bank_confirmed"] = 90000
+    old.policy_version, old.input_digest, old.summary_json = "legacy-continuity-policy.v1", "f" * 64, json.dumps(summary)
+    old.manifest_json = old.snapshot_at = None
+    db.commit()
+    replaced = svc.supersede_outdated(db)
+    db.close()
+    assert len(replaced) == 1 and replaced[0] != a["assessment_id"]
+    current = _read(t)
+    assert current["assessment_id"] == replaced[0] and current["supersedes_id"] == a["assessment_id"]
+    assert current["revision"] == a["revision"] + 1 and current["rules_current"] is True
+    assert current["summary"]["cash"]["bank_confirmed"] == 0 == _evidence(t, "cash:confirmed")["total"]
+    assert current["summary"]["cash"]["bank_unmatched"] == _evidence(t, "cash:unmatched")["total"] == 90000
+    # The replaced assessment keeps its ID, result and figures; its detail is marked unavailable.
+    kept = client.get(f"{API}/transitions/{t['id']}/assessments/{a['assessment_id']}").json()
+    assert kept["summary"]["cash"]["bank_confirmed"] == 90000 and kept["is_current"] is False
+    assert kept["rules_current"] is False and kept["status"] == a["status"]
+    assert "unavailable" in _evidence(t, "cash:confirmed", assessment_id=a["assessment_id"])
+    # The decision taken before stays.
+    still = _items(current)[(task["code"], task["item"])]
+    assert still["state"] == "ACCEPTED" and still["accepted_by"] == _user(clinic).email
+    # Running it again (every app start) adds nothing.
+    db = SessionLocal()
+    assert svc.supersede_outdated(db) == []
+    count = db.query(m.LegacyAssessmentModel).filter(m.LegacyAssessmentModel.transition_id == t["id"]).count()
+    db.close()
+    assert count == 2
+    assert _assess(t)["assessment_id"] == replaced[0]                 # republishing finds the same row
+
+
+def test_07_T3_a_published_assessments_detail_never_changes_after_later_deliveries(clinic):
+    t, bindings = _open(clinic)
+    snap = AT["end"] - timedelta(hours=2)
+
+    def earlier_closing(rows):
+        for r in rows["control"]:
+            if r["data"]["kind"] == "closing":
+                r["effective"] = r["seen"] = _z(snap)
+    _, rows = _deliver(t, bindings, change=earlier_closing)
+    a = _assess(t)
+    assert a["status"] == "HOLD" and a["summary"]["snapshot_at"] == _z(snap)      # the snapshot is behind the cutoff
+    figures = ("balance:closing:payer_ar", "cash:observed", "source:bank", "source:control")
+    before = {f: _evidence(t, f, assessment_id=a["assessment_id"]) for f in figures}
+    assert before["balance:closing:payer_ar"]["total"] == 30000
+    # A later-effective closing within the same cutoff and a backdated deposit, each with a later seal.
+    late = _closing_set("closing-late", AT["end"], {"ar": 25000, "credit": -500, "watch": 0, "patient": 0})
+    controls = [r for r in rows["control"] if r["data"]["kind"] == "control"]
+    _page(t, bindings, "control", "control-2", "control-1", late, controls + late, AT["end"])
+    deposit = dict(key="bank-77", evidence="ev-bank-77", effective=_z(AT["day"]), seen=_z(AT["day"]), revision=1,
+                   data=dict(kind="deposit", trace="pay-77", minor=5000))
+    _page(t, bindings, "bank", "bank-2", "bank-1", [deposit], rows["bank"] + [deposit], AT["end"])
+    after = {f: _evidence(t, f, assessment_id=a["assessment_id"]) for f in figures}
+    assert after == before
+    assert [r["key"] for r in after["balance:closing:payer_ar"]["records"]] == ["closing-ar"]
+    assert [r["key"] for r in after["cash:observed"]["records"]] == ["bank-1"]
+    assert len(after["source:bank"]["seals"]) == 1 and after["source:bank"]["seals"][0]["applies"] is True
+    stored = client.get(f"{API}/transitions/{t['id']}/assessments/{a['assessment_id']}").json()
+    assert stored["summary"]["closing"]["payer_ar"] == 30000
+    # A new assessment reflects the new evidence.
+    b = _assess(t)
+    assert b["assessment_id"] != a["assessment_id"]
+    assert [r["key"] for r in _evidence(t, "balance:closing:payer_ar")["records"]] == ["closing-late-ar"]
+    assert _evidence(t, "cash:observed")["total"] == b["summary"]["cash"]["bank_observed"] == 95000
+    seals = _evidence(t, "source:bank")["seals"]
+    assert [(x["applies"], x["superseded"]) for x in seals] == [(False, True), (True, False)]
+
+
+def _bank_csv(*deposits):
+    return "key,kind,effective,trace,amount\n" + "".join(
+        f"{k},deposit,{_z(AT['day'])},{trace},{amount}\n" for k, trace, amount in deposits)
+
+
+def test_07_T4_a_renamed_or_reattested_copy_changes_nothing_and_a_correction_is_a_traceable_version(clinic):
+    t, bindings = _open(clinic)
+    _deliver(t, bindings, skip=("bank",))
+    url = f"{API}/transitions/{t['id']}/uploads"
+    statement = _bank_csv(("bank-1", "pay-9", "900.00"))
+    first = client.post(url, json={"binding_id": bindings["bank"], "content": statement, "filename": "bank-nov.csv",
+                                   "complete_through": _z(AT["end"])})
+    assert first.status_code == 200, first.text
+    a = _assess(t)
+    assert a["status"] == "SAMPLE_REVIEWABLE", a["issues"]
+    renamed = client.post(url, json={"binding_id": bindings["bank"], "content": statement,
+                                     "filename": "bank-nov (1).csv", "complete_through": _z(AT["end"])})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["records_added"] == 0
+    # An independent reattestation of the same contents by another administrator.
+    other_admin = _user(clinic)
+    other_admin.email, other_admin.id = f"second-admin@{clinic.lower()}.test", other_admin.id + 1
+    _as(other_admin)
+    other = client.post(url, json={"binding_id": bindings["bank"], "content": statement, "filename": "statement.csv",
+                                   "complete_through": _z(AT["end"])})
+    _as(_user(clinic))
+    assert other.status_code == 200, other.text
+    db = SessionLocal()
+    seals = db.query(m.LegacySealModel).filter(m.LegacySealModel.transition_id == t["id"],
+                                               m.LegacySealModel.role == "bank").all()
+    db.close()
+    assert len(seals) == 1
+    same = _assess(t)
+    assert same["assessment_id"] == a["assessment_id"] and same["status"] == "SAMPLE_REVIEWABLE"
+    assert same["summary"]["cash"] == a["summary"]["cash"]
+    # A genuine correction at the same cutoff is a new statement that replaces the first, traceably.
+    corrected = client.post(url, json={"binding_id": bindings["bank"], "filename": "bank-nov-corrected.csv",
+                                       "content": _bank_csv(("bank-1", "pay-9", "900.00"), ("bank-77", "pay-77", "50.00")),
+                                       "complete_through": _z(AT["end"])})
+    assert corrected.status_code == 200, corrected.text
+    db = SessionLocal()
+    seals = db.query(m.LegacySealModel).filter(m.LegacySealModel.transition_id == t["id"],
+                                               m.LegacySealModel.role == "bank").order_by(m.LegacySealModel.id).all()
+    assert len(seals) == 2 and seals[0].superseded_by_id == seals[1].id and seals[1].superseded_by_id is None
+    db.close()
+    b = _assess(t)
+    assert b["assessment_id"] != a["assessment_id"] and b["summary"]["cash"]["bank_observed"] == 95000
+    shown = _evidence(t, "source:bank")["seals"]
+    assert [(x["applies"], x["superseded"]) for x in shown] == [(False, True), (True, False)]
+
+
+def test_07_T5_an_accepted_risk_does_not_cover_a_new_discrepancy(clinic):
+    t, bindings = _open(clinic)
+    rows = scenario.records_by_role(CUTOVER.replace(tzinfo=None))
+    _deliver(t, bindings, skip=("bank",))
+    task = _items(_assess(t))[("RECONCILE_BANK_EVIDENCE", "bank")]
+    url = f"{API}/work-items/{task['id']}/outcome"
+    closed = client.post(url, json={"outcome": "risk_accepted", "note": "Bank statement unobtainable"}).json()
+    assert closed["state"] == "CLOSED" and closed["outcome_scope"]["discrepancies"]
+    _page(t, bindings, "bank", "bank-1", None, rows["bank"], rows["bank"], AT["end"])
+    reviewable = _assess(t)
+    assert reviewable["status"] == "SAMPLE_REVIEWABLE", reviewable["issues"]
+    assert _items(reviewable)[("RECONCILE_BANK_EVIDENCE", "bank")]["state"] == "CLOSED"
+    # A later AED 50 deposit on a new trace.
+    deposit = dict(key="bank-77", evidence="ev-bank-77", effective=_z(AT["day"]), seen=_z(AT["day"]), revision=1,
+                   data=dict(kind="deposit", trace="pay-77", minor=5000))
+    _page(t, bindings, "bank", "bank-2", "bank-1", [deposit], rows["bank"] + [deposit], AT["end"])
+    held = _assess(t)
+    assert "UNAPPLIED_BANK_CASH" in {i["code"] for i in held["issues"]}
+    bank = _items(held)[("RECONCILE_BANK_EVIDENCE", "bank")]
+    assert bank["state"] == "OPEN" and bank["outcome"] is None
+    events = [h["event"] for h in bank["history"]]
+    assert "OUTCOME" in events and events[-1] == "REOPENED"            # the earlier decision stays in history
+    assert any("Risk accepted" in (h["note"] or "") for h in bank["history"])
+    # Replaying unchanged evidence creates no extra task and no extra event.
+    _page(t, bindings, "bank", "bank-2", "bank-1", [deposit], rows["bank"] + [deposit], AT["end"])
+    again = _assess(t)
+    assert again["assessment_id"] == held["assessment_id"]
+    assert len(again["work_items"]) == len(held["work_items"])
+    assert [h["event"] for h in _items(again)[("RECONCILE_BANK_EVIDENCE", "bank")]["history"]] == events

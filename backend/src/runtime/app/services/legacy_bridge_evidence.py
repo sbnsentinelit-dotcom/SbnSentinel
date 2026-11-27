@@ -8,6 +8,7 @@ system names (connectors) are never returned.
 """
 import json
 import re
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -16,7 +17,7 @@ from app.legacy_bridge.assessment import index_records, line_name, positions, tr
 from app.legacy_bridge.messages import message
 from app.legacy_bridge.summary import BUCKETS
 from app.models.legacy_bridge import LegacyAssessmentModel, LegacyPageModel, LegacySealModel, LegacyTransitionModel
-from app.services.legacy_bridge_service import BridgeError, bindings, build_inputs, iso
+from app.services.legacy_bridge_service import BridgeError, HistoryUnavailable, bindings, inputs_of, iso, to_db
 
 FIGURE = re.compile(r"^(balance:(control|opening|closing):(%s)|cash:(advised|observed|confirmed|unmatched|unapplied|"
                     r"ledger_posted|provider_adjustments)|route:[a-z_]+|denial:[A-Za-z0-9._/-]+|source:[a-z]+|"
@@ -57,7 +58,7 @@ class _Evidence:
 
     def __init__(self, db: Session, t: LegacyTransitionModel, a: LegacyAssessmentModel):
         self.t, self.a = t, a
-        ctx, batch, stored = build_inputs(db, t, a.as_of, a.computed_at, with_rows=True)
+        ctx, batch, stored = inputs_of(db, t, a)     # the exact inputs from the assessment's manifest
         self.ctx = ctx
         self.data, _refs = index_records(ctx, batch.records, set())
         self.row_of = {id(rec): row for rec, row in zip(batch.records, stored)}
@@ -168,7 +169,11 @@ def _related(ev: _Evidence, item: str) -> List:
 def figure_evidence(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentModel, figure: str) -> Dict:
     if not FIGURE.match(figure):
         raise BridgeError(422, "Unknown figure.")
-    ev = _Evidence(db, t, a)
+    try:
+        ev = _Evidence(db, t, a)
+    except HistoryUnavailable as e:
+        return {"figure": figure, "label": figure, "assessment_id": a.id, "as_of": iso(a.as_of), "total": None,
+                "rule": None, "records": [], "unavailable": str(e)}
     head, _, rest = figure.partition(":")
     total, records, label, rule = None, [], figure, RULES.get(head)
     if head == "balance":
@@ -198,13 +203,22 @@ def figure_evidence(db: Session, t: LegacyTransitionModel, a: LegacyAssessmentMo
     elif head == "source":
         records = [ev.view(r) for r in sorted(ev.all(), key=lambda r: (r.data.kind, r.key))
                    if ev.role_of.get(r.connector) == rest]
-        seals = (db.query(LegacySealModel).filter(LegacySealModel.transition_id == t.id, LegacySealModel.role == rest)
-                 .order_by(LegacySealModel.through).all())
+        # The statements this assessment could see: those received by the time it was computed (07.T3).
+        # A statement or correction that arrives later belongs to a later assessment.
+        manifest = json.loads(a.manifest_json) if a.manifest_json else {}
+        seen_by = (to_db(datetime.fromisoformat(manifest["inputs_until"].replace("Z", "+00:00")))
+                   if manifest.get("inputs_until") else max(a.computed_at, a.as_of))
+        seals = (db.query(LegacySealModel).filter(LegacySealModel.transition_id == t.id, LegacySealModel.role == rest,
+                                                  LegacySealModel.received_at <= seen_by)
+                 .order_by(LegacySealModel.through, LegacySealModel.id).all())
+        visible = {s.id for s in seals}
+        used = set(manifest.get("seals", []))
         label = rest
         return {"figure": figure, "label": label, "assessment_id": a.id, "as_of": iso(a.as_of), "total": None,
                 "rule": rule, "records": records,
                 "seals": [{"through": iso(s.through), "unique_rows": s.unique_rows, "received_at": iso(s.received_at),
-                           "receipt": s.receipt, "applies": s.through == a.as_of} for s in seals]}
+                           "receipt": s.receipt, "applies": s.id in used, "superseded": s.superseded_by_id in visible}
+                          for s in seals]}
     else:  # issue:<CODE>:<item>
         code, _, item = rest.partition(":")
         records = [ev.view(r) for r in _related(ev, item)]
@@ -218,7 +232,10 @@ def work_item_evidence(db: Session, t: LegacyTransitionModel, a: Optional[Legacy
     its follow-up names (a denial, a provider recovery reference, a reopened claim line)."""
     if a is None:
         return []
-    ev = _Evidence(db, t, a)
+    try:
+        ev = _Evidence(db, t, a)
+    except HistoryUnavailable:
+        return []
     names = [i["item"] for i in json.loads(w.issues_json)] if w.issues_json else [w.item]
     seen, out = set(), []
     for item in names:

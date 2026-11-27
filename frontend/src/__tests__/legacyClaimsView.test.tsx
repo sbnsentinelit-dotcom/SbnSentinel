@@ -65,6 +65,8 @@ let bodies: any[] = [];
 let previewProblems: { row: number | null; reason: string }[] = [];
 let pulseValue = { transition_id: 'LCT-A', current_assessment_id: 'LCA-A', last_received_at: null, last_work_event: 1, lock_version: 1 };
 let workHistory: { event: string; actor: string; at: string; note: string | null }[] = [];
+let workExtra: Record<string, unknown> = {};
+let evidenceExtra: Record<string, unknown> = {};
 const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -95,10 +97,11 @@ const api = async (url: string, init?: { method?: string }) => {
       rule: 'A deposit is confirmed only when one cash advice and one deposit agree.',
       records: [{ key: 'bank-1', kind: 'deposit', source: 'bank', effective: '2026-11-04T10:00:00Z', seen: '2026-11-04T10:00:00Z',
         received_at: '2026-11-05T18:00:00Z', received_by: 'source@clinic.test', page_token: 'bank-1', custody_evidence_id: 'evd_123456789012345678',
-        evidence_ref: 'ev-bank-1', fields: { trace: 'pay-9', minor: 90000 }, status: 'confirmed: one cash advice and one deposit agree' }] });
+        evidence_ref: 'ev-bank-1', fields: { trace: 'pay-9', minor: 90000 }, status: 'confirmed: one cash advice and one deposit agree' }],
+      ...evidenceExtra });
   }
   if (path === '/work-items/1') return ok({ ...assessment('A').work_items[0], evidence: [], history: workHistory,
-    allowed_outcomes: ['collected', 'written_off', 'risk_accepted'] });
+    allowed_outcomes: ['collected', 'written_off', 'risk_accepted'], ...workExtra });
   if (path.endsWith('/assignees')) return ok([{ value: 'revenue-cycle', label: 'revenue-cycle', kind: 'team' }]);
   if (path.endsWith('/compare')) return ok({
     from: { assessment_id: 'LCA-OLD', as_of: '2026-11-04T18:00:00Z', revision: 1, status: 'HOLD' },
@@ -106,6 +109,7 @@ const api = async (url: string, init?: { method?: string }) => {
     issues_added: [], issues_removed: [{ code: 'BANK_PROOF_INCOMPLETE', item: 'advice-1', message: 'The payment advice has no single matching bank deposit for its net amount.' }],
     figures_changed: [{ figure: 'cash:bank_confirmed', from: null, to: 90000 }], records: { from: 31, to: 32 } });
   if (path.endsWith('/assessments/LCA-OLD')) return ok({ ...assessment('A'), assessment_id: 'LCA-OLD', status: 'HOLD', is_current: false, work_items: [],
+    rules_current: false, policy_version: 'legacy-continuity-policy.v1',
     issues: [{ code: 'BANK_PROOF_INCOMPLETE', item: 'advice-1', message: 'The payment advice has no single matching bank deposit for its net amount.' }] });
   const id = ((path.match(/LCT-([A-Z])/) ?? ['', 'A'])[1]) as Id;
   if (path === '/status') return ok({ enabled: true, can_view: true, can_deliver: true, can_configure: true, stage: 'V3' });
@@ -322,6 +326,7 @@ describe('Legacy Claims screen is a working screen: evidence, work and history p
     await waitFor(() => expect(panel.textContent).toContain('Earlier assessment'));
     await waitFor(() => expect(panel.textContent).toContain('Cleared: The payment advice has no single matching bank deposit'));
     expect(panel.textContent).toContain('Bank-confirmed');
+    expect(panel.textContent).toContain('Computed under earlier rules (legacy-continuity-policy.v1)');   // 07.T1
   });
 
   it('re-reads the screen when the server pulse changes, and not otherwise', async () => {
@@ -472,8 +477,41 @@ describe('Legacy Claims separate outcomes', () => {
     posts = [];
     bodies = [];
     workHistory = [{ event: 'OPENED', actor: 'publisher', at: '2026-11-05T18:00:00Z', note: null }];
+    workExtra = {};
+    evidenceExtra = {};
     fetchWithAuth.mockReset();
     fetchWithAuth.mockImplementation(api);
+  });
+
+  it('a proven partial outcome shows its amount and proof and the task stays open', async () => {
+    workHistory = [...workHistory, { event: 'PARTIAL', actor: 'me', at: '2026-11-06T09:00:00Z',
+      note: 'Written off AED 20.00 (delta-wo AED 20.00); the line still owes AED 280.00' }];
+    workExtra = { outcome_amount: 2000, outcome_assessment_id: 'LCA-A',
+      outcome_proof: [{ kind: 'write_off', amount: 2000, refs: { movement: 'delta-wo', approval: 'approval-wo' } }] };
+    render(<LegacyClaimsView />);
+    await screen.findByText(/subscription-A/);
+    await act(async () => { fireEvent.click(screen.getByLabelText('Open Work denial of Run-off A')); });
+    const panel = await screen.findByRole('dialog');
+    await waitFor(() => expect(panel.textContent).toContain('Partial outcome so far'));
+    expect(panel.textContent).toContain('delta-wo → approval-wo');
+    expect(panel.textContent).toContain('assessment LCA-A');
+    expect(panel.textContent).toContain('Partial outcome');                // the timeline label
+    expect(panel.textContent).toContain('the line still owes AED 280.00');
+    expect(screen.getByText('Close with outcome')).toBeTruthy();          // still open for the rest
+  });
+
+  it('an assessment from earlier rules says its detail is unavailable; a replaced statement is marked', async () => {
+    evidenceExtra = { records: [], total: null, unavailable: 'This assessment was computed under legacy-continuity-policy.v1.',
+      seals: [{ through: '2026-11-05T18:00:00Z', unique_rows: 1, received_at: '2026-11-05T18:00:00Z', receipt: 'a', applies: false, superseded: true },
+        { through: '2026-11-05T18:00:00Z', unique_rows: 2, received_at: '2026-11-06T09:00:00Z', receipt: 'b', applies: true, superseded: false }] };
+    render(<LegacyClaimsView />);
+    await screen.findByText(/subscription-A/);
+    await act(async () => { fireEvent.click(screen.getByLabelText('Bank-confirmed payments')); });
+    const panel = await screen.findByRole('dialog');
+    await waitFor(() => expect(panel.textContent).toContain('computed under legacy-continuity-policy.v1'));
+    expect(panel.textContent).toContain('The records behind this assessment cannot be shown.');
+    expect(panel.textContent).toContain('replaced by a later statement');
+    expect(panel.textContent).toContain('used by this assessment');
   });
 
   it('closes a task with a chosen outcome; an accepted risk needs a reason first', async () => {

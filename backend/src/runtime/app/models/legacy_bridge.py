@@ -10,7 +10,7 @@ subscription from these tables: assessments and work items are review material f
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 
 from app.db.database import Base
 
@@ -137,6 +137,9 @@ class LegacySealModel(Base):
     digest = Column(String(64), nullable=False)
     receipt = Column(String(96), nullable=False)
     received_at = Column(DateTime, nullable=False)
+    # A later statement for the same source and instant with different contents replaces this one; the
+    # replaced statement is kept for the record and no longer counts.
+    superseded_by_id = Column(Integer, nullable=True)
 
 
 class LegacyAssessmentModel(Base):
@@ -152,6 +155,12 @@ class LegacyAssessmentModel(Base):
     revision = Column(Integer, nullable=False, default=1)
     # True when every source's completeness seal is through as_of; only sealed assessments become current.
     sealed = Column(Boolean, nullable=False, default=False)
+    # The exact inputs: {"records": [ids], "seals": [ids], "bindings": [ids]}; every historical figure is
+    # rebuilt from these, so later deliveries never change a published assessment.
+    manifest_json = Column(Text, nullable=True)
+    snapshot_at = Column(DateTime, nullable=True)
+    # The assessment this one replaced as current (a newer cutoff, new evidence, or new rules).
+    supersedes_id = Column(String(40), nullable=True)
     status = Column(String(24), nullable=False)
     input_digest = Column(String(64), nullable=False)
     policy_version = Column(String(48), nullable=False)
@@ -187,6 +196,10 @@ class LegacyWorkItemModel(Base):
     outcome_by = Column(String(160), nullable=True)
     outcome_at = Column(DateTime, nullable=True)
     outcome_note = Column(Text, nullable=True)
+    outcome_assessment_id = Column(String(40), nullable=True)   # the assessment the proof came from
+    outcome_proof_json = Column(Text, nullable=True)            # proof records and applied amounts
+    outcome_amount = Column(BigInteger, nullable=True)           # applied amount, minor units
+    outcome_scope_json = Column(Text, nullable=True)            # risk_accepted: the accepted discrepancies
     state = Column(String(16), nullable=False, default="OPEN")  # OPEN | ACCEPTED | RESOLVED
     first_assessment_id = Column(String(40), nullable=False)
     last_assessment_id = Column(String(40), nullable=False)

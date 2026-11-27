@@ -123,7 +123,9 @@ def upload(db: Session, t: LegacyTransitionModel, binding_id: int, content: str,
         population = _population(db, t, b, new, through)
         seal = IncomingSeal(through=through.replace(tzinfo=timezone.utc), unique_rows=len(population),
                             digest=digest_rows(population),
-                            receipt=f"attested-{digest([actor, iso(through), filename])[:24]}")
+                            # The statement's identity is its source, instant and population; who uploaded which
+                            # file is kept separately with the page's custody row (07.T4).
+                            receipt=f"attested-{digest([b.connector, iso(through), digest_rows(population)])[:24]}")
     head = _read_head(db, t, b.connector, "export")
     page = PageIn.model_validate_json(json.dumps({
         "binding_id": b.id, "resource": "export", "previous": head.head_token if head else None,
