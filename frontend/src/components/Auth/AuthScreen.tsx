@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Mail, Lock, User, ArrowRight, ShieldCheck, AlertCircle, Eye, EyeOff, Building2 } from 'lucide-react';
 
 interface AuthScreenProps {
@@ -26,6 +26,46 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  // MS-001: invitation and reset links, password confirmation and terms acceptance
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [linkToken, setLinkToken] = useState('');
+  const [inviteInfo, setInviteInfo] = useState<{ role_label?: string; organization?: string | null; clinic?: string | null; terms_version?: string } | null>(null);
+
+  useEffect(() => {
+    const reason = sessionStorage.getItem('signout_reason');
+    if (reason) {
+      setError(reason);
+      sessionStorage.removeItem('signout_reason');
+    }
+    const params = new URLSearchParams(window.location.search);
+    const invite = params.get('invite_token');
+    const reset = params.get('reset_token');
+    if (invite) {
+      setIsInviteMode(true);
+      setIsLogin(false);
+      setIsOtpMode(true);
+      setLinkToken(invite);
+      fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/auth/invitation?token=${encodeURIComponent(invite)}`)
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'This invitation link is invalid, used or expired.');
+          setEmail(data.email || '');
+          setInviteInfo(data);
+        })
+        .catch((e) => setError(e.message));
+    } else if (reset) {
+      setIsForgotPassword(true);
+      setIsOtpMode(true);
+      setLinkToken(reset);
+    }
+  }, []);
+
+  const clearLink = () => {
+    setLinkToken('');
+    setInviteInfo(null);
+    if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,34 +76,58 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
     try {
       if (isForgotPassword || isInviteMode) {
         if (!isOtpMode) {
-          // Request OTP for reset or activation
-          const endpoint = isInviteMode ? '/api/v1/auth/forgot-password' : '/api/v1/auth/forgot-password'; // We can use the same forgot password endpoint to send an OTP to the invited user
-          const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}${endpoint}`, {
+          if (isInviteMode) {
+            // The invitation email already holds the activation code: go straight to it.
+            setSuccessMsg('Enter the code from your invitation email and choose your password.');
+            setIsOtpMode(true);
+            return;
+          }
+          // Request a reset link (and code) by email
+          const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/auth/forgot-password`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email })
           });
           if (response.ok) {
-            setSuccessMsg(isInviteMode ? '✅ Activation OTP sent to your email.' : '✅ OTP sent to your email.');
+            const data = await response.json();
+            setSuccessMsg(`✅ ${data.message || 'If that email is registered, a password reset link has been sent.'}`);
             setIsOtpMode(true);
           } else {
-            setError('Failed to send OTP.');
+            const errData = await response.json().catch(() => ({}));
+            setError(errData.detail || 'Could not send the reset email.');
           }
         } else {
-          // Verify OTP for reset or activation
+          if (password !== confirmPassword) {
+            throw new Error('Password and confirmation do not match.');
+          }
+          if (isInviteMode && !acceptTerms) {
+            throw new Error('Accept the terms of use to activate your account.');
+          }
+          // Use the link token or the emailed code for reset or activation
           const endpoint = isInviteMode ? '/api/v1/auth/accept-invite' : '/api/v1/auth/reset-password';
           const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, otp: otpValue, new_password: password })
+            body: JSON.stringify({
+              email: email || undefined,
+              otp: linkToken ? undefined : otpValue,
+              token: linkToken || undefined,
+              new_password: password,
+              confirm_password: confirmPassword,
+              accept_terms: isInviteMode ? acceptTerms : undefined
+            })
           });
           if (response.ok) {
             setSuccessMsg(isInviteMode ? '✅ Account activated successfully! Please log in.' : '✅ Password reset successful! Please log in.');
             setIsOtpMode(false);
             setIsForgotPassword(false);
             setIsInviteMode(false);
+            setIsLogin(true);
             setOtpValue('');
             setPassword('');
+            setConfirmPassword('');
+            setAcceptTerms(false);
+            clearLink();
           } else {
             const errData = await response.json();
             throw new Error(errData.detail || 'Invalid OTP.');
@@ -79,7 +143,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
         });
         
         if (!response.ok) {
-          throw new Error('Invalid email or password. Please try again.');
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(response.status === 403 && errData.detail ? errData.detail : 'Invalid email or password. Please try again.');
         }
         
         const data = await response.json();
@@ -235,9 +300,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             </h2>
             <p className="text-sm text-white/60 font-medium">
               {isInviteMode
-                ? (isOtpMode ? 'Enter the OTP and set your secure password to activate your account.' : 'Enter your email address to receive an activation OTP.')
-                : isForgotPassword 
-                ? (isOtpMode ? 'Enter the OTP sent to your email and your new password' : 'Enter your email to receive an OTP') 
+                ? (isOtpMode ? 'Accept the terms and choose your password to activate your account.' : 'Enter the email address your invitation was sent to.')
+                : isForgotPassword
+                ? (isOtpMode ? (linkToken ? 'Choose your new password.' : 'Enter the code from the reset email and your new password') : 'Enter your email to receive a reset link') 
                 : isLogin 
                   ? 'Enter your email and password to log in' 
                   : (isOtpMode ? 'Enter the OTP sent to your email to activate your account' : 'Complete your professional profile for verification')}
@@ -326,14 +391,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                   <label className="block text-[11px] font-extrabold text-[#9CA3AF] uppercase tracking-wider mb-2">Email Address</label>
                   <div className="relative">
                     <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#9CA3AF]" />
-                    <input 
-                      type="email" 
+                    <input
+                      type="email"
                       value={email}
                       disabled
                       className="w-full bg-gray-50 border border-white/10 rounded-[16px] py-2.5 pl-12 pr-4 text-sm font-bold text-[#9CA3AF] cursor-not-allowed"
                     />
                   </div>
                 </div>
+                {inviteInfo && (
+                  <p className="text-xs font-bold text-white/70">
+                    Invited as {inviteInfo.role_label}{inviteInfo.organization ? ` · ${inviteInfo.organization}` : ''}{inviteInfo.clinic ? ` · ${inviteInfo.clinic}` : ''}
+                  </p>
+                )}
+                {linkToken ? (
+                  <p className="text-xs font-bold text-emerald-400">Using the secure link from your email.</p>
+                ) : (
                 <div>
                   <label className="block text-[11px] font-extrabold text-[#9CA3AF] uppercase tracking-wider mb-2">Enter OTP</label>
                   <div className="relative">
@@ -344,11 +417,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                       value={otpValue}
                       onChange={(e) => setOtpValue(e.target.value)}
                       className="w-full bg-white/5 border border-white/10 rounded-[16px] py-2.5 pl-12 pr-4 text-sm font-bold text-white tracking-[0.2em] outline-none focus:border-[#2E1055] focus:bg-white/10 transition-all"
-                      required 
+                      required
                       maxLength={6}
                     />
                   </div>
                 </div>
+                )}
               </>
             )}
 
@@ -376,6 +450,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                   </button>
                 </div>
               )}
+              {(isForgotPassword || isInviteMode) && isOtpMode && (
+                <div className="relative mt-3">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#9CA3AF]" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Confirm new password"
+                    aria-label="Confirm new password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-[16px] py-2.5 pl-12 pr-4 text-sm font-bold text-white outline-none focus:border-[#2E1055] focus:bg-white/10 transition-all"
+                    required
+                  />
+                </div>
+              )}
+              {isInviteMode && isOtpMode && (
+                <label className="flex items-start gap-2 mt-3 text-xs font-bold text-white/70 cursor-pointer">
+                  <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} className="mt-0.5" required />
+                  <span>I accept the SBN Sentinel terms of use{inviteInfo?.terms_version ? ` (${inviteInfo.terms_version})` : ''}.</span>
+                </label>
+              )}
               {isLogin && !isForgotPassword && !isInviteMode && (
                 <div className="flex justify-end mt-2">
                   <button 
@@ -401,7 +495,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                 </span>
               ) : (
                 <>
-                  {isInviteMode ? (isOtpMode ? 'Activate Account' : 'Send Activation OTP') : isForgotPassword ? (isOtpMode ? 'Reset Password' : 'Send Reset OTP') : isLogin ? 'Sign In to Dashboard' : (isOtpMode ? 'Verify & Register' : 'Submit Registration')}
+                  {isInviteMode ? (isOtpMode ? 'Activate Account' : 'Continue') : isForgotPassword ? (isOtpMode ? 'Reset Password' : 'Send Reset Link') : isLogin ? 'Sign In to Dashboard' : (isOtpMode ? 'Verify & Register' : 'Submit Registration')}
                   <ArrowRight className="w-5 h-5" />
                 </>
               )}
@@ -412,7 +506,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             <p className="mt-8 text-center text-sm font-bold text-white/50">
               Remember your password?{' '}
               <button 
-                onClick={() => { setIsForgotPassword(false); setIsInviteMode(false); setError(''); setSuccessMsg(''); }} 
+                onClick={() => { setIsForgotPassword(false); setIsInviteMode(false); setIsLogin(true); setIsOtpMode(false); setError(''); setSuccessMsg(''); clearLink(); }} 
                 className="text-[#2E1055] hover:underline cursor-pointer"
               >
                 Back to log in

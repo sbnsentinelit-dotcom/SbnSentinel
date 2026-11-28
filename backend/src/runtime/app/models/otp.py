@@ -13,3 +13,7 @@ class OTPModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     is_used = Column(Boolean, default=False)
     attempts = Column(Integer, default=0)
+    # MS-001: the link in invitation and reset emails carries a random token; only its SHA-256 is stored.
+    token_hash = Column(String, index=True, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    used_at = Column(DateTime, nullable=True)

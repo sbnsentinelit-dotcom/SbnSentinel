@@ -2,6 +2,7 @@ from app.api.v1.endpoints import outcomes
 from fastapi import APIRouter, Depends
 # Import subsystem routers here when created
 from app.api.v1.endpoints import runtime, history
+from app.api.v1.endpoints import organizations, notifications
 from app.api.v1.endpoints import reality_connectors, signals, auth, insurance, audit, settings, encounters, super_admin, billing, clinics, pasme, pipeline, health, decisions, actions, decision_basis, action_lifecycle, financial_reports, patients, patient_flow, severity
 
 
@@ -19,8 +20,8 @@ protected = [Depends(get_current_user)]
 api_router.include_router(reality_connectors.router,
                           prefix="/reality",
                           tags=["000_Reality_Connectors"],
-                          # DEMO: Organization Administrator added for the demo; review after the demo.
-                          dependencies=[Depends(RoleChecker([UserRole.CLINIC_MANAGER.value,
+                          # Connections are managed by administrators, inside their own scope (MS-001).
+                          dependencies=[Depends(RoleChecker([UserRole.CLINIC_ADMINISTRATOR.value,
                                                              UserRole.ORGANIZATION_ADMINISTRATOR.value,
                                                              UserRole.SYSTEM_ADMINISTRATOR.value]))])
 api_router.include_router(
@@ -97,6 +98,17 @@ api_router.include_router(
     clinics.router,
     prefix="/clinics",
     tags=["008_Clinics"],
+    dependencies=protected)
+# MS-001: organization lifecycle and the per-user notification inbox
+api_router.include_router(
+    organizations.router,
+    prefix="/organizations",
+    tags=["008_Organizations"],
+    dependencies=protected)
+api_router.include_router(
+    notifications.router,
+    prefix="/notifications",
+    tags=["009_Notifications"],
     dependencies=protected)
 api_router.include_router(
     financial_reports.router,

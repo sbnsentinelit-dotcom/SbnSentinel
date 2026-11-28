@@ -679,7 +679,7 @@ class GovernanceRegistry:
 
         self.register_authority_config(
             AuthorityConfiguration(
-                role="Clinic Manager",
+                role="Clinic Administrator",
                 allowed_decisions=[
                     DecisionType.APPROVED,
                     DecisionType.REJECTED,
@@ -717,7 +717,7 @@ class GovernanceRegistry:
                         DecisionType.RETURNED_FOR_REVIEW]))
 
         self.register_authority_config(AuthorityConfiguration(
-            role="Front Desk",
+            role="Staff User",
             allowed_decisions=[DecisionType.APPROVED, DecisionType.REJECTED],
             can_override=False,
             requires_reason_for=[DecisionType.REJECTED]
@@ -730,7 +730,8 @@ class GovernanceRegistry:
     def get_authority_config(self, role: str) -> Optional[AuthorityConfiguration]:
         if not self._authority_configs:
             self._init_default_authority_configs()
-        return self._authority_configs.get(role)
+        from app.models.user import canonical_role
+        return self._authority_configs.get(canonical_role(role)) or self._authority_configs.get(role)
 
     def record_human_decision(self, decision: HumanDecisionRecord) -> HumanDecisionRecord:
         db = SessionLocal()

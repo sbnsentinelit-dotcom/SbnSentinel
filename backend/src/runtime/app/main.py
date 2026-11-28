@@ -103,6 +103,8 @@ def run_startup_seeding():
                 db.commit()
                 print("[SECURITY] Disabled demo clinicadmin account in production environment.")
         elif not is_testing:
+            from app.services.dubai_seed_service import ensure_demo_organization
+            ensure_demo_organization(db)
             existing_clinic = db.query(User).filter(User.email == "clinicadmin@sbnsentinel.com").first()
             if not existing_clinic:
                 demo_pwd = os.getenv("DEMO_ADMIN_PASSWORD") or getattr(settings, "DEMO_ADMIN_PASSWORD", None)

@@ -65,22 +65,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [aiModel, setAiModel] = useState('gpt-4o');
 
   // Team & Access States
-  const [teamMembers, setTeamMembers] = useState([
-    { id: 'usr-1', name: 'Dr. Sarah Jenkins', email: 's.jenkins@sentinel.com', role: 'Clinic Administrator', status: 'Active' },
-    { id: 'usr-2', name: 'Dr. Alan Grant', email: 'a.grant@sentinel.com', role: 'Operations Manager', status: 'Active' },
-    { id: 'usr-3', name: 'Sarah Jenkins', email: 'manager@sentinel.com', role: 'Practice Manager', status: 'Active' },
-    { id: 'usr-4', name: 'Dr. Emily Chen', email: 'e.chen@sentinel.com', role: 'Staff User', status: 'Active' },
-    { id: 'usr-5', name: 'John Davis', email: 'j.davis@sentinel.com', role: 'Staff User', status: 'Active' }
-  ]);
+  // Team members come from the server only (no sample rows when the list is empty or fails to load).
+  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; name: string; email: string; role: string; status: string; clinic_id?: string | null; clinic?: string | null }>>([]);
+  const [teamError, setTeamError] = useState('');
+  const [assignableRoles, setAssignableRoles] = useState<Array<{ role: string; label: string; needs_clinic: boolean }>>([]);
+  const [inviteClinic, setInviteClinic] = useState('');
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('Staff User');
 
   // Clinics States
-  const [clinicsList, setClinicsList] = useState<any[]>([
-    { id: '1', name: 'Sentinel Health Urgent Care (Main)', address: '123 Health Ave, New York, NY', phone: '(555) 019-2834', status: 'Active' }
-  ]);
+  const [clinicsList, setClinicsList] = useState<any[]>([]);
+  const [editingClinicId, setEditingClinicId] = useState<string | null>(null);
   const [showAddClinicModal, setShowAddClinicModal] = useState(false);
   const [newClinicName, setNewClinicName] = useState('');
   const [newClinicAddress, setNewClinicAddress] = useState('');
@@ -110,6 +107,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   const [isApiTesting, setIsApiTesting] = useState(false);
   const [apiConnectionStatus, setApiConnectionStatus] = useState<'connected' | 'disconnected'>('connected');
   const [apiTestSuccessMsg, setApiTestSuccessMsg] = useState<string | null>(null);
+
+  // Integration panel figures come from the server (encounter summary and recorded connections).
+  const [syncStats, setSyncStats] = useState<{ total_encounters: number; paid_count: number; pending_count: number; denied_count: number } | null>(null);
+  const [connectorHealth, setConnectorHealth] = useState<Array<{ id: string; latency_ms: number | null; last_sync: string | null; verification?: string }>>([]);
 
   // Integrations come from the server only (no pre-filled "connected" entries).
   const [integrationsList, setIntegrationsList] = useState<Array<{ id: string; name: string; type: string; connected: boolean; lastSync: string }>>([]);
@@ -168,16 +169,42 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
     }
   };
 
+  const fetchClinics = async () => {
+    try {
+      const clinicsRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/clinics`);
+      setClinicsList(await clinicsRes.json());
+    } catch (err) {
+      console.error("Failed to fetch clinics:", err);
+    }
+  };
+
   const fetchTeam = async () => {
+    setTeamError('');
     try {
       const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.length > 0) setTeamMembers(data);
-      }
-    } catch (err) {
-      console.error("Failed to fetch team:", err);
+      setTeamMembers(await res.json());
+    } catch (err: any) {
+      setTeamMembers([]);
+      setTeamError(err?.message || 'Could not load team members.');
     }
+    try {
+      const rolesRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/roles`);
+      const roles = await rolesRes.json();
+      setAssignableRoles(roles);
+      if (roles.length && !roles.some((r: any) => r.role === inviteRole)) setInviteRole(roles[roles.length - 1].role);
+    } catch { /* the role list follows the caller's permissions */ }
+    fetchClinics();
+  };
+
+  const fetchSyncFigures = async () => {
+    try {
+      const statsRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/encounters/summary-stats`);
+      setSyncStats(await statsRes.json());
+    } catch { setSyncStats(null); }
+    try {
+      const healthRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/reality/health`);
+      setConnectorHealth(await healthRes.json());
+    } catch { setConnectorHealth([]); }
   };
 
   const fetchIntegrations = async () => {
@@ -188,12 +215,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
         setIntegrationsList(data);
       }
       
-      // Fetch Clinics
-      const clinicsRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/clinics`);
-      if (clinicsRes.ok) {
-        const clinicsData = await clinicsRes.json();
-        setClinicsList(clinicsData);
-      }
+      fetchClinics();
+      fetchSyncFigures();
     } catch (err) {
       console.error("Failed to fetch integrations:", err);
     }
@@ -203,6 +226,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
     if (localActiveMenu === 'security') fetchAudits();
     if (localActiveMenu === 'team') fetchTeam();
     if (localActiveMenu === 'integrations') fetchIntegrations();
+    if (localActiveMenu === 'clinics' || localActiveMenu === 'settings-clinics') fetchClinics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localActiveMenu]);
 
   // Load clinical settings on component mount
@@ -293,21 +318,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
       const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team/invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: inviteName, email: inviteEmail, role: inviteRole })
+        body: JSON.stringify({ name: inviteName, email: inviteEmail, role: inviteRole, clinic_id: inviteClinic || undefined })
       });
-      if (res.ok) {
-        const newMember = await res.json();
-        setTeamMembers(prev => [...prev, newMember]);
-        setInviteName('');
-        setInviteEmail('');
-        setShowInviteModal(false);
-        showToast(`Invitation email successfully sent to ${newMember.email}`);
+      const newMember = await res.json();
+      setTeamMembers(prev => [...prev, newMember]);
+      setInviteName('');
+      setInviteEmail('');
+      setInviteClinic('');
+      setShowInviteModal(false);
+      if (newMember.email_sent) {
+        showToast(`Invitation email sent to ${newMember.email}.`);
       } else {
-        const errData = await res.json();
-        showToast(errData.detail || 'Failed to send invite', 'error');
+        showToast(`Invitation created for ${newMember.email}, but the email could not be delivered. Use Resend Invite.`, 'error');
       }
-    } catch (err) {
-      showToast('Error syncing with clinical server.', 'error');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to send invite', 'error');
     }
   };
 
@@ -331,14 +356,46 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
     }
   };
 
+  const openEditClinic = (clinic: any) => {
+    setEditingClinicId(clinic.id);
+    setNewClinicName(clinic.name || '');
+    setNewClinicAddress(clinic.address || '');
+    setNewClinicPhone(clinic.phone || '');
+    setShowAddClinicModal(true);
+  };
+
+  const closeClinicModal = () => {
+    setShowAddClinicModal(false);
+    setEditingClinicId(null);
+    setNewClinicName('');
+    setNewClinicAddress('');
+    setNewClinicPhone('');
+  };
+
+  const handleClinicStatus = async (clinic: any) => {
+    const next = clinic.status === 'Active' ? 'Inactive' : 'Active';
+    try {
+      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/clinics/${clinic.id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: next })
+      });
+      const data = await res.json();
+      setClinicsList(prev => prev.map(c => c.id === data.id ? data : c));
+      setToast({ message: `${data.name} is now ${data.status}`, type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err?.message || 'Clinic status was not changed', type: 'error' });
+    }
+  };
+
   const handleAddClinic = async () => {
     if (!newClinicName) {
       setToast({ message: 'Clinic name is required', type: 'error' });
       return;
     }
     try {
-      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/clinics`, {
-        method: 'POST',
+      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/clinics${editingClinicId ? `/${editingClinicId}` : ''}`, {
+        method: editingClinicId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: newClinicName,
@@ -346,11 +403,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
           phone: newClinicPhone
         })
       });
-      if (!res.ok) throw new Error('Failed to create clinic');
       const data = await res.json();
-      setClinicsList([...clinicsList, data]);
-      setToast({ message: 'Clinic created successfully', type: 'success' });
+      setClinicsList(editingClinicId ? clinicsList.map(c => c.id === data.id ? data : c) : [...clinicsList, data]);
+      setToast({ message: editingClinicId ? 'Clinic updated successfully' : 'Clinic created successfully', type: 'success' });
       setShowAddClinicModal(false);
+      setEditingClinicId(null);
       setNewClinicName('');
       setNewClinicAddress('');
       setNewClinicPhone('');
@@ -511,8 +568,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
                           {clinic.status}
                         </span>
                       </td>
-                      <td className="py-4 px-6 text-right">
-                        <button className="text-[11px] font-bold text-[#2563EB] hover:text-white transition-colors bg-[#2563EB]/10 px-3 py-1.5 rounded-lg">Edit</button>
+                      <td className="py-4 px-6 text-right whitespace-nowrap">
+                        <button onClick={() => openEditClinic(clinic)} className="text-[11px] font-bold text-[#2563EB] hover:text-white transition-colors bg-[#2563EB]/10 px-3 py-1.5 rounded-lg">Edit</button>
+                        <button onClick={() => handleClinicStatus(clinic)} className="ml-2 text-[11px] font-bold text-white/70 hover:text-white transition-colors bg-white/10 px-3 py-1.5 rounded-lg">
+                          {clinic.status === 'Active' ? 'Deactivate' : 'Activate'}
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -786,32 +846,82 @@ document.body
                             </span>
                           </td>
                           <td className="py-3.5 px-4">
-                            <span className="bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border border-emerald-500/30">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border ${
+                              member.status === 'Active' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                : member.status === 'Pending' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                : 'bg-white/10 text-white/50 border-white/20'}`}>
                               {member.status}
                             </span>
+                            {member.clinic && <p className="text-[10px] text-white/50 mt-1">{member.clinic}</p>}
                           </td>
                           <td className="py-3.5 px-4 text-right">
-                            <button 
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                            {assignableRoles.length > 0 && (
+                              <select
+                                aria-label={`Role of ${member.name}`}
+                                value={member.role}
+                                onChange={async (e) => {
+                                  const role = e.target.value;
+                                  try {
+                                    const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team/${member.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ role, clinic_id: member.clinic_id || undefined })
+                                    });
+                                    const updated = await res.json();
+                                    setTeamMembers(prev => prev.map(m => m.id === updated.id ? updated : m));
+                                    showToast(`${member.name} is now ${updated.role_label || updated.role}.`);
+                                  } catch (err: any) {
+                                    showToast(err?.message || 'Role was not changed.', 'error');
+                                  }
+                                }}
+                                className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-[10px] font-bold text-white cursor-pointer"
+                              >
+                                {!assignableRoles.some(r => r.role === member.role) && <option value={member.role} className="bg-[var(--color-surface)]">{member.role}</option>}
+                                {assignableRoles.map(r => <option key={r.role} value={r.role} className="bg-[var(--color-surface)]">{r.label}</option>)}
+                                <option value="Unassigned" className="bg-[var(--color-surface)]">Remove role</option>
+                              </select>
+                            )}
+                            <button
+                              onClick={async () => {
+                                const pending = member.status === 'Pending';
+                                try {
+                                  const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team/${member.id}/${pending ? 'resend-invite' : 'reset-password'}`, { method: 'POST' });
+                                  const data = await res.json();
+                                  showToast(data.email_sent
+                                    ? (pending ? `Invitation sent again to ${member.email}.` : `Password reset link sent to ${member.email}.`)
+                                    : 'The email could not be delivered.', data.email_sent ? 'success' : 'error');
+                                } catch (err: any) {
+                                  showToast(err?.message || 'Email was not sent.', 'error');
+                                }
+                              }}
+                              className="text-[10px] font-bold text-[#60A5FA] hover:text-white transition-colors cursor-pointer"
+                            >
+                              {member.status === 'Pending' ? 'Resend Invite' : 'Send Reset Link'}
+                            </button>
+                            <button
                               onClick={async () => {
                                 try {
-                                  const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team/${member.id}`, { method: 'DELETE' });
-                                  if (res.ok) {
-                                    setTeamMembers(prev => prev.filter(m => m.id !== member.id));
-                                    showToast(`Revoked clinical access for ${member.name}.`);
-                                  } else {
-                                    showToast('Failed to revoke access.', 'error');
-                                  }
-                                } catch {
-                                  showToast('Error syncing with clinical server.', 'error');
+                                  await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/settings/team/${member.id}`, { method: 'DELETE' });
+                                  setTeamMembers(prev => prev.map(m => m.id === member.id ? { ...m, status: 'Inactive' } : m));
+                                  showToast(`Revoked clinical access for ${member.name}.`);
+                                } catch (err: any) {
+                                  showToast(err?.message || 'Failed to revoke access.', 'error');
                                 }
                               }}
                               className="text-[10px] font-bold text-rose-500 hover:text-rose-700 transition-colors cursor-pointer"
                             >
                               Revoke Access
                             </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
+                      {teamMembers.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="py-8 px-4 text-center text-xs text-white/50">{teamError || 'No team members yet. Invite your first staff member.'}</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1013,7 +1123,7 @@ document.body
                                      showToast('API handshake warning. Using cached sync.', 'error');
                                   }
                                } catch {
-                                  showToast('API verified with local gateway.');
+                                  showToast('Server not reachable. Nothing was verified.', 'error');
                                } finally {
                                   setIsApiTesting(false);
                                }
@@ -1028,10 +1138,12 @@ document.body
                             onClick={async () => {
                                showToast('Triggering synchronization with clinic data...');
                                try {
-                                  await fetchWithAuth('/api/v1/encounters/seed-dubai', { method: 'POST' });
-                                  showToast('Synchronization complete: 789 encounters & 766 claims synced.');
-                               } catch {
-                                  showToast('Sync completed.');
+                                  const res = await fetchWithAuth('/api/v1/encounters/seed-dubai', { method: 'POST' });
+                                  const data = await res.json();
+                                  await fetchSyncFigures();
+                                  showToast(data.message || 'Synchronization finished.');
+                               } catch (err: any) {
+                                  showToast(`Sync failed: ${(err?.message || 'the server did not answer').replace(/\.+$/, '')}.`, 'error');
                                }
                             }}
                             className="flex items-center gap-2 px-4 py-2.5 rounded-[12px] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-md"
@@ -1053,19 +1165,22 @@ document.body
                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-white/10 text-white">
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Synced Encounters</p>
-                         <p className="text-xl font-extrabold text-white mt-0.5">789 Records</p>
+                         <p className="text-xl font-extrabold text-white mt-0.5">{syncStats ? `${syncStats.total_encounters} Records` : 'Not available'}</p>
                       </div>
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Financial Claims</p>
-                         <p className="text-xl font-extrabold text-emerald-400 mt-0.5">766 Claims ({regionCurrency})</p>
+                         <p className="text-xl font-extrabold text-emerald-400 mt-0.5">{syncStats ? `${syncStats.paid_count + syncStats.pending_count + syncStats.denied_count} Claims (${regionCurrency})` : 'Not available'}</p>
                       </div>
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Active Payer Network</p>
-                         <p className="text-xl font-extrabold text-white mt-0.5 truncate">Daman / Orient</p>
+                         <p className="text-xl font-extrabold text-white mt-0.5 truncate">{uaePayerNetwork || 'Not configured'}</p>
                       </div>
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Gateway Uptime</p>
-                         <p className="text-xl font-extrabold text-blue-400 mt-0.5">99.98% • 24ms</p>
+                         <p className="text-xl font-extrabold text-blue-400 mt-0.5">{(() => {
+                            const measured = connectorHealth.filter(c => c.last_sync && typeof c.latency_ms === 'number');
+                            return measured.length ? `${Math.round(measured.reduce((a, c) => a + (c.latency_ms || 0), 0) / measured.length)}ms` : 'Not measured';
+                         })()}</p>
                       </div>
                    </div>
                 </div>
@@ -1083,7 +1198,7 @@ document.body
                          </p>
                       </div>
                       <span className="text-xs font-bold text-white/50 bg-white/10 px-3 py-1 rounded-full">
-                         {selectedApiRegion === 'UAE' ? 'DHA / DOH Certified' : 'ONC / HIPAA Certified'}
+                         {selectedApiRegion === 'UAE' ? 'DHA / DOH certification: not verified' : 'ONC / HIPAA certification: not verified'}
                       </span>
                    </div>
 
@@ -1219,8 +1334,28 @@ document.body
 
                    <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
                       <button
-                         onClick={() => {
-                            showToast(`Saved ${selectedApiRegion} clinic credentials successfully.`);
+                         onClick={async () => {
+                            try {
+                               const res = await fetchWithAuth('/api/v1/reality/connect', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                     id: `conn_${selectedApiRegion.toLowerCase()}`,
+                                     name: selectedApiRegion === 'UAE' ? uaePlatform : usPlatform,
+                                     type: selectedApiRegion === 'UAE' ? "UAE Clearinghouse Gateway" : "US EHR Platform",
+                                     status: "Draft",
+                                     config: {
+                                        region: selectedApiRegion,
+                                        endpoint: selectedApiRegion === 'UAE' ? uaeEndpoint : usEndpoint,
+                                        facility_id: selectedApiRegion === 'UAE' ? uaeFacilityId : usPracticeId
+                                     }
+                                  })
+                               });
+                               const data = await res.json();
+                               showToast(`${data.message || 'Draft saved'} (secret keys are not stored in a draft).`);
+                            } catch (err: any) {
+                               showToast(`Draft was not saved: ${(err?.message || 'the server did not answer').replace(/\.+$/, '')}.`, 'error');
+                            }
                          }}
                          className="px-6 py-2.5 rounded-[12px] bg-white/10 hover:bg-white/15 text-white text-xs font-bold transition-all cursor-pointer active:scale-95"
                       >
@@ -1230,14 +1365,13 @@ document.body
                          onClick={async () => {
                             showToast(`Connecting clinic API for ${selectedApiRegion}...`);
                             try {
-                               await fetchWithAuth('/api/v1/reality/connect', {
+                               const res = await fetchWithAuth('/api/v1/reality/connect', {
                                   method: 'POST',
                                   headers: { 'Content-Type': 'application/json' },
                                   body: JSON.stringify({
-                                     id: `conn_${selectedApiRegion.toLowerCase()}_${Date.now()}`,
+                                     id: `conn_${selectedApiRegion.toLowerCase()}`,
                                      name: selectedApiRegion === 'UAE' ? uaePlatform : usPlatform,
                                      type: selectedApiRegion === 'UAE' ? "UAE Clearinghouse Gateway" : "US EHR Platform",
-                                     status: "Connected",
                                      config: {
                                         region: selectedApiRegion,
                                         endpoint: selectedApiRegion === 'UAE' ? uaeEndpoint : usEndpoint,
@@ -1245,9 +1379,14 @@ document.body
                                      }
                                   })
                                });
-                               showToast(`✔ Connected! ${selectedApiRegion} API integration is now live.`);
-                            } catch {
-                               showToast(`✔ Connected to ${selectedApiRegion} clinic gateway.`);
+                               const data = await res.json();
+                               showToast(data.verification === 'verified'
+                                  ? `Connected and verified with the provider.`
+                                  : `Registered. Not verified with the provider yet; no data is exchanged until it is.`,
+                                  data.verification === 'verified' ? 'success' : 'error');
+                               fetchSyncFigures();
+                            } catch (err: any) {
+                               showToast(`Not connected: ${(err?.message || 'the server did not answer').replace(/\.+$/, '')}.`, 'error');
                             }
                          }}
                          className="px-6 py-2.5 rounded-[12px] bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-lg flex items-center gap-2"
@@ -1585,12 +1724,34 @@ document.body
                   onChange={(e) => setInviteRole(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-[16px] px-3 py-2.5 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:ring-1 focus:ring-[var(--color-surface-raised)] transition-all cursor-pointer"
                 >
-                  <option value="Clinic Administrator" className="bg-[var(--color-surface)] text-white">Clinic Administrator</option>
-                  <option value="Operations Manager" className="bg-[var(--color-surface)] text-white">Operations Manager</option>
-                  <option value="Practice Manager" className="bg-[var(--color-surface)] text-white">Practice Manager</option>
-                  <option value="Staff User" className="bg-[var(--color-surface)] text-white">Staff User</option>
+                  {(assignableRoles.length ? assignableRoles : [
+                    { role: 'Clinic Administrator', label: 'Clinic Administrator' },
+                    { role: 'Operations Manager', label: 'Operations Manager' },
+                    { role: 'Practice Manager', label: 'Practice Manager' },
+                    { role: 'Staff User', label: 'Staff User' }
+                  ]).map(r => (
+                    <option key={r.role} value={r.role} className="bg-[var(--color-surface)] text-white">{r.label}</option>
+                  ))}
                 </select>
               </div>
+
+              {(assignableRoles.find(r => r.role === inviteRole)?.needs_clinic ?? true) && clinicsList.length > 1 && (
+                <div>
+                  <label className="text-[10px] font-extrabold text-white/50 uppercase tracking-wider block mb-1.5">Clinic</label>
+                  <select
+                    required
+                    aria-label="Clinic"
+                    value={inviteClinic}
+                    onChange={(e) => setInviteClinic(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-[16px] px-3 py-2.5 text-sm font-bold text-white outline-none cursor-pointer"
+                  >
+                    <option value="" className="bg-[var(--color-surface)] text-white">Choose a clinic</option>
+                    {clinicsList.filter(c => c.status === 'Active').map(c => (
+                      <option key={c.id} value={c.id} className="bg-[var(--color-surface)] text-white">{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Action Buttons */}
               <div className="flex gap-3 justify-end pt-3 border-t border-white/10 mt-4">
@@ -1617,13 +1778,13 @@ document.body
       {/* Add Clinic Modal */}
       {showAddClinicModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowAddClinicModal(false)}></div>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeClinicModal}></div>
           <div className="relative w-full max-w-md bg-[var(--color-surface)] border border-white/10 rounded-[24px] shadow-2xl p-6">
-            <button onClick={() => setShowAddClinicModal(false)} className="absolute top-4 right-4 text-white/60 hover:text-white transition-colors">
+            <button onClick={closeClinicModal} className="absolute top-4 right-4 text-white/60 hover:text-white transition-colors">
               <X className="w-5 h-5" />
             </button>
-            <h3 className="text-xl font-bold text-white mb-2">Add New Clinic</h3>
-            <p className="text-sm text-white/50 mb-6">Create a new clinic location under your organization.</p>
+            <h3 className="text-xl font-bold text-white mb-2">{editingClinicId ? 'Edit Clinic' : 'Add New Clinic'}</h3>
+            <p className="text-sm text-white/50 mb-6">{editingClinicId ? 'Update the clinic name and location.' : 'Create a new clinic location under your organization.'}</p>
             
             <div className="space-y-4">
               <div>
@@ -1659,11 +1820,11 @@ document.body
             </div>
 
             <div className="mt-8 flex justify-end gap-3">
-              <button onClick={() => setShowAddClinicModal(false)} className="px-5 py-2.5 rounded-[12px] text-sm font-bold text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer transition-colors">
+              <button onClick={closeClinicModal} className="px-5 py-2.5 rounded-[12px] text-sm font-bold text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer transition-colors">
                 Cancel
               </button>
               <button onClick={handleAddClinic} className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white px-5 py-2.5 rounded-[12px] text-sm font-bold transition-colors">
-                Create Clinic
+                {editingClinicId ? 'Save Clinic' : 'Create Clinic'}
               </button>
             </div>
           </div>

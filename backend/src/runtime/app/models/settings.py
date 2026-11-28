@@ -6,6 +6,10 @@ class SettingsModel(Base):
     __tablename__ = "settings"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Owner of this configuration (MS-001): one row per organization (clinic_id empty) and,
+    # where a clinic keeps its own practice details, one row per clinic.
+    org_id = Column(String, index=True, nullable=True)
+    clinic_id = Column(String, index=True, nullable=True)
     practice_name = Column(String, default="Sentinel Health Urgent Care")
     practice_phone = Column(String, default="(555) 019-2834")
     timezone = Column(String, default="Eastern Time (US & Canada)")

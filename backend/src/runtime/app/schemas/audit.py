@@ -20,6 +20,12 @@ class AuditLogCreate(BaseModel):
 class AuditLogResponse(AuditLogCreate):
     id: str
     timestamp: datetime
+    # MS-001 scope and subject
+    org_id: Optional[str] = None
+    clinic_id: Optional[str] = None
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
+    detail: Optional[str] = None
 
     class Config:
         from_attributes = True

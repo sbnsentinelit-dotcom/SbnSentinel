@@ -18,8 +18,12 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
   const [clinics, setClinics] = useState<any[]>([]);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // Each part of the panel loads on its own: one failing request shows its own error and never
+  // empties the other lists.
+  const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
+  const noteError = (part: string, e: any) => setLoadErrors(prev => ({ ...prev, [part]: e?.message || 'could not be loaded' }));
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ email: '', full_name: '', clinic_name: '', temp_password: '', plan: 'Pro' });
+  const [inviteForm, setInviteForm] = useState({ email: '', full_name: '', clinic_name: '', plan: 'Pro' });
   const [inviteMsg, setInviteMsg] = useState('');
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -31,64 +35,47 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
   // Fetch Super Admin Stats
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        const statsRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/super-admin/stats`);
-        const usersRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/super-admin/users`);
-        const approvalsRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/super-admin/pending-approvals`);
-        const auditRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/super-admin/audit-logs`);
-        const pasmeHealthRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/pasme/health`);
-        const pasmeRulesRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/pasme/rules`);
-
-        if (approvalsRes.ok) {
-          setPendingApprovals(await approvalsRes.json());
+      const load = async (part: string, path: string, apply: (data: any) => void) => {
+        try {
+          const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}${path}`);
+          apply(await res.json());
+        } catch (e) {
+          console.error(`Failed to load ${part}`, e);
+          noteError(part, e);
         }
-        if (auditRes.ok) {
-          setAuditLogs(await auditRes.json());
-        }
-        if (pasmeHealthRes.ok) {
-          const h = await pasmeHealthRes.json();
-          setPasmeHealth(h);
-          setMaintenanceMode(h.maintenance_mode);
-        }
-        if (pasmeRulesRes.ok) {
-          setPasmeRules(await pasmeRulesRes.json());
-        }
-
-        if (statsRes.ok) setStats(await statsRes.json());
-        if (usersRes.ok) {
-          const u = await usersRes.json();
-          setUsersList(u);
-          // Group users by clinic for the clinics view
-          const clinicMap = new Map();
-          u.forEach((user: any) => {
-            if (user.role !== 'super_admin') {
-              if (!clinicMap.has(user.clinic)) {
-                clinicMap.set(user.clinic, {
-                  id: user.clinic,
-                  name: user.clinic,
-                  owner: user.full_name,
-                  plan: 'Pro', // Defaulting for demo
-                  status: user.is_active ? 'Active' : 'Suspended',
-                  usersCount: 1,
-                  patientsCount: Math.floor(Math.random() * 500) + 50 // Mocking patient count per clinic
-                });
-              } else {
-                clinicMap.get(user.clinic).usersCount += 1;
-              }
-            }
-          });
-          setClinics(Array.from(clinicMap.values()));
-        }
-      } catch (e) {
-        console.error("Failed to load admin data", e);
-      } finally {
-        setIsLoading(false);
-      }
+      };
+      let users: any[] = [];
+      await Promise.all([
+        load('stats', '/api/v1/super-admin/stats', setStats),
+        load('users', '/api/v1/super-admin/users', (u) => { users = u; setUsersList(u); }),
+        load('approvals', '/api/v1/super-admin/pending-approvals', setPendingApprovals),
+        load('audit', '/api/v1/super-admin/audit-logs', setAuditLogs),
+        load('health', '/api/v1/pasme/health', (h) => { setPasmeHealth(h); setMaintenanceMode(h.maintenance_mode); }),
+        load('rules', '/api/v1/pasme/rules', setPasmeRules),
+      ]);
+      await loadTenants(users);
+      setIsLoading(false);
     };
     fetchData();
 
 
   }, []);
+
+  // Organizations (tenants) with their administrator, user count and status, from the server.
+  const loadTenants = async (users?: any[]) => {
+    try {
+      const orgs = await (await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/organizations`)).json();
+      const people = users || usersList;
+      setClinics(orgs.map((o: any) => {
+        const owner = people.find((x: any) => x.org_id === o.id && x.role === 'Organization Administrator');
+        return { id: o.id, name: o.name, owner: owner ? owner.full_name : '—', plan: '', status: o.status,
+                 usersCount: o.users, clinicsCount: o.clinics };
+      }));
+    } catch (e) {
+      console.error('Failed to load organizations', e);
+      noteError('tenants', e);
+    }
+  };
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,17 +86,17 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(inviteForm)
       });
-      if (res.ok) {
-        setInviteMsg('✅ Clinic owner invited successfully!');
-        const data = await res.json();
-        // Optimistic update
-        setClinics([...clinics, { name: inviteForm.clinic_name, owner: inviteForm.full_name, plan: inviteForm.plan, status: 'Active', usersCount: 1 }]);
-        setTimeout(() => setIsInviteOpen(false), 2000);
-      } else {
-        setInviteMsg('❌ Error inviting user.');
-      }
-    } catch (e) {
-      setInviteMsg('❌ Network error.');
+      const data = await res.json();
+      setInviteMsg(data.email_sent
+        ? `✅ Invitation sent to ${data.email}. The owner accepts the terms and sets a password from the link.`
+        : `⚠ Invitation created for ${data.email}, but the email could not be delivered.`);
+      const usersRes = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/super-admin/users`);
+      const u = await usersRes.json();
+      setUsersList(u);
+      await loadTenants(u);
+      setTimeout(() => setIsInviteOpen(false), 2500);
+    } catch (e: any) {
+      setInviteMsg(`❌ ${e?.message || 'Invitation was not created.'}`);
     }
   };
 
@@ -127,15 +114,21 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
     }
   };
 
-  const toggleClinicStatus = (clinicName: string) => {
-    // In a real app, this would call a backend endpoint to toggle the tenant's global active flag
-    setClinics(clinics.map(c => {
-      if (c.name === clinicName) {
-        const newStatus = c.status === 'Active' ? 'Suspended' : 'Active';
-        return { ...c, status: newStatus };
-      }
-      return c;
-    }));
+  const toggleClinicStatus = async (orgId: string) => {
+    const org = clinics.find(c => c.id === orgId);
+    if (!org) return;
+    const action = org.status === 'Active' ? 'suspend' : 'activate';
+    try {
+      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/organizations/${orgId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const updated = await res.json();
+      setClinics(clinics.map(c => c.id === orgId ? { ...c, status: updated.status } : c));
+    } catch (e) {
+      console.error('Organization status was not changed', e);
+    }
   };
 
   const togglePasmeRule = async (ruleId: string) => {
@@ -349,33 +342,24 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                   </h3>
 
                   <div className="space-y-6 relative z-10">
-                    <div>
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="text-white/50 font-medium">Database Storage</span>
-                        <span className="text-white font-bold">45%</span>
+                    {/* Only measured values are shown; nothing measures storage or the AI quota yet. */}
+                    {([
+                      { label: 'Database Storage', value: null as number | null, bar: 'bg-[var(--color-surface-raised)]' },
+                      { label: 'OpenAI API Quota', value: null as number | null, bar: 'bg-emerald-500' },
+                      { label: 'Server CPU Usage', value: (typeof pasmeHealth?.metrics?.cpu_percent === 'number' ? pasmeHealth.metrics.cpu_percent : null) as number | null, bar: 'bg-blue-500' },
+                    ]).map(item => (
+                      <div key={item.label}>
+                        <div className="flex justify-between text-sm mb-2">
+                          <span className="text-white/50 font-medium">{item.label}</span>
+                          <span className={item.value === null ? 'text-white/50 font-bold' : 'text-white font-bold'}>
+                            {item.value === null ? 'Not measured' : `${Math.round(item.value)}%`}
+                          </span>
+                        </div>
+                        <div className="w-full bg-white/10 rounded-full h-2">
+                          <div className={`${item.bar} h-2 rounded-full`} style={{ width: `${item.value === null ? 0 : Math.min(100, Math.max(0, item.value))}%` }}></div>
+                        </div>
                       </div>
-                      <div className="w-full bg-white/10 rounded-full h-2">
-                        <div className="bg-[var(--color-surface-raised)] h-2 rounded-full" style={{ width: '45%' }}></div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="text-white/50 font-medium">OpenAI API Quota</span>
-                        <span className="text-white font-bold">12%</span>
-                      </div>
-                      <div className="w-full bg-white/10 rounded-full h-2">
-                        <div className="bg-emerald-500 h-2 rounded-full" style={{ width: '12%' }}></div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="text-white/50 font-medium">Server CPU Usage</span>
-                        <span className="text-white font-bold">28%</span>
-                      </div>
-                      <div className="w-full bg-white/10 rounded-full h-2">
-                        <div className="bg-blue-500 h-2 rounded-full" style={{ width: '28%' }}></div>
-                      </div>
-                    </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -464,7 +448,12 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                 </Button>
               </div>
 
-              {clinics.length === 0 ? (
+              {loadErrors.tenants && (
+                <p role="alert" className="mx-6 mt-4 p-3 rounded-2xl text-sm font-bold bg-rose-500/10 text-rose-300 border border-rose-500/30">
+                  Organizations could not be loaded: {loadErrors.tenants}
+                </p>
+              )}
+              {clinics.length === 0 && !loadErrors.tenants ? (
                 <div className="p-12 text-center text-white/60 font-medium">
                   <Building2 className="w-12 h-12 mx-auto mb-4 text-white/60" />
                   <p>No clinics registered yet.</p>
@@ -497,7 +486,8 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                           <td className="p-4 text-sm font-medium text-white/70">{c.usersCount} Active</td>
                           <td className="p-4">
                             <button
-                              onClick={() => toggleClinicStatus(c.name)}
+                              onClick={() => toggleClinicStatus(c.id)}
+                              aria-label={`${c.status === 'Active' ? 'Suspend' : 'Activate'} ${c.name}`}
                               className={`px-2.5 py-1 text-[10px] font-bold rounded-full uppercase tracking-wider transition-colors border ${c.status === 'Active'
                                   ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30'
                                   : 'bg-rose-500/20 text-rose-400 border-rose-500/30 hover:bg-rose-500/30'
@@ -721,11 +711,11 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div className="p-3 bg-white/5 border border-white/10 rounded-xl">
                       <p className="text-[10px] text-white/50 uppercase font-black mb-1">CPU Usage</p>
-                      <p className="text-lg font-bold text-white">{pasmeHealth?.metrics?.cpu_percent || 0}%</p>
+                      <p className="text-lg font-bold text-white">{typeof pasmeHealth?.metrics?.cpu_percent === 'number' ? `${pasmeHealth.metrics.cpu_percent}%` : 'Not measured'}</p>
                     </div>
                     <div className="p-3 bg-white/5 border border-white/10 rounded-xl">
                       <p className="text-[10px] text-white/50 uppercase font-black mb-1">Memory</p>
-                      <p className="text-lg font-bold text-white">{pasmeHealth?.metrics?.memory_usage_mb || 0} MB</p>
+                      <p className="text-lg font-bold text-white">{typeof pasmeHealth?.metrics?.memory_usage_mb === 'number' ? `${pasmeHealth.metrics.memory_usage_mb} MB` : 'Not measured'}</p>
                     </div>
                     <div className="p-3 bg-white/5 border border-white/10 rounded-xl">
                       <p className="text-[10px] text-white/50 uppercase font-black mb-1">DMAE Status</p>
@@ -823,7 +813,7 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-white/60 uppercase mb-1">Temporary Password</label>
-                  <input required type="text" value={inviteForm.temp_password} onChange={e => setInviteForm({ ...inviteForm, temp_password: e.target.value })} className="w-full border border-white/10 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-[var(--color-surface-raised)] bg-white/5" placeholder="e.g. Clinic@2026" />
+                  <p className="w-full border border-white/10 rounded-2xl px-4 py-3 text-sm text-white/70 bg-white/5">Owner gets an invitation link and sets their own password.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-white/60 uppercase mb-1">Subscription Plan</label>

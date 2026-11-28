@@ -160,15 +160,23 @@ def legacy_encounter_query(db: Session):
 @router.get("/summary-stats")
 def get_encounter_summary_stats(
     clinic_id: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_scoped_user)
 ):
     """
-    Lightning-fast SQL aggregated metrics across encounters for high-speed dashboard loading.
+    SQL aggregated encounter metrics for the clinics in the caller's scope (MS-001): one clinic when
+    named (and visible), otherwise every clinic the caller may see. An empty scope counts zero.
     """
-    target_clinic = clinic_id or "DXB-CLINIC-01"
+    from app.core.access import visible_clinic_ids
+    ids = visible_clinic_ids(db, current_user)
     base = legacy_encounter_query(db)
-    query = base.filter(EncounterModel.clinic_id == target_clinic)
-    if clinic_id is None and query.count() == 0:
+    if clinic_id:
+        if ids is not None and clinic_id not in ids:
+            raise HTTPException(status_code=404, detail="Clinic not found")
+        query = base.filter(EncounterModel.clinic_id == clinic_id)
+    elif ids is not None:
+        query = base.filter(EncounterModel.clinic_id.in_(ids or ["__none__"]))
+    else:
         query = base
     total_count = query.count()
 
@@ -193,7 +201,8 @@ def scoped_encounter_query(db: Session, current_user: User, clinic_id: Optional[
     query = legacy_encounter_query(db)
     if current_user and getattr(current_user, 'role', None) != UserRole.SYSTEM_ADMINISTRATOR.value:
         effective_clinic = clinic_id or getattr(current_user, 'clinic_id', None)
-        if getattr(current_user, 'role', None) in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
+        from app.core.access import CLINIC_BOUND
+        if getattr(current_user, 'role', None) in CLINIC_BOUND:
             if getattr(current_user, 'clinic_id', None):
                 query = query.filter(EncounterModel.clinic_id == current_user.clinic_id)
             else:

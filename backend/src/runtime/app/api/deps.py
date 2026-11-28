@@ -2,7 +2,7 @@ from typing import List
 
 from app.core.config import settings
 from app.db.database import get_db
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, canonical_role
 from app.services.data_audit_engine import data_audit_engine
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -44,6 +44,9 @@ def get_current_user(
         raise credentials_exception
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user account")
+    # An earlier role name stored before migration r1 reads as its current name.
+    if canonical_role(user.role) != user.role:
+        user.role = canonical_role(user.role)
 
     iat = payload.get("iat")
     if user.token_invalid_before and iat:
@@ -52,6 +55,20 @@ def get_current_user(
         invalid_before = user.token_invalid_before.replace(tzinfo=None) if user.token_invalid_before.tzinfo else user.token_invalid_before
         if iat_dt < invalid_before:
             raise credentials_exception
+
+    # MS-001: a token issued at login names its server session; an ended or idle session no longer
+    # authenticates (logout, idle timeout, password change or reset, removed access, suspension).
+    sid = payload.get("sid")
+    if sid:
+        from app.services import session_service
+        row, reason = session_service.check(db, sid, user)
+        if row is None:
+            raise HTTPException(status_code=401, detail=f"Session ended ({reason})",
+                                headers={"WWW-Authenticate": "Bearer"})
+        user._session_id = sid
+    from app.core.access import org_is_suspended, is_platform
+    if not is_platform(user) and org_is_suspended(db, user.org_id):
+        raise HTTPException(status_code=403, detail="Your organization is suspended")
 
     return user
 
@@ -63,10 +80,10 @@ class RoleChecker:
     """
 
     def __init__(self, allowed_roles: List[str]):
-        self.allowed_roles = allowed_roles
+        self.allowed_roles = [canonical_role(r) for r in allowed_roles]
 
     def __call__(self, current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in self.allowed_roles:
+        if canonical_role(current_user.role) not in self.allowed_roles:
             # SIAME & SES-008 Audit hook: Log permission denial
             db = next(get_db())
             data_audit_engine._log_internal(
@@ -98,7 +115,8 @@ def get_signal_for_actor(db: Session, actor: User, signal_id: str):
         if not actor.org_id:
             raise HTTPException(status_code=403, detail="Missing required organization scope")
         q = q.filter(SignalModel.org_id == actor.org_id)
-        if actor.role in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
+        from app.core.access import CLINIC_BOUND
+        if canonical_role(actor.role) in CLINIC_BOUND:
             if hasattr(actor, 'clinic_id') and actor.clinic_id:
                 q = q.filter(SignalModel.clinic_id == actor.clinic_id)
             else:

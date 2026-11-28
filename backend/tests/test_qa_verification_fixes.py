@@ -705,7 +705,13 @@ def test_workbook_clinics_endpoint_receipt_and_connectors():
         assert len(clinic["data_sources"]) > 0
         ds = clinic["data_sources"][0]
         assert ds.get("kind") == "workbook"
-        assert ds.get("records_count") == 789
+        # MS-001: the count is the clinic's imported records in the database, never a fixed number,
+        # and a clinic with nothing imported says so.
+        from app.models.encounter import EncounterModel
+        dxb = next(c for c in clinics if c["id"] == "DXB-CLINIC-01")["data_sources"][0]
+        imported = db.query(EncounterModel).filter(EncounterModel.clinic_id == "DXB-CLINIC-01").count()
+        assert dxb["records_count"] == imported
+        assert dxb["status"] == ("Imported" if imported else "Not configured")
         assert "sha256" in ds
 
 

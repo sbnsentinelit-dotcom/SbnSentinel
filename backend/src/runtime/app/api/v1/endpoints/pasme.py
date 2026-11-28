@@ -139,9 +139,10 @@ def get_platform_health(current_user: User = Depends(
         mem_mb = round(memory_info.rss / 1024 / 1024, 2)
         uptime_sec = round(time.time() - process.create_time(), 2)
     else:
-        cpu_pct = 0.0
-        mem_mb = 0.0
-        uptime_sec = 0.0
+        # Nothing measures the process here: report "not measured", never a made-up 0.
+        cpu_pct = None
+        mem_mb = None
+        uptime_sec = None
 
     from app.services.rules_engine import rules_engine
     readiness = rules_engine.validate_governance_readiness()
@@ -190,7 +191,7 @@ def get_all_rules(db: Session = Depends(get_db), current_user: User = Depends(
     CP-23: Authoritative projection from GovernanceRegistry.
     """
     from app.services.governance_registry import governance_registry
-    gov_rules = list(governance_registry._rules.values())
+    gov_rules = list(governance_registry._rules)      # the registry keeps its rule versions in a list
     if not gov_rules:
         rules = db.query(RuleModel).all()
         return [
@@ -233,7 +234,7 @@ def toggle_rule(rule_id: str, db: Session = Depends(get_db), current_user: User 
     gov_rule_id = rule_id if rule_id.startswith("RULE-") else f"RULE-{rule_id}"
     gov_rule = governance_registry.get_rule_by_version(gov_rule_id, "V1")
     if not gov_rule:
-        for r in governance_registry._rules.values():
+        for r in governance_registry._rules:
             if r.rule_id == rule_id or r.rule_id == f"RULE-{rule_id}":
                 gov_rule = r
                 break

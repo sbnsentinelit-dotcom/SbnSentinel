@@ -54,6 +54,10 @@ class SettingsResponse(BaseModel):
     payment_card: str
     currency: Optional[str] = "USD"
     deployment_region: Optional[str] = "US"
+    # MS-001: whose configuration this is
+    org_id: Optional[str] = None
+    clinic_id: Optional[str] = None
+    scope: Optional[str] = None          # "organization" | "clinic"
 
     class Config:
         from_attributes = True
