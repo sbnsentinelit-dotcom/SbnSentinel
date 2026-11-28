@@ -50,8 +50,15 @@ export const fetchWithAuth = async (url: string | URL, options: RequestInit = {}
     headers
   });
 
-  // SIAME: Session expiration handling
+  // SIAME: Session expiration handling. The server says why a session ended (idle, password change,
+  // suspension...); the sign-in screen shows that reason instead of a silent return to the login page.
   if (response.status === 401) {
+    try {
+      const body = await response.clone().json();
+      const { signOutMessage, SIGNOUT_REASON_KEY } = await import('./sessionActivity');
+      const message = signOutMessage(body?.detail);
+      if (message) sessionStorage.setItem(SIGNOUT_REASON_KEY, message);
+    } catch { /* no reason to show */ }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     window.location.href = '/'; // Redirect to login

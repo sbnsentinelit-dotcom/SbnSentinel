@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String
+from sqlalchemy import Column, DateTime, String
 from app.db.database import Base
 
 
@@ -10,4 +10,9 @@ class ClinicModel(Base):
     name = Column(String, index=True)
     address = Column(String)
     phone = Column(String)
-    status = Column(String, default="Active")
+    status = Column(String, default="Active")   # Active | Inactive
+    # Owning organization (MS-001); every clinic belongs to exactly one organization.
+    org_id = Column(String, index=True, nullable=True)
+    created_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+    deactivated_at = Column(DateTime, nullable=True)

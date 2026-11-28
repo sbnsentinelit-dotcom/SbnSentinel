@@ -18,9 +18,11 @@ from app.services import patient_flow_service as flow
 router = APIRouter()
 
 _READ_ROLES = [UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value,
-               UserRole.CLINIC_MANAGER.value, UserRole.FRONT_DESK.value, UserRole.READ_ONLY_AUDITOR.value]
+               UserRole.CLINIC_MANAGER.value, UserRole.OPERATIONS_MANAGER.value, UserRole.PRACTICE_MANAGER.value,
+               UserRole.FRONT_DESK.value, UserRole.READ_ONLY_AUDITOR.value]
 _WRITE_ROLES = [UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value,
-                UserRole.CLINIC_MANAGER.value, UserRole.FRONT_DESK.value]
+                UserRole.CLINIC_MANAGER.value, UserRole.OPERATIONS_MANAGER.value, UserRole.PRACTICE_MANAGER.value,
+                UserRole.FRONT_DESK.value]
 
 
 def _clinic_for(user: User, db: Session, clinic_id: Optional[str]) -> str:

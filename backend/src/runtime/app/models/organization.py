@@ -20,6 +20,10 @@ class OrganizationModel(Base):
     status = Column(String, default="Active")
     time_zone = Column(String, default="UTC")
     created_date = Column(DateTime, default=datetime.utcnow)
+    # Lifecycle (MS-001): who changed it last, and when it was suspended and why.
+    updated_at = Column(DateTime, nullable=True)
+    suspended_at = Column(DateTime, nullable=True)
+    suspended_reason = Column(String, nullable=True)
 
     # Relationships
     clinics = relationship(
@@ -30,7 +34,8 @@ class OrganizationModel(Base):
 
 class OrganizationClinicModel(Base):
     """
-    Represents a physical or virtual care location.
+    Earlier care-location table; not written by the product. Clinics live in the "clinics" table
+    (models/clinic.py), which carries the owning organization since MS-001.
     """
     __tablename__ = "org_clinics"
 

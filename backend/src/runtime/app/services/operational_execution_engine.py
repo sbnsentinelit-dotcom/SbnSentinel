@@ -61,7 +61,7 @@ class OperationalExecutionEngine(BaseService):
         if initiator_scope:
             from app.db.database import SessionLocal
             from app.models.encounter import EncounterModel
-            from app.models.organization import OrganizationClinicModel
+            from app.models.clinic import ClinicModel
 
             db = SessionLocal()
             try:
@@ -83,17 +83,15 @@ class OperationalExecutionEngine(BaseService):
                     target_clinic_id = encounter.clinic_id
                     target_journey_id = getattr(encounter, "journey_id", None)
                     if target_clinic_id:
-                        org_clinic = db.query(OrganizationClinicModel).filter(
-                            OrganizationClinicModel.id == target_clinic_id).first()
-                        if org_clinic:
-                            target_org_id = org_clinic.organization_id
+                        owner = db.query(ClinicModel).filter(ClinicModel.id == target_clinic_id).first()
+                        if owner:
+                            target_org_id = owner.org_id
                 else:
                     # Check if target is a clinic directly
-                    org_clinic = db.query(OrganizationClinicModel).filter(
-                        OrganizationClinicModel.id == base_target).first()
-                    if org_clinic:
-                        target_org_id = org_clinic.organization_id
-                        target_clinic_id = org_clinic.id
+                    owner = db.query(ClinicModel).filter(ClinicModel.id == base_target).first()
+                    if owner:
+                        target_org_id = owner.org_id
+                        target_clinic_id = owner.id
                     else:
                         # Recommendations raised on a signal target that signal; its stored
                         # organization and clinic are the authoritative ownership.
@@ -235,7 +233,7 @@ class OperationalExecutionEngine(BaseService):
         # EXV-010: Validate target reference exists
         from app.db.database import SessionLocal
         from app.models.encounter import EncounterModel
-        from app.models.organization import OrganizationClinicModel
+        from app.models.clinic import ClinicModel
 
         db = SessionLocal()
         try:
@@ -249,7 +247,7 @@ class OperationalExecutionEngine(BaseService):
 
             if db.query(EncounterModel).filter(EncounterModel.id == base_target).first():
                 target_exists = True
-            elif db.query(OrganizationClinicModel).filter(OrganizationClinicModel.id == base_target).first():
+            elif db.query(ClinicModel).filter(ClinicModel.id == base_target).first():
                 target_exists = True
             else:
                 from app.models.signal import SignalModel

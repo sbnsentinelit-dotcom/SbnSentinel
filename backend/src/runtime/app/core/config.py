@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     OTP_EXPIRE_MINUTES: int = 15
+    # MS-001 identity lifecycle
+    SESSION_IDLE_TIMEOUT_MINUTES: int = 30       # a session unused this long ends on the server
+    PASSWORD_MIN_LENGTH: int = 8                 # one password rule for signup, reset, activation and change
+    INVITE_EXPIRE_HOURS: int = 72                # invitation links
+    TERMS_VERSION: str = "v1"                    # terms a new user accepts at activation
+    FRONTEND_BASE_URL: str = "http://localhost:3000"   # links in invitation and reset emails
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"

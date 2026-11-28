@@ -15,7 +15,7 @@ from app.models.governance_storage import (
     GovernedRuleVersionModel,
     GovernedRecommendationMappingModel
 )
-from app.models.organization import OrganizationClinicModel
+from app.models.clinic import ClinicModel
 from app.models.encounter import EncounterModel
 from app.services.governance_registry import governance_registry, DecisionType, DecisionStatus
 from app.api.deps import get_current_user
@@ -33,7 +33,7 @@ def setup_db():
     db.query(ExecutionAttemptModel).delete()
     db.query(OperationalActionModel).delete()
     db.query(HumanDecisionModel).delete()
-    db.query(OrganizationClinicModel).delete()
+    db.query(ClinicModel).filter(ClinicModel.id == "target_123").delete(synchronize_session=False)
     db.query(EncounterModel).delete()
     db.query(RecommendationModel).delete()
     db.query(RuleEvaluationModel).delete()
@@ -109,11 +109,11 @@ def setup_d6_context(db, decision_id, journey_id, allowed_outputs=["RESCHEDULE_A
         journey_id=journey_id,
         decision_timestamp=datetime.datetime.utcnow().isoformat()
     ))
-    db.add(OrganizationClinicModel(
+    db.add(ClinicModel(
         id="target_123",
-        organization_id="org_123",
+        org_id="org_123",
         name="Test Clinic",
-        is_active=True
+        status="Active"
     ))
     db.add(EncounterModel(
         id=journey_id,

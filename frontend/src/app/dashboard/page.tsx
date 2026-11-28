@@ -1,5 +1,7 @@
 'use client';
 import { fetchWithAuth } from '@/utils/fetchWithAuth';
+import { signOut } from '@/utils/signOut';
+import { startSessionHeartbeat } from '@/utils/sessionActivity';
 import { trendFromDaily } from '@/utils/dailyTrend';
 import { uaeGreeting } from '@/utils/greeting';
 import React, { useState, useEffect } from 'react';
@@ -63,6 +65,34 @@ export default function Dashboard() {
   });
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  // MS-001: the bell's inbox and unread count come from the server, with a read mark per user.
+  const [inbox, setInbox] = useState<{ unread_count: number; items: any[] } | null>(null);
+  const loadInbox = React.useCallback(async () => {
+    try {
+      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/notifications?limit=10`);
+      setInbox(await res.json());
+    } catch { setInbox(null); }
+  }, []);
+  const markRead = async (id: string) => {
+    try {
+      await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/notifications/${id}/read`, { method: 'POST' });
+    } catch { /* the inbox reload shows the server's state */ }
+    loadInbox();
+  };
+  const markAllRead = async () => {
+    try {
+      await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/notifications/read-all`, { method: 'POST' });
+    } catch { /* shown by the reload */ }
+    loadInbox();
+  };
+  // Activity on the screen keeps the server session alive; doing nothing still ends it on time.
+  useEffect(() => startSessionHeartbeat(), []);
+  useEffect(() => {
+    if (!localStorage.getItem('token')) return;
+    loadInbox();
+    const timer = setInterval(loadInbox, 60000);
+    return () => clearInterval(timer);
+  }, [loadInbox]);
   const [isMsgOpen, setIsMsgOpen] = useState(false);
   const [reminderAdded, setReminderAdded] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -479,7 +509,7 @@ export default function Dashboard() {
 
           <div className="p-4 space-y-1 border-t border-white/10 bg-white/5 rounded-b-[24px]">
             <SidebarItem icon={HelpCircle} label="Help & Support" active={activeTab === 'help'} onClick={() => setActiveTab('help')} />
-            <SidebarItem icon={LogOut} label="Disconnect" active={false} onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('user'); localStorage.removeItem('userRole'); router.push('/'); }} className="mt-2 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 border border-transparent hover:border-rose-500/20" />
+            <SidebarItem icon={LogOut} label="Disconnect" active={false} onClick={async () => { await signOut(); router.push('/'); }} className="mt-2 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 border border-transparent hover:border-rose-500/20" />
           </div>
         </aside>
 
@@ -505,24 +535,41 @@ export default function Dashboard() {
                 {/* Notifications - Live Backend Signals */}
                 <div className="relative">
                   <button
-                    onClick={() => { setIsNotifOpen(!isNotifOpen); setIsMsgOpen(false); setIsProfileOpen(false); }}
+                    onClick={() => { if (!isNotifOpen) loadInbox(); setIsNotifOpen(!isNotifOpen); setIsMsgOpen(false); setIsProfileOpen(false); }}
                     className="relative hover:text-white transition-colors cursor-pointer"
+                    aria-label={`Notifications${inbox ? `, ${inbox.unread_count} unread` : ''}`}
                   >
                     <Bell className="w-5 h-5 text-white/80 hover:text-white" />
-                    {signals.length > 0 && (
+                    {(inbox ? inbox.unread_count : signals.length) > 0 && (
                       <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-[#EF4444] text-white text-[9px] font-bold rounded-full flex items-center justify-center border-2 border-[#120524]">
-                        {signals.length > 99 ? '99+' : signals.length}
+                        {(inbox ? inbox.unread_count : signals.length) > 99 ? '99+' : (inbox ? inbox.unread_count : signals.length)}
                       </span>
                     )}
                   </button>
                   {isNotifOpen && (
                     <div className="absolute right-0 mt-4 w-80 bg-[#120524] border border-white/10 rounded-[16px] premium-shadow z-50 animate-in fade-in slide-in-from-top-2">
                       <div className="p-3 border-b border-white/10 flex justify-between items-center">
-                        <p className="text-sm font-bold text-white">Live Signals & Notifications ({signals.length})</p>
-                        <button type="button" onClick={() => setIsNotifOpen(false)} className="text-xs text-blue-400 font-bold hover:underline focus:outline-none focus:ring-2 focus:ring-blue-400 rounded-sm">Close</button>
+                        <p className="text-sm font-bold text-white">Live Signals & Notifications ({inbox ? `${inbox.unread_count} unread` : signals.length})</p>
+                        <div className="flex items-center gap-3">
+                          {inbox && inbox.unread_count > 0 && (
+                            <button type="button" onClick={markAllRead} className="text-xs text-white/70 font-bold hover:underline focus:outline-none focus:ring-2 focus:ring-blue-400 rounded-sm">Mark all read</button>
+                          )}
+                          <button type="button" onClick={() => setIsNotifOpen(false)} className="text-xs text-blue-400 font-bold hover:underline focus:outline-none focus:ring-2 focus:ring-blue-400 rounded-sm">Close</button>
+                        </div>
                       </div>
                       <div className="max-h-80 overflow-y-auto custom-scrollbar">
-                        {signals.length === 0 ? (
+                        {inbox ? (inbox.items.length === 0 ? (
+                          <div className="p-6 text-center text-xs text-white/50">No notifications.</div>
+                        ) : inbox.items.map((n: any) => (
+                            <button type="button" key={n.id} onClick={() => { markRead(n.id); setReturnTab(activeTab); setActiveSignalId(n.id); setActiveTab('signals-detail'); setIsNotifOpen(false); }} className={`w-full text-left p-3 border-b border-white/10 hover:bg-white/10 cursor-pointer transition-colors flex gap-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-400 ${n.read ? 'opacity-60' : ''}`}>
+                              <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${n.risk_level === 'Critical' || n.risk_level === 'High' ? 'bg-[#EF4444]' : n.risk_level === 'Moderate' ? 'bg-[#F59E0B]' : 'bg-[#10B981]'}`}></div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold text-white truncate">{n.source} • {n.type}{n.read ? ' • Read' : ''}</p>
+                                <p className="text-xs text-white/70 font-medium mt-0.5 line-clamp-2">{n.message}</p>
+                                <p className="text-[10px] text-white/60 font-bold mt-1">{n.timestamp ? new Date(n.timestamp).toLocaleTimeString() : ''}</p>
+                              </div>
+                            </button>
+                        ))) : signals.length === 0 ? (
                           <div className="p-6 text-center text-xs text-white/50">No backend signals detected.</div>
                         ) : (
                           // Notifications (e.g. evidence not found) stay on top of the bell list.
@@ -677,10 +724,8 @@ export default function Dashboard() {
                     </div>
                     <div className="mt-1 pt-1 border-t border-white/10">
                       <button
-                        onClick={() => {
-                          localStorage.removeItem('token');
-                          localStorage.removeItem('user');
-                          localStorage.removeItem('userRole');
+                        onClick={async () => {
+                          await signOut();
                           router.push('/');
                         }}
                         className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-bold text-rose-400 hover:text-rose-300 hover:bg-rose-500/20 rounded-[12px] transition-all cursor-pointer"
@@ -701,7 +746,7 @@ export default function Dashboard() {
                 {/* Hero */}
                 <div className="flex flex-col md:flex-row md:items-end justify-between mb-4 md:mb-2 gap-4">
                   <div>
-                    <p className="text-white/80 font-semibold text-sm mb-1">{greeting}, Admin! 👋</p>
+                    <p className="text-white/80 font-semibold text-sm mb-1">{greeting}{currentUser?.full_name ? `, ${currentUser.full_name}` : ''}! 👋</p>
                     <h2 className="text-2xl md:text-3xl font-extrabold text-white mb-1">Multi-Provider Operations</h2>
                     <p className="text-sm text-white/70 font-medium hidden md:block">Real-time overview of clinic operations across all doctors and intelligence engine outputs.</p>
                   </div>
@@ -759,12 +804,12 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-[16px] px-4 py-2.5 premium-shadow">
-                      <div className="w-8 h-8 rounded-full bg-[#10B981]/10 flex items-center justify-center">
-                        <div className="w-2.5 h-2.5 rounded-full bg-[#10B981] shadow-[0_0_8px_#10B981]"></div>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isStreamConnected ? 'bg-[#10B981]/10' : 'bg-[#F59E0B]/10'}`}>
+                        <div className={`w-2.5 h-2.5 rounded-full ${isStreamConnected ? 'bg-[#10B981] shadow-[0_0_8px_#10B981]' : 'bg-[#F59E0B]'}`}></div>
                       </div>
                       <div>
                         <p className="text-[10px] font-bold text-white/70 uppercase tracking-wider">Live System</p>
-                        <p className="text-sm font-bold text-[#10B981]">{isStreamConnected ? 'Connected' : 'Disconnected'}</p>
+                        <p className={`text-sm font-bold ${isStreamConnected ? 'text-[#10B981]' : 'text-[#F59E0B]'}`}>{isStreamConnected ? 'Connected' : 'Disconnected'}</p>
                       </div>
                     </div>
                   </div>

@@ -22,6 +22,14 @@ class UserResponse(UserBase):
     id: int
     is_active: bool
     created_at: datetime
+    # MS-001 profile and scope (all optional, so older rows serialise unchanged)
+    org_id: Optional[str] = None
+    clinic_id: Optional[str] = None
+    phone: Optional[str] = None
+    job_title: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    password_changed_at: Optional[datetime] = None
+    terms_accepted_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

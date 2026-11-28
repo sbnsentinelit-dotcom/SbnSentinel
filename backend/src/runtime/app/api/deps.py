@@ -2,15 +2,10 @@ from typing import List
 
 from app.core.config import settings
 from app.db.database import get_db
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, canonical_role
 from app.services.data_audit_engine import data_audit_engine
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-try:
-    from jose import JWTError, jwt
-except ImportError:
-    import jwt
-    from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.orm import Session
 
 # This expects the token in the Authorization header: `Bearer <token>`
@@ -25,35 +20,10 @@ def get_current_user(
     Validates the JWT token and returns the current user.
     Enforces SIAME Session Management and Authentication.
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if user is None:
-        raise credentials_exception
-    if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user account")
-
-    iat = payload.get("iat")
-    if user.token_invalid_before and iat:
-        from datetime import datetime
-        iat_dt = datetime.utcfromtimestamp(iat)
-        invalid_before = user.token_invalid_before.replace(tzinfo=None) if user.token_invalid_before.tzinfo else user.token_invalid_before
-        if iat_dt < invalid_before:
-            raise credentials_exception
-
-    return user
+    # One validator for HTTP and both WebSocket transports (MS-001 / PR #8 A3): the token must name a
+    # live server session; reading never extends the session (only recorded user activity does).
+    from app.services import session_service
+    return session_service.authenticate(db, token)
 
 
 class RoleChecker:
@@ -63,10 +33,10 @@ class RoleChecker:
     """
 
     def __init__(self, allowed_roles: List[str]):
-        self.allowed_roles = allowed_roles
+        self.allowed_roles = [canonical_role(r) for r in allowed_roles]
 
     def __call__(self, current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in self.allowed_roles:
+        if canonical_role(current_user.role) not in self.allowed_roles:
             # SIAME & SES-008 Audit hook: Log permission denial
             db = next(get_db())
             data_audit_engine._log_internal(
@@ -98,7 +68,8 @@ def get_signal_for_actor(db: Session, actor: User, signal_id: str):
         if not actor.org_id:
             raise HTTPException(status_code=403, detail="Missing required organization scope")
         q = q.filter(SignalModel.org_id == actor.org_id)
-        if actor.role in [UserRole.FRONT_DESK.value, UserRole.CLINIC_MANAGER.value]:
+        from app.core.access import CLINIC_BOUND
+        if canonical_role(actor.role) in CLINIC_BOUND:
             if hasattr(actor, 'clinic_id') and actor.clinic_id:
                 q = q.filter(SignalModel.clinic_id == actor.clinic_id)
             else:

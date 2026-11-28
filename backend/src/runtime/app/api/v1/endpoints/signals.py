@@ -602,6 +602,7 @@ async def shutdown_event():
 # and is validated here with the same rules as get_current_user.
 ws_router = APIRouter()
 
+STREAM_RECHECK_SECONDS = 15   # an open stream re-checks its session at least this often
 _STREAM_ROLES = {UserRole.CLINIC_MANAGER.value, UserRole.ORGANIZATION_ADMINISTRATOR.value,
                  UserRole.SYSTEM_ADMINISTRATOR.value}
 
@@ -629,22 +630,30 @@ def _stream_visible_to(actor, message: str) -> bool:
 async def websocket_endpoint(websocket: WebSocket, token: str = ""):
     origin = websocket.headers.get("origin")
     from app.core.config import settings
-    from app.api.deps import get_current_user
     from app.db.database import SessionLocal
     if not origin or origin not in settings.ALLOWED_WS_ORIGINS:
         await websocket.close(code=1008)
         return
-    db = SessionLocal()
-    try:
-        user = get_current_user(db=db, token=token)
-        actor = {"role": user.role, "org_id": getattr(user, "org_id", None),
-                 "clinic_id": getattr(user, "clinic_id", None)}
-    except HTTPException:
-        await websocket.close(code=1008)
-        return
-    finally:
-        db.close()
-    if actor["role"] not in _STREAM_ROLES:
+    from app.services.session_service import SessionEnded, validate
+
+    def current_actor():
+        """The caller as the server sees them now (session alive, role and scope as stored), or None.
+        Checked at connect, before every delivery and every 15 seconds, so logout, idle expiry,
+        suspension and a role or clinic change stop the stream (MS-001 / PR #8 A3)."""
+        db = SessionLocal()
+        try:
+            user, _ = validate(db, token)
+            if user.role not in _STREAM_ROLES:
+                return None
+            return {"role": user.role, "org_id": getattr(user, "org_id", None),
+                    "clinic_id": getattr(user, "clinic_id", None)}
+        except SessionEnded:
+            return None
+        finally:
+            db.close()
+
+    actor = current_actor()
+    if actor is None:
         await websocket.close(code=1008)
         return
     await websocket.accept()
@@ -652,9 +661,15 @@ async def websocket_endpoint(websocket: WebSocket, token: str = ""):
     simulation_engine.add_client(q)
     try:
         while True:
-            # Wait for new message from the queue
-            message = await q.get()
-            if _stream_visible_to(actor, message):
+            try:
+                message = await asyncio.wait_for(q.get(), timeout=STREAM_RECHECK_SECONDS)
+            except asyncio.TimeoutError:
+                message = None
+            actor = current_actor()
+            if actor is None:
+                await websocket.close(code=1008)
+                return
+            if message is not None and _stream_visible_to(actor, message):
                 await websocket.send_text(message)
     except WebSocketDisconnect:
         pass

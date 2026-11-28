@@ -12,7 +12,7 @@ from app.models.governance_storage import (
     RecommendationModel,
     RuleEvaluationModel
 )
-from app.models.organization import OrganizationClinicModel
+from app.models.clinic import ClinicModel
 from app.models.encounter import EncounterModel
 from app.models.intelligence import DecisionContextModel, OperationalIntelligenceModel, RevenueIntelligenceModel
 from app.models.event import OperationalEventModel
@@ -46,7 +46,7 @@ def setup_db():
     db.query(HumanDecisionModel).delete()
     db.query(RecommendationModel).delete()
     db.query(RuleEvaluationModel).delete()
-    db.query(OrganizationClinicModel).delete()
+    db.query(ClinicModel).filter(ClinicModel.id == "ORG-CLINIC-E2E").delete(synchronize_session=False)
     db.query(EncounterModel).delete()
     db.query(OperationalIntelligenceModel).delete()
     db.query(RevenueIntelligenceModel).delete()
@@ -103,11 +103,11 @@ def test_d6_real_pipeline_target_propagation_positive(setup_db, mock_admin):
     journey_id = f"J-{uuid.uuid4().hex[:6]}"
     clinic_id = "ORG-CLINIC-E2E"
 
-    db.add(OrganizationClinicModel(
+    db.add(ClinicModel(
         id=clinic_id,
-        organization_id="org_123",
+        org_id="org_123",
         name="E2E Clinic",
-        is_active=True
+        status="Active"
     ))
     db.add(GovernedRecommendationMappingModel(
         mapping_id="REC-MAP-001",

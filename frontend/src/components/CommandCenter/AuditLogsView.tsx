@@ -38,16 +38,6 @@ export const AuditLogsView: React.FC = () => {
     }
   };
 
-  const handleExportAudit = () => {
-    const jsonStr = JSON.stringify(logs, null, 2);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `System_Audit_Trail_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    window.dispatchEvent(new CustomEvent('show-sentinel-toast', { detail: { message: '📥 System Audit Trail exported to JSON file successfully!', type: 'info' } }));
-  };
 
   const filteredLogs = logs.filter(log => {
     const userStr = log.user_system || log.user_email || '';
@@ -97,12 +87,16 @@ export const AuditLogsView: React.FC = () => {
           <p className="text-white/70 mt-1.5 text-sm font-medium">Immutable, tamper-proof activity logs tracking platform operations, security events, and user logins.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full md:w-auto">
+          {/* DP-005: audit export is not part of V1. The control stays in place, disabled. */}
           <button
-            onClick={handleExportAudit}
-            className="flex items-center justify-center gap-2 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)] border border-white/10 text-white font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow transition-all hover:scale-105 active:scale-95 whitespace-nowrap shrink-0"
+            type="button"
+            disabled
+            aria-disabled="true"
+            title="Audit export is not part of V1"
+            className="flex items-center justify-center gap-2 bg-[var(--color-surface-raised)] border border-white/10 text-white/50 font-bold text-xs px-4 py-2.5 rounded-[16px] premium-shadow whitespace-nowrap shrink-0 cursor-not-allowed opacity-60"
           >
             <Download className="w-4 h-4" />
-            Export Audit Log
+            Export Audit Log (Not in V1)
           </button>
         </div>
       </div>

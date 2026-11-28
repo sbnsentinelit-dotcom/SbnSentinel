@@ -62,7 +62,7 @@ def test_a023_organization_clinic_scope_enforcement():
     """
     from app.db.database import SessionLocal
     from app.models.user import User, UserRole
-    from app.models.organization import OrganizationClinicModel
+    from app.models.clinic import ClinicModel
     from app.models.encounter import EncounterModel
     from app.services.governance_registry import (
         governance_registry, DecisionType, DecisionStatus, HumanDecisionRecord
@@ -82,12 +82,9 @@ def test_a023_organization_clinic_scope_enforcement():
         org_id="ORG-A",
         is_active=True
     )
-    clinic_a1 = OrganizationClinicModel(
-        id=f"CLN-A1-{uid}", organization_id="ORG-A", name="Clinic A1", is_active=True)
-    clinic_a2 = OrganizationClinicModel(
-        id=f"CLN-A2-{uid}", organization_id="ORG-A", name="Clinic A2", is_active=True)
-    clinic_b = OrganizationClinicModel(
-        id=f"CLN-B-{uid}", organization_id="ORG-B", name="Clinic B", is_active=True)
+    clinic_a1 = ClinicModel(id=f"CLN-A1-{uid}", org_id="ORG-A", name="Clinic A1", status="Active")
+    clinic_a2 = ClinicModel(id=f"CLN-A2-{uid}", org_id="ORG-A", name="Clinic A2", status="Active")
+    clinic_b = ClinicModel(id=f"CLN-B-{uid}", org_id="ORG-B", name="Clinic B", status="Active")
     enc_a1 = EncounterModel(
         id=f"ENC-A1-{uid}",
         clinic_id=clinic_a1.id,

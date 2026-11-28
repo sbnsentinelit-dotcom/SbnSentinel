@@ -36,7 +36,10 @@ target_metadata = Base.metadata
 
 # Override sqlalchemy.url with actual environment URL if provided
 # Escape '%' as '%%' to prevent configparser interpolation errors with URL-encoded passwords (e.g. %40 for @)
-db_url = os.environ.get("DATABASE_URL") or os.environ.get("SQLALCHEMY_DATABASE_URL") or SQLALCHEMY_DATABASE_URL
+# The application's URL already reads DATABASE_URL / SQLALCHEMY_DATABASE_URL (same order) and normalizes it:
+# postgresql:// -> postgresql+psycopg2:// (the installed driver; SQLAlchemy 2.1 would otherwise load psycopg 3)
+# and passwords containing '@'. Migrations use exactly the URL the application uses.
+db_url = SQLALCHEMY_DATABASE_URL
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 

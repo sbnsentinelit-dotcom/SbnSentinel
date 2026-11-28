@@ -105,6 +105,8 @@ def readiness_gate(
         UserRole.ORGANIZATION_ADMINISTRATOR.value,
         UserRole.CLINIC_MANAGER.value,
         UserRole.FRONT_DESK.value,
+        UserRole.OPERATIONS_MANAGER.value,
+        UserRole.PRACTICE_MANAGER.value,
         UserRole.READ_ONLY_AUDITOR.value
     ]
     role_ok = bool(current_user and getattr(current_user, "role", None) in allowed_operational_roles)
@@ -112,7 +114,8 @@ def readiness_gate(
     # 4. Scope Check
     if getattr(current_user, "role", None) == UserRole.SYSTEM_ADMINISTRATOR.value:
         scope_ok = True
-    elif getattr(current_user, "role", None) == UserRole.FRONT_DESK.value:
+    elif getattr(current_user, "role", None) in (UserRole.STAFF_USER.value, UserRole.OPERATIONS_MANAGER.value,
+                                                 UserRole.PRACTICE_MANAGER.value):
         scope_ok = bool(getattr(current_user, "org_id", None) and getattr(current_user, "clinic_id", None))
     else:
         scope_ok = bool(getattr(current_user, "org_id", None) or getattr(current_user, "id", None))

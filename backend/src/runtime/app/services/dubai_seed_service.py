@@ -78,6 +78,52 @@ DENIAL_REASONS = [
 ]
 
 
+DEMO_ORG_ID = "ORG-UAE-01"
+DEMO_ORG_NAME = "Sentinel UAE Medical Center"
+
+
+def record_existing_workbook_import(db: Session) -> int:
+    """A database imported before import records existed: the demo clinic's encounters whose ids are
+    the workbook's own ids are recorded as that workbook import, once. Nothing else is counted."""
+    from app.models.integration_evidence import DataImportModel
+    from app.services.workbook_dataset import encounters as workbook_encounters
+    clinic_id = "DXB-CLINIC-01"
+    if db.query(DataImportModel).filter(DataImportModel.clinic_id == clinic_id,
+                                        DataImportModel.source_kind == "workbook").first():
+        return 0
+    ids = {w["encounter_id"] for w in workbook_encounters()}
+    present = sum(1 for (eid,) in db.query(EncounterModel.id).filter(EncounterModel.clinic_id == clinic_id).all()
+                  if eid in ids)
+    if present:
+        db.add(DataImportModel(clinic_id=clinic_id, source_kind="workbook", source_label="Clinic billing workbook",
+                               accepted_count=present, completed_at=datetime.utcnow(),
+                               recorded_by="recorded from the workbook's encounter ids"))
+        db.commit()
+    return present
+
+
+def ensure_demo_organization(db: Session):
+    """The demo organization that owns the demo clinic (MS-001: every clinic belongs to an organization)."""
+    from app.models.organization import OrganizationModel
+    org = db.query(OrganizationModel).filter(OrganizationModel.id == DEMO_ORG_ID).first()
+    if org is None:
+        now = datetime.utcnow()
+        org = OrganizationModel(id=DEMO_ORG_ID, name=DEMO_ORG_NAME, status="Active", time_zone="Asia/Dubai",
+                                created_date=now, updated_at=now)
+        db.add(org)
+        db.commit()
+    elif org.name == DEMO_ORG_ID:
+        # Created by migration r1 from the id alone; the demo organization has a name.
+        org.name = DEMO_ORG_NAME
+        org.updated_at = datetime.utcnow()
+        db.commit()
+    clinic = db.query(ClinicModel).filter(ClinicModel.id == "DXB-CLINIC-01").first()
+    if clinic is not None and not clinic.org_id:
+        clinic.org_id = DEMO_ORG_ID
+        db.commit()
+    return org
+
+
 def seed_dubai_data(db: Session):
     """
     Seeds the complete UAE Dubai healthcare dataset into the provided database session.
@@ -93,10 +139,14 @@ def seed_dubai_data(db: Session):
             name="Sentinel UAE Medical Center - Dubai",
             address="Building 47, Dubai Healthcare City (DHCC), Dubai, UAE",
             phone="+971 4 362 4700",
-            status="Active"
+            status="Active",
+            org_id=DEMO_ORG_ID,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
         )
         db.add(clinic)
         db.commit()
+    ensure_demo_organization(db)
 
     # 1-2. Patients and encounters come from the clinic's UAE billing workbook (client_excel.json):
     # 500 patients (directory reads them from the workbook) and 789 historical encounters with their
@@ -107,6 +157,7 @@ def seed_dubai_data(db: Session):
 
     existing_enc_ids = {e.id for e in db.query(EncounterModel.id).all()}
     encounters_data = []  # encounters that have a claim, in claim order (CLM2026000001 is the first)
+    imported_now = 0
 
     for w in workbook_encounters():
         enc_id = w["encounter_id"]
@@ -159,7 +210,13 @@ def seed_dubai_data(db: Session):
             )
             db.add(encounter)
             existing_enc_ids.add(enc_id)
+            imported_now += 1
 
+    if imported_now:
+        from app.models.integration_evidence import DataImportModel
+        db.add(DataImportModel(clinic_id=clinic_id, source_kind="workbook", source_label="Clinic billing workbook",
+                               accepted_count=imported_now, completed_at=datetime.utcnow(),
+                               recorded_by="workbook import"))
     db.commit()
 
     # 3. Seed 766 Claims
@@ -516,13 +573,16 @@ def seed_dubai_data(db: Session):
     if getattr(settings, "SOURCE_PROFILE", "") != "workbook":
         existing_conn = db.query(ConnectorModel).filter(ConnectorModel.id == "conn_dxb_dhpo").first()
         if not existing_conn:
+            # Registered for the demo clinic, never verified with the provider: it says so.
             conn = ConnectorModel(
                 id="conn_dxb_dhpo",
                 name="DHPO eClaimLink (Dubai Health Authority)",
                 type="UAE Clearinghouse / EHR Gateway",
-                status="Connected",
-                latency_ms=24,
-                last_sync=datetime.utcnow()
+                status="Configured",
+                state="CONFIGURED",
+                clinic_id=clinic_id,
+                latency_ms=None,
+                last_sync=None
             )
             db.add(conn)
 
