@@ -22,6 +22,8 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
   // empties the other lists.
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
   const noteError = (part: string, e: any) => setLoadErrors(prev => ({ ...prev, [part]: e?.message || 'could not be loaded' }));
+  const [editingOrg, setEditingOrg] = useState<{ id: string; name: string; time_zone: string } | null>(null);
+  const [orgMsg, setOrgMsg] = useState('');
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [inviteForm, setInviteForm] = useState({ email: '', full_name: '', clinic_name: '', plan: 'Pro' });
   const [inviteMsg, setInviteMsg] = useState('');
@@ -69,7 +71,7 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
       setClinics(orgs.map((o: any) => {
         const owner = people.find((x: any) => x.org_id === o.id && x.role === 'Organization Administrator');
         return { id: o.id, name: o.name, owner: owner ? owner.full_name : '—', plan: '', status: o.status,
-                 usersCount: o.users, clinicsCount: o.clinics };
+                 usersCount: o.users, clinicsCount: o.clinics, time_zone: o.time_zone };
       }));
     } catch (e) {
       console.error('Failed to load organizations', e);
@@ -111,6 +113,24 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const saveOrganization = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOrg) return;
+    setOrgMsg('');
+    try {
+      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/organizations/${editingOrg.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: editingOrg.name, time_zone: editingOrg.time_zone })
+      });
+      const updated = await res.json();
+      setClinics(clinics.map(c => c.id === updated.id ? { ...c, name: updated.name, time_zone: updated.time_zone } : c));
+      setEditingOrg(null);
+    } catch (err: any) {
+      setOrgMsg(err?.message || 'The organization was not saved.');
     }
   };
 
@@ -487,6 +507,7 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                           <td className="p-4">
                             <button
                               onClick={() => toggleClinicStatus(c.id)}
+                              title={c.status === 'Active' ? 'Suspend this organization' : 'Activate this organization'}
                               aria-label={`${c.status === 'Active' ? 'Suspend' : 'Activate'} ${c.name}`}
                               className={`px-2.5 py-1 text-[10px] font-bold rounded-full uppercase tracking-wider transition-colors border ${c.status === 'Active'
                                   ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30'
@@ -494,6 +515,14 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                                 }`}
                             >
                               {c.status}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setOrgMsg(''); setEditingOrg({ id: c.id, name: c.name, time_zone: c.time_zone || 'UTC' }); }}
+                              aria-label={`Edit ${c.name}`}
+                              className="ml-2 px-2.5 py-1 text-[10px] font-bold rounded-full uppercase tracking-wider border border-white/20 text-white/70 hover:text-white hover:bg-white/10"
+                            >
+                              Edit
                             </button>
                           </td>
                         </tr>
@@ -511,6 +540,7 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
               <div className="p-6 border-b border-white/10">
                 <h3 className="text-base font-bold text-white">Pending Clinic Registrations</h3>
                 <p className="text-sm text-white/60 mt-1">Review full clinic and doctor details before approving access to the platform.</p>
+                <p className="text-xs font-bold text-amber-300 mt-2">Not in V1: clinic self-registration and its approval are not part of this release. Organizations are created by the Platform Administrator.</p>
               </div>
 
               {pendingApprovals.length === 0 ? (
@@ -538,19 +568,18 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                         </div>
                         <div className="flex gap-2">
                           <Button
-                            onClick={() => setPendingApprovals(prev => prev.filter(p => p.id !== req.id))}
+                            disabled
+                            title="Not in V1"
                             variant="ghost"
-                            className="text-rose-600 hover:text-rose-500"
+                            className="text-rose-600 opacity-50 cursor-not-allowed"
                           >
                             Reject
                           </Button>
                           <Button
-                            onClick={() => {
-                              setClinics([...clinics, { name: req.name, owner: req.owner, usersCount: 1, plan: 'Pro', status: 'Active' }]);
-                              setPendingApprovals(prev => prev.filter(p => p.id !== req.id));
-                            }}
+                            disabled
+                            title="Not in V1"
                             variant="secondary"
-                            className="shadow-sm"
+                            className="shadow-sm opacity-50 cursor-not-allowed"
                           >
                             Approve & Provision
                           </Button>
@@ -826,6 +855,34 @@ export const SuperAdminPanel: React.FC<SuperAdminProps> = ({ onLogout, user }) =
                 <div className="flex gap-3 mt-8">
                   <button type="button" onClick={() => setIsInviteOpen(false)} className="flex-1 px-4 py-3 bg-white/10 text-white rounded-2xl text-sm font-bold hover:bg-white/20">Cancel</button>
                   <button type="submit" className="flex-1 px-4 py-3 bg-[var(--color-surface-raised)] text-white rounded-2xl text-sm font-bold hover:bg-[var(--color-surface)]">Create Tenant</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingOrg && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/40 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-[var(--color-surface)] rounded-[24px] w-full max-w-md p-8 shadow-2xl animate-in zoom-in-95">
+              <h3 className="text-xl font-bold text-white mb-2">Edit Organization</h3>
+              <p className="text-sm text-white/60 mb-6">Change the organization's name and time zone. Status is changed from the list.</p>
+              {orgMsg && <div role="alert" className="p-3 mb-4 rounded-2xl text-sm font-bold bg-rose-50 text-rose-700">{orgMsg}</div>}
+              <form onSubmit={saveOrganization} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-white/60 uppercase mb-1" htmlFor="org-name">Organization Name</label>
+                  <input id="org-name" required minLength={3} maxLength={100} type="text" value={editingOrg.name}
+                    onChange={e => setEditingOrg({ ...editingOrg, name: e.target.value })}
+                    className="w-full border border-white/10 rounded-2xl px-4 py-3 text-sm focus:outline-none bg-white/5" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-white/60 uppercase mb-1" htmlFor="org-tz">Time Zone</label>
+                  <input id="org-tz" required type="text" value={editingOrg.time_zone}
+                    onChange={e => setEditingOrg({ ...editingOrg, time_zone: e.target.value })}
+                    className="w-full border border-white/10 rounded-2xl px-4 py-3 text-sm focus:outline-none bg-white/5" />
+                </div>
+                <div className="flex gap-3 mt-8">
+                  <button type="button" onClick={() => setEditingOrg(null)} className="flex-1 px-4 py-3 bg-white/10 text-white rounded-2xl text-sm font-bold hover:bg-white/20">Cancel</button>
+                  <button type="submit" className="flex-1 px-4 py-3 bg-[var(--color-surface-raised)] text-white rounded-2xl text-sm font-bold hover:bg-[var(--color-surface)]">Save Organization</button>
                 </div>
               </form>
             </div>

@@ -32,6 +32,7 @@ export const UserProfileView = () => {
     clinic: ''
   });
   const [loadError, setLoadError] = useState('');
+  const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState<{ ok: boolean; text: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -86,6 +87,8 @@ export const UserProfileView = () => {
         localStorage.setItem('user', JSON.stringify(user));
       } catch (e) {
         setLoadError(errorText(e, 'Could not load your profile.'));
+      } finally {
+        setLoaded(true);
       }
       try {
         const p = await (await fetch(`${API}/api/v1/auth/password-policy`)).json();
@@ -257,6 +260,7 @@ export const UserProfileView = () => {
                   <input
                     type="text"
                     aria-label="First Name"
+                    disabled={!loaded}
                     value={profileData.firstName}
                     onChange={(e) => setProfileData({...profileData, firstName: e.target.value})}
                     className={inputClass}
@@ -267,6 +271,7 @@ export const UserProfileView = () => {
                   <input
                     type="text"
                     aria-label="Last Name"
+                    disabled={!loaded}
                     value={profileData.lastName}
                     onChange={(e) => setProfileData({...profileData, lastName: e.target.value})}
                     className={inputClass}
@@ -294,6 +299,7 @@ export const UserProfileView = () => {
                     <input
                       type="tel"
                       aria-label="Phone Number"
+                    disabled={!loaded}
                       value={profileData.phone}
                       onChange={(e) => setProfileData({...profileData, phone: e.target.value})}
                       className="w-full bg-white/5 border border-white/10 rounded-2xl pl-11 pr-4 py-3 text-sm font-bold text-white outline-none focus:border-[var(--color-surface-raised)] focus:ring-1 focus:ring-[var(--color-surface-raised)] transition-all"
@@ -313,7 +319,7 @@ export const UserProfileView = () => {
 
                 <button
                   type="submit"
-                  disabled={isSaving}
+                  disabled={isSaving || !loaded}
                   className="bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)] text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-lg shadow-[var(--color-text-primary)]0/25 transition-all hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60"
                 >
                   {isSaving ? 'Saving…' : 'Save Changes'}

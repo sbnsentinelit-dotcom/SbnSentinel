@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
-from datetime import datetime
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta
+
+from pydantic import BaseModel
 
 from app.db.database import get_db
 from app.api.deps import get_current_user
@@ -86,36 +88,98 @@ def _clinic_for_connector(db: Session, actor, requested):
     return clinics[0].id
 
 
-def _verification(c: ConnectorModel) -> str:
-    """What is actually known about this connection: a saved draft, registered but not verified with
-    the provider, or verified by a successful provider authentication."""
+STALE_AFTER = timedelta(hours=24)     # a provider check older than this no longer proves the connection
+
+
+def latest_probe(db: Session, connector_id: str):
+    from app.models.integration_evidence import ConnectorProbeModel
+    return db.query(ConnectorProbeModel).filter(ConnectorProbeModel.connector_id == connector_id) \
+        .order_by(ConnectorProbeModel.probed_at.desc()).first()
+
+
+def verification_of(db: Session, c: ConnectorModel) -> Dict[str, Any]:
+    """What is actually known about a connection, from its newest provider check only (PR #8 A7):
+    draft, registered (no check, or the check could not run), verified, failed, or stale."""
     if (c.status or "") == "Draft":
-        return "draft"
-    return "verified" if c.state == "AUTHORIZED_READY" else "registered_unverified"
+        return {"verification": "draft", "verified_at": None, "detail": None}
+    probe = latest_probe(db, c.id)
+    if probe is None:
+        return {"verification": "registered_unverified", "verified_at": None, "detail": "No provider check yet"}
+    when = probe.probed_at.isoformat() + "Z"
+    if probe.outcome == "verified":
+        if datetime.utcnow() - probe.probed_at > STALE_AFTER:
+            return {"verification": "stale", "verified_at": when, "detail": "The last provider check is out of date"}
+        return {"verification": "verified", "verified_at": when, "detail": None}
+    if probe.outcome == "failed":
+        return {"verification": "failed", "verified_at": None, "detail": probe.detail, "checked_at": when}
+    return {"verification": "registered_unverified", "verified_at": None,
+            "detail": probe.detail or "The provider check is not available", "checked_at": when}
+
+
+def run_probe(c: ConnectorModel):
+    """A server-side provider check: the provider adapter must exist and its authentication must
+    return a token. Returns (outcome, detail); never "verified" without that result."""
+    try:
+        from app.integrations.core.registry import registry
+        adapter = registry.create(c.name, config=dict(c.config or {}))
+    except Exception as e:  # the adapter itself could not be built
+        return "unavailable", f"Provider adapter could not start: {e}"
+    if not adapter:
+        return "unavailable", "No provider adapter for this connection"
+    auth = getattr(adapter, "auth", None)
+    if auth is None or not hasattr(auth, "authenticate"):
+        return "unavailable", "This provider has no authentication check"
+    try:
+        import asyncio
+        result = asyncio.run(auth.authenticate())
+    except Exception as e:
+        return "failed", f"Provider authentication failed: {e}"
+    if not result or not getattr(result, "access_token", None):
+        return "failed", "Provider authentication returned no token"
+    return "verified", None
+
+
+def probe_and_record(db: Session, c: ConnectorModel, actor=None, probe=None) -> Dict[str, Any]:
+    """Run the provider check, store it (clinic, connector, time, outcome) and set the connection's
+    state from it. Both integration screens read this same record."""
+    from app.models.integration_evidence import ConnectorProbeModel
+    outcome, detail = (probe or run_probe)(c)
+    db.add(ConnectorProbeModel(connector_id=c.id, clinic_id=c.clinic_id, probed_at=datetime.utcnow(), outcome=outcome,
+                               detail=detail, requested_by=getattr(actor, "email", None)))
+    if outcome == "verified":
+        c.state, c.status = "AUTHORIZED_READY", "Connected"
+    else:
+        c.state, c.status = "CONFIGURED", "Configured"
+    db.flush()
+    return verification_of(db, c)
+
+
+def connector_view(db: Session, c: ConnectorModel) -> Dict[str, Any]:
+    from app.models.integration_evidence import ConnectorSyncRunModel
+    last_ok = db.query(ConnectorSyncRunModel).filter(ConnectorSyncRunModel.connector_id == c.id,
+                                                     ConnectorSyncRunModel.status == "succeeded") \
+        .order_by(ConnectorSyncRunModel.finished_at.desc()).first()
+    v = verification_of(db, c)
+    return {
+        "id": c.id,
+        "name": c.name,
+        "type": c.type,
+        "status": c.status,
+        "state": c.state,
+        "clinic_id": c.clinic_id,
+        **v,
+        "latency_ms": c.latency_ms if last_ok else None,
+        "last_sync": last_ok.finished_at.isoformat() + "Z" if last_ok else None,
+    }
 
 
 @router.get("/health", response_model=List[Dict[str, Any]])
 def check_connectors_health(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """
-    Status of the connections in the caller's scope, as recorded: no sync time or latency is shown
-    unless one was measured.
+    Status of the connections in the caller's scope, as recorded: verified only by a provider check,
+    synced only by a completed sync run.
     """
-    connectors = _scope_query(db, _actor(current_user)).all()
-
-    response = []
-    for c in connectors:
-        response.append({
-            "id": c.id,
-            "name": c.name,
-            "type": c.type,
-            "status": c.status,
-            "state": c.state,
-            "verification": _verification(c),
-            "clinic_id": c.clinic_id,
-            "latency_ms": c.latency_ms if c.last_sync else None,
-            "last_sync": c.last_sync.isoformat() + "Z" if c.last_sync else None
-        })
-    return response
+    return [connector_view(db, c) for c in _scope_query(db, _actor(current_user)).all()]
 
 
 @router.post("/connect", status_code=status.HTTP_201_CREATED)
@@ -125,7 +189,7 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
     Connect a new EHR or billing system integration.
     G3 Secure Onboarding:
     - Rejects plaintext credentials in ordinary config JSON.
-    - Never assigns Connected / AUTHORIZED_READY before live credential verification.
+    - Never assigns Connected / AUTHORIZED_READY without a completed server-side provider check.
     """
     actor = _actor(current_user)
     is_draft = (connector_in.status or "") == "Draft"
@@ -139,7 +203,8 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
     existing = db.query(ConnectorModel).filter(ConnectorModel.id == connector_in.id).first()
     if existing and existing.status != "Draft":      # a saved draft may be saved again or registered
         if actor is not None:
-            state = "verified with the provider" if existing.state == "AUTHORIZED_READY" else "not verified with the provider"
+            known = verification_of(db, existing)["verification"]
+            state = "verified with the provider" if known == "verified" else "not verified with the provider"
             raise HTTPException(status_code=409,
                                 detail=f"This connection is already registered for the clinic ({state})")
         raise HTTPException(
@@ -147,6 +212,8 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
             detail=f"Connector with ID '{connector_in.id}' already exists.")
 
     config = connector_in.config.copy() if connector_in.config else {}
+    # A verification claim cannot be supplied by the caller (PR #8 A7).
+    config.pop("verified_live", None)
 
     # G3 Credential Safety: Disallow plaintext passwords/tokens in config JSON
     try:
@@ -170,33 +237,6 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
         return {"message": "Draft saved; not connected", "connector_id": row.id, "status": "Draft",
                 "state": "DRAFT", "verification": "draft"}
 
-    verified = False
-
-    # Live Verification for Practice Fusion or registered adapters
-    if ("Practice Fusion" in connector_in.name or connector_in.name == "practice_fusion") and config:
-        try:
-            from app.integrations.core.registry import registry
-            adapter = registry.create("Practice Fusion", config=config)
-            if not adapter:
-                raise ValueError("Adapter not available")
-            if hasattr(adapter, "auth") and adapter.auth and hasattr(adapter.auth, "authenticate"):
-                import asyncio
-                auth_res = asyncio.run(adapter.auth.authenticate())
-                if not auth_res or not getattr(auth_res, "access_token", None):
-                    raise ValueError("Authentication challenge failed")
-            verified = True
-        except Exception as e:
-            # Prevent saving the connection if authentication fails
-            raise HTTPException(
-                status_code=401,
-                detail=f"Invalid Practice Fusion Credentials: {str(e)}")
-    elif config.get("verified_live") is True:
-        verified = True
-
-    # Never assign Connected before verification
-    final_status = "Connected" if verified else "Configured"
-    final_state = "AUTHORIZED_READY" if verified else "CONFIGURED"
-
     vendor_id = connector_in.vendor_id or config.get("vendor_id") or connector_in.name.lower().replace(" ", "_")
     clinic_id = connector_in.clinic_id or config.get("clinic_id") or "default"
     secret_ref = connector_in.secret_ref or config.get("secret_ref")
@@ -212,21 +252,24 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
         clinic_id=clinic_id,
         secret_ref=secret_ref,
         permitted_resources=permitted,
-        state=final_state,
-        status=final_status,
+        state="CONFIGURED",
+        status="Configured",
         latency_ms=None,
-        last_sync=datetime.utcnow() if verified else None,
+        last_sync=None,
         config=config
     )
     if existing is not None:      # a saved draft becomes the registered connection
         db.delete(existing)
         db.flush()
     db.add(new_connector)
+    db.flush()
+    v = probe_and_record(db, new_connector, actor)
+    verified = v["verification"] == "verified"
     if actor is not None:
         from app.core.access import record
         record(db, actor, "CONNECTOR_VERIFIED" if verified else "CONNECTOR_REGISTERED", "Integration Center",
                clinic_id=clinic_id, target_type="connector", target_id=new_connector.id,
-               detail=None if verified else "registered; not verified with the provider")
+               detail=None if verified else f"registered; not verified with the provider ({v.get('detail')})")
     db.commit()
     db.refresh(new_connector)
 
@@ -236,7 +279,7 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
             connector_instance_id=new_connector.id,
             vendor_id=vendor_id,
             allowed_clinic_id=clinic_id,
-            state=final_state,
+            state=new_connector.state,
             permitted_resources=set(permitted),
             secret_ref=secret_ref,
         )
@@ -246,10 +289,72 @@ def connect_new_system(connector_in: ConnectorCreate, db: Session = Depends(get_
         "message": "Connected and verified with the provider" if verified
         else "Registered; not verified with the provider",
         "connector_id": new_connector.id,
-        "status": final_status,
-        "state": final_state,
-        "verification": "verified" if verified else "registered_unverified"
+        "status": new_connector.status,
+        "state": new_connector.state,
+        "verification": v["verification"],
+        "detail": v.get("detail"),
     }
+
+
+@router.post("/verify/{connector_id}")
+def verify_connection(connector_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Run the provider check again for a connection in the caller's scope and store its result."""
+    actor = _actor(current_user)
+    c = _in_scope(db, actor, connector_id)
+    if (c.status or "") == "Draft":
+        raise HTTPException(status_code=409, detail="A draft is not registered yet; activate it first")
+    v = probe_and_record(db, c, actor)
+    if actor is not None:
+        from app.core.access import record
+        record(db, actor, "CONNECTOR_CHECKED", "Integration Center", clinic_id=c.clinic_id, target_type="connector",
+               target_id=c.id, detail=f"provider check: {v['verification']}")
+    db.commit()
+    return connector_view(db, c)
+
+
+def _imported_count(result: Dict[str, Any]) -> int:
+    for key in ("imported_count", "records_imported", "records_processed", "count"):
+        if isinstance(result.get(key), int):
+            return result[key]
+    return 0
+
+
+async def _run_sync(db: Session, c: ConnectorModel, actor) -> Dict[str, Any]:
+    """One recorded sync run for a connection: started, finished, status, imported count or failure.
+    A successful run also records the import it brought in."""
+    from app.models.integration_evidence import ConnectorSyncRunModel, DataImportModel
+    run = ConnectorSyncRunModel(connector_id=c.id, clinic_id=c.clinic_id, started_at=datetime.utcnow(),
+                                status="running", requested_by=getattr(actor, "email", None))
+    db.add(run)
+    db.commit()
+    result = await connector_manager.sync_connector(c.id)
+    db.refresh(run)
+    run.finished_at = datetime.utcnow()
+    if result.get("status") == "Success":
+        run.status, run.imported_count = "succeeded", _imported_count(result)
+        db.add(DataImportModel(clinic_id=c.clinic_id, source_kind="connector", source_label=c.type or c.name,
+                               connector_id=c.id, run_id=run.id, accepted_count=run.imported_count,
+                               completed_at=run.finished_at, recorded_by=run.requested_by))
+    else:
+        run.status, run.error = "failed", str(result.get("error") or "The provider sync failed")
+    if actor is not None:
+        from app.core.access import record
+        record(db, actor, "CONNECTOR_SYNC_" + run.status.upper(), "Integration Center", clinic_id=c.clinic_id,
+               target_type="sync_run", target_id=run.id,
+               detail=f"imported {run.imported_count}" if run.status == "succeeded" else run.error)
+    db.commit()
+    return _run_view(run)
+
+
+def _run_view(run) -> Dict[str, Any]:
+    if run is None:
+        return None
+
+    def iso(d):
+        return d.isoformat() + "Z" if d else None
+    return {"run_id": run.id, "connector_id": run.connector_id, "clinic_id": run.clinic_id, "status": run.status,
+            "started_at": iso(run.started_at), "finished_at": iso(run.finished_at),
+            "imported_count": run.imported_count, "error": run.error}
 
 
 @router.post("/sync")
@@ -257,14 +362,58 @@ async def trigger_connector_sync(request: ConnectorSyncRequest, db: Session = De
                                  current_user=Depends(get_current_user)):
     """
     Manually trigger data synchronization from a specific Reality Source.
-    Uses the SES-005 canonical sync framework.
+    Uses the SES-005 canonical sync framework; every run is recorded.
     """
-    _in_scope(db, _actor(current_user), request.connector_id)
-    result = await connector_manager.sync_connector(request.connector_id)
-    if result.get("status") == "Failed":
-        raise HTTPException(status_code=400, detail=result.get("error"))
+    actor = _actor(current_user)
+    c = _in_scope(db, actor, request.connector_id)
+    run = await _run_sync(db, c, actor)
+    if run["status"] != "succeeded":
+        raise HTTPException(status_code=400, detail=run["error"])
+    return {"message": "Sync complete", "run": run}
 
-    return {"message": "Sync complete", "details": result}
+
+class ClinicSyncRequest(BaseModel):
+    clinic_id: Optional[str] = None
+
+
+def _sync_status(db: Session, clinic_id: str) -> Dict[str, Any]:
+    from app.models.integration_evidence import ConnectorSyncRunModel
+    connectors = db.query(ConnectorModel).filter(ConnectorModel.clinic_id == clinic_id,
+                                                 ConnectorModel.status != "Draft").all()
+    runs = db.query(ConnectorSyncRunModel).filter(ConnectorSyncRunModel.clinic_id == clinic_id)
+    last_run = runs.order_by(ConnectorSyncRunModel.started_at.desc()).first()
+    last_ok = runs.filter(ConnectorSyncRunModel.status == "succeeded") \
+        .order_by(ConnectorSyncRunModel.finished_at.desc()).first()
+    return {"clinic_id": clinic_id, "configured": bool(connectors),
+            "connections": [connector_view(db, c) for c in connectors],
+            "last_run": _run_view(last_run), "last_success": _run_view(last_ok)}
+
+
+@router.get("/sync-status")
+def clinic_sync_status(clinic_id: Optional[str] = None, db: Session = Depends(get_db),
+                       current_user=Depends(get_current_user)):
+    """The clinic's connections, its last sync run and its last successful one (never demo data)."""
+    clinic = _clinic_for_connector(db, current_user, clinic_id)
+    return _sync_status(db, clinic)
+
+
+@router.post("/sync-clinic")
+async def sync_clinic(request: ClinicSyncRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """"Sync Live Data" for one clinic: runs its verified connection and records the run. A clinic with
+    no connection, or only an unverified one, is never shown as synced (PR #8 A6)."""
+    actor = _actor(current_user)
+    clinic = _clinic_for_connector(db, actor, request.clinic_id)
+    connectors = db.query(ConnectorModel).filter(ConnectorModel.clinic_id == clinic,
+                                                 ConnectorModel.status != "Draft").all()
+    if not connectors:
+        raise HTTPException(status_code=409, detail="No connection is configured for this clinic; nothing was synced.")
+    ready = [c for c in connectors if verification_of(db, c)["verification"] == "verified"]
+    if not ready:
+        raise HTTPException(status_code=409,
+                            detail="The clinic's connection is not verified with the provider; nothing was synced.")
+    runs = [await _run_sync(db, c, actor) for c in ready]
+    status_now = _sync_status(db, clinic)
+    return {"runs": runs, **status_now}
 
 
 @router.delete("/disconnect/{connector_id}")

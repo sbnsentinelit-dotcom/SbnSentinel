@@ -25,18 +25,28 @@ def _iso(d):
 
 
 def _sources(db: Session, clinic: ClinicModel) -> List[Dict[str, Any]]:
-    """What this clinic's data actually comes from: its imported encounter records, counted from the
-    database. A clinic with nothing imported shows a source that is not configured, with 0 records."""
-    from app.models.encounter import EncounterModel
-    records = db.query(func.count(EncounterModel.id)).filter(EncounterModel.clinic_id == clinic.id).scalar() or 0
-    return [{
-        "kind": "workbook",
-        "label": "Clinic billing workbook",
-        "sha256": None,
-        "sheets": None,
-        "records_count": records,
-        "status": "Imported" if records else "Not configured",
-    }]
+    """What this clinic's data actually comes from: recorded imports only (PR #8 A8). Records typed in
+    by hand are not an import. A clinic with no recorded workbook import shows it as not configured."""
+    from app.models.integration_evidence import DataImportModel
+    rows = db.query(DataImportModel.source_kind, DataImportModel.source_label,
+                    func.sum(DataImportModel.accepted_count), func.max(DataImportModel.completed_at),
+                    func.count(DataImportModel.id)) \
+        .filter(DataImportModel.clinic_id == clinic.id) \
+        .group_by(DataImportModel.source_kind, DataImportModel.source_label).all()
+    sources = [{"kind": kind, "label": label, "sha256": None, "sheets": None, "records_count": int(total or 0),
+                "imports": int(n), "last_import_at": _iso(last), "status": "Imported"}
+               for kind, label, total, last, n in rows]
+    if not any(s["kind"] == "workbook" for s in sources):
+        sources.insert(0, {"kind": "workbook", "label": "Clinic billing workbook", "sha256": None, "sheets": None,
+                           "records_count": 0, "imports": 0, "last_import_at": None, "status": "Not configured"})
+    return sources
+
+
+def _external(db: Session, clinic: ClinicModel) -> List[Dict[str, Any]]:
+    """The clinic's registered connections, with what their newest provider check proved."""
+    from app.models.connector import ConnectorModel
+    from app.api.v1.endpoints.reality_connectors import connector_view
+    return [connector_view(db, c) for c in db.query(ConnectorModel).filter(ConnectorModel.clinic_id == clinic.id).all()]
 
 
 def view(db: Session, c: ClinicModel) -> Dict[str, Any]:
@@ -54,7 +64,7 @@ def view(db: Session, c: ClinicModel) -> Dict[str, Any]:
         "updated_at": _iso(c.updated_at),
         "deactivated_at": _iso(c.deactivated_at),
         "data_sources": _sources(db, c),
-        "external_connectors": [],
+        "external_connectors": _external(db, c),
     }
 
 

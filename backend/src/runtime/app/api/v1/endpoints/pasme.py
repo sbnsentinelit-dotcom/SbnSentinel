@@ -14,11 +14,6 @@ from app.schemas.audit import AuditLogCreate
 from app.services.data_audit_engine import data_audit_engine
 from fastapi import (APIRouter, Depends, HTTPException, WebSocket,
                      WebSocketDisconnect)
-try:
-    from jose import JWTError, jwt
-except ImportError:
-    import jwt
-    from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.orm import Session
 
 router = APIRouter()
@@ -29,27 +24,48 @@ MAINTENANCE_MODE = False
 # WebSocket Connection Manager for PASME Real-Time Chat
 
 
+def _chat_member_ok(token: str, room_id: str) -> bool:
+    """The token's server session is alive and its user may be in this room (same validator as HTTP)."""
+    from app.db.database import SessionLocal
+    from app.services.session_service import SessionEnded, validate
+    db = SessionLocal()
+    try:
+        user, _ = validate(db, token)
+        return user.role == UserRole.SYSTEM_ADMINISTRATOR.value or room_id == f"org_{user.org_id}"
+    except SessionEnded:
+        return False
+    finally:
+        db.close()
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections = {}
 
-    async def connect(self, websocket: WebSocket, room_id: str):
+    async def connect(self, websocket: WebSocket, room_id: str, token: str = ""):
         await websocket.accept()
         if room_id not in self.active_connections:
             self.active_connections[room_id] = []
-        self.active_connections[room_id].append(websocket)
+        self.active_connections[room_id].append((websocket, token))
 
     def disconnect(self, websocket: WebSocket, room_id: str):
-        if room_id in self.active_connections and websocket in self.active_connections[room_id]:
-            self.active_connections[room_id].remove(websocket)
+        if room_id in self.active_connections:
+            self.active_connections[room_id] = [c for c in self.active_connections[room_id] if c[0] is not websocket]
 
     async def broadcast(self, room_id: str, message: dict):
-        if room_id in self.active_connections:
-            for connection in self.active_connections[room_id]:
+        """Deliver only to members whose session is still alive; ended ones are disconnected."""
+        for connection, token in list(self.active_connections.get(room_id, [])):
+            if not _chat_member_ok(token, room_id):
+                self.disconnect(connection, room_id)
                 try:
-                    await connection.send_json(message)
+                    await connection.close(code=1008)
                 except Exception:
                     pass
+                continue
+            try:
+                await connection.send_json(message)
+            except Exception:
+                pass
 
 
 manager = ConnectionManager()
@@ -66,36 +82,19 @@ async def websocket_chat(websocket: WebSocket, room_id: str, token: str, db: Ses
         await websocket.close(code=1008)
         return
 
+    # Same session validator as HTTP: an ended, idle or suspended session cannot join or stay.
+    from app.services.session_service import SessionEnded, validate
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            await websocket.close(code=1008)
-            return
-
-        user = db.query(User).filter(User.id == int(user_id)).first()
-        if not user or not user.is_active:
-            await websocket.close(code=1008)
-            return
-
-        from datetime import datetime
-        iat = payload.get("iat")
-        if iat and user.token_invalid_before:
-            if datetime.fromtimestamp(iat) < user.token_invalid_before:
-                await websocket.close(code=1008)
-                return
-
-        # Room authorization
-        if user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-            if room_id != f"org_{user.org_id}":
-                await websocket.close(code=1008)
-                return
-
-    except JWTError:
+        user, _ = validate(db, token)
+    except SessionEnded:
+        await websocket.close(code=1008)
+        return
+    user_id = str(user.id)
+    if user.role != UserRole.SYSTEM_ADMINISTRATOR.value and room_id != f"org_{user.org_id}":
         await websocket.close(code=1008)
         return
 
-    await manager.connect(websocket, room_id)
+    await manager.connect(websocket, room_id, token)
     last_msg_time = 0
     try:
         while True:
@@ -111,10 +110,11 @@ async def websocket_chat(websocket: WebSocket, room_id: str, token: str, db: Ses
                 continue
             last_msg_time = now
 
-            db.refresh(user)
-            if not user.is_active or (iat and user.token_invalid_before and datetime.fromtimestamp(iat) < user.token_invalid_before):
+            if not _chat_member_ok(token, room_id):
+                manager.disconnect(websocket, room_id)
                 await websocket.close(code=1008)
                 return
+            db.refresh(user)
 
             data["sender_id"] = user_id
             data["role"] = user.role

@@ -27,8 +27,37 @@ def validate(password: str, confirm: Optional[str] = None, email: Optional[str] 
         raise HTTPException(status_code=400, detail="Password must contain both letters and digits")
     if email and password.lower() == email.lower():
         raise HTTPException(status_code=400, detail="Password must not be your email address")
-    if confirm is not None and not hmac.compare_digest(password, confirm):
+    if confirm is not None and not same_text(password, confirm):
         raise HTTPException(status_code=400, detail="Password and confirmation do not match")
+
+
+def same_text(a: Optional[str], b: Optional[str]) -> bool:
+    """Constant-time comparison that accepts any Unicode text (hmac.compare_digest on str is ASCII-only)."""
+    return hmac.compare_digest((a or "").encode("utf-8"), (b or "").encode("utf-8"))
+
+
+def matches(password: str, hashed: Optional[str]) -> bool:
+    """Whether a password matches a stored hash. No hash yet (an invited account that has not chosen a
+    password) or an unreadable hash is simply "no match", never an error."""
+    if not hashed:
+        return False
+    from app.core.security import verify_password
+    try:
+        return verify_password(password or "", hashed)
+    except (ValueError, TypeError):
+        return False
+
+
+def consume(db: Session, row) -> None:
+    """Mark a one-time credential used in one conditional UPDATE. Only one of two simultaneous
+    submissions can succeed; the other is refused before any change is applied."""
+    from sqlalchemy import update
+    from app.models.otp import OTPModel
+    result = db.execute(update(OTPModel).where(OTPModel.id == row.id, OTPModel.is_used == False)  # noqa: E712
+                        .values(is_used=True, used_at=datetime.utcnow()))
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Invalid or expired link or code")
 
 
 def token_hash(token: str) -> str:
@@ -86,7 +115,7 @@ def redeem(db: Session, email: Optional[str], purpose: str, code: Optional[str] 
             row.used_at = now
             db.commit()
             raise HTTPException(status_code=400, detail="Maximum attempts exceeded. Please request a new one.")
-        if not hmac.compare_digest(row.otp_code or "", code):
+        if not same_text(row.otp_code, code):
             db.commit()
             raise bad
     return row

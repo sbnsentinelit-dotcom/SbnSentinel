@@ -111,9 +111,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
   // Integration panel figures come from the server (encounter summary and recorded connections).
   const [syncStats, setSyncStats] = useState<{ total_encounters: number; paid_count: number; pending_count: number; denied_count: number } | null>(null);
   const [connectorHealth, setConnectorHealth] = useState<Array<{ id: string; latency_ms: number | null; last_sync: string | null; verification?: string }>>([]);
+  type SyncRun = { run_id: string; status: string; finished_at: string | null; imported_count: number | null; error: string | null };
+  const [syncClinicId, setSyncClinicId] = useState('');
+  const [syncStatus, setSyncStatus] = useState<{ configured: boolean; connections: Array<{ verification: string }>; last_run: SyncRun | null; last_success: SyncRun | null } | null>(null);
+  const [syncStatusError, setSyncStatusError] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Integrations come from the server only (no pre-filled "connected" entries).
-  const [integrationsList, setIntegrationsList] = useState<Array<{ id: string; name: string; type: string; connected: boolean; lastSync: string }>>([]);
+  const [integrationsList, setIntegrationsList] = useState<Array<{ id: string; name: string; type: string; connected: boolean; verification?: string; lastSync: string }>>([]);
 
   // Billing States
   const [regionCurrency, setRegionCurrency] = useState('USD');
@@ -206,6 +211,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSaveSettings, acti
       setConnectorHealth(await healthRes.json());
     } catch { setConnectorHealth([]); }
   };
+
+  const fetchSyncStatus = async (clinicId: string) => {
+    setSyncStatusError('');
+    try {
+      const q = clinicId ? `?clinic_id=${encodeURIComponent(clinicId)}` : '';
+      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/reality/sync-status${q}`);
+      setSyncStatus(await res.json());
+    } catch (e: any) {
+      setSyncStatus(null);
+      setSyncStatusError(e?.message || 'Sync status could not be loaded.');
+    }
+  };
+
+  const syncLiveData = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1/reality/sync-clinic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clinic_id: syncClinicId || undefined })
+      });
+      const data = await res.json();
+      setSyncStatus(data);
+      const failed = (data.runs || []).filter((r: SyncRun) => r.status !== 'succeeded');
+      if (failed.length) showToast(`Sync failed: ${failed[0].error || 'the provider did not complete the sync'}`, 'error');
+      else showToast(`Sync complete: ${(data.runs || []).reduce((a: number, r: SyncRun) => a + (r.imported_count || 0), 0)} record(s) imported.`);
+    } catch (err: any) {
+      // The server says why nothing was synced (no connection, or not verified); it is shown as is.
+      showToast((err?.message || 'The server did not answer; nothing was synced.'), 'error');
+      await fetchSyncStatus(syncClinicId);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (localActiveMenu !== 'integrations') return;
+    const active = clinicsList.filter(c => c.status === 'Active');
+    const chosen = syncClinicId && active.some(c => c.id === syncClinicId) ? syncClinicId : (active[0]?.id || '');
+    if (chosen !== syncClinicId) { setSyncClinicId(chosen); return; }
+    fetchSyncStatus(chosen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localActiveMenu, clinicsList, syncClinicId]);
 
   const fetchIntegrations = async () => {
     try {
@@ -1084,10 +1132,16 @@ document.body
                                <span className="text-xs font-black uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                                   {selectedApiRegion === 'UAE' ? '🇦🇪 UAE HEALTHCARE JURISDICTION' : '🇺🇸 US HEALTHCARE JURISDICTION'}
                                </span>
-                               <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
-                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                                  Active Link
-                               </span>
+                               {(() => {
+                                  const verified = !!syncStatus?.connections?.some(c => c.verification === 'verified');
+                                  const label = verified ? 'Active Link' : syncStatus?.configured ? 'Not verified' : 'Not configured';
+                                  return (
+                                     <span className={`flex items-center gap-1.5 text-xs font-bold ${verified ? 'text-emerald-400' : 'text-white/50'}`}>
+                                        <span className={`w-2 h-2 rounded-full ${verified ? 'bg-emerald-400 animate-pulse' : 'bg-white/30'}`}></span>
+                                        {label}
+                                     </span>
+                                  );
+                               })()}
                             </div>
                             <h4 className="text-lg font-bold text-white mt-1">
                                {selectedApiRegion === 'UAE' ? uaePlatform : usPlatform}
@@ -1134,22 +1188,25 @@ document.body
                             <Activity className={`w-4 h-4 text-emerald-400 ${isApiTesting ? 'animate-spin' : ''}`} />
                             {isApiTesting ? 'Testing Handshake...' : 'Test Handshake'}
                          </button>
+                         {clinicsList.filter(c => c.status === 'Active').length > 1 && (
+                            <select
+                               aria-label="Clinic to sync"
+                               value={syncClinicId}
+                               onChange={e => setSyncClinicId(e.target.value)}
+                               className="px-3 py-2.5 rounded-[12px] bg-white/10 text-white text-xs font-bold border border-white/10 focus:outline-none"
+                            >
+                               {clinicsList.filter(c => c.status === 'Active').map(c => (
+                                  <option key={c.id} value={c.id} className="text-black">{c.name}</option>
+                               ))}
+                            </select>
+                         )}
                          <button
-                            onClick={async () => {
-                               showToast('Triggering synchronization with clinic data...');
-                               try {
-                                  const res = await fetchWithAuth('/api/v1/encounters/seed-dubai', { method: 'POST' });
-                                  const data = await res.json();
-                                  await fetchSyncFigures();
-                                  showToast(data.message || 'Synchronization finished.');
-                               } catch (err: any) {
-                                  showToast(`Sync failed: ${(err?.message || 'the server did not answer').replace(/\.+$/, '')}.`, 'error');
-                               }
-                            }}
-                            className="flex items-center gap-2 px-4 py-2.5 rounded-[12px] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-md"
+                            onClick={syncLiveData}
+                            disabled={isSyncing}
+                            className="flex items-center gap-2 px-4 py-2.5 rounded-[12px] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-md disabled:opacity-50"
                          >
-                            <Sparkles className="w-4 h-4" />
-                            Sync Live Data
+                            <Sparkles className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                            {isSyncing ? 'Syncing...' : 'Sync Live Data'}
                          </button>
                       </div>
                    </div>
@@ -1165,7 +1222,8 @@ document.body
                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-white/10 text-white">
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Synced Encounters</p>
-                         <p className="text-xl font-extrabold text-white mt-0.5">{syncStats ? `${syncStats.total_encounters} Records` : 'Not available'}</p>
+                         <p className="text-xl font-extrabold text-white mt-0.5">{syncStatus?.last_success ? `${syncStatus.last_success.imported_count ?? 0} Records` : syncStatusError ? 'Not available' : 'Not synced'}</p>
+                         <p className="text-[10px] text-white/50 mt-0.5">{syncStatus?.last_success?.finished_at ? `Last sync ${new Date(syncStatus.last_success.finished_at).toLocaleString()}` : syncStatus?.last_run?.status === 'failed' ? 'Last attempt failed' : 'No sync recorded'}</p>
                       </div>
                       <div className="bg-white/5 p-3 rounded-[14px]">
                          <p className="text-[10px] text-white/50 uppercase font-bold tracking-wider">Financial Claims</p>
@@ -1416,8 +1474,8 @@ document.body
                             </div>
                           </div>
 
-                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                            Active
+                          <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded border ${integration.connected ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-white/10 text-white/60 border-white/20'}`}>
+                            {integration.connected ? 'Active' : integration.verification === 'stale' ? 'Check expired' : integration.verification === 'failed' ? 'Check failed' : 'Not verified'}
                           </span>
                         </div>
                       ))}

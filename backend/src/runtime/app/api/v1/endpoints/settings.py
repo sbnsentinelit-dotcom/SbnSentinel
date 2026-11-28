@@ -358,23 +358,22 @@ def reactivate_team_member(user_id: int, db: Session = Depends(get_db), current_
 
 @router.get("/integrations", dependencies=[Depends(RoleChecker(SETTINGS_WRITERS))])
 def get_integrations(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> List[Dict[str, Any]]:
-    """Get clinic integrations status based on actual connector runtime state."""
-    if getattr(app_config, "SOURCE_PROFILE", "") == "workbook" or not getattr(app_config, "ENABLE_PRACTICE_FUSION", False):
-        return []
-    from app.services.connector_manager import connector_runtime_state
-
-    pf_state = connector_runtime_state.get("PRACTICE_FUSION")
-    if not pf_state:
-        return []
-    return [
-        {
-            "id": "PRACTICE_FUSION",
-            "name": "Practice Fusion EHR",
-            "type": "EHR",
-            "connected": pf_state.capability_state == "AUTHORIZED_READY" and not pf_state.is_stale,
-            "lastSync": pf_state.last_verified_at.isoformat() + "Z" if pf_state.last_verified_at else "Never"
-        }
-    ]
+    """The caller's own connections (organization or clinic), with the same provider-check record the
+    Integration Center shows: "connected" only when the newest check verified it (PR #8 A7)."""
+    from app.models.connector import ConnectorModel
+    from app.core.access import visible_clinic_ids
+    from app.api.v1.endpoints.reality_connectors import connector_view
+    ids = visible_clinic_ids(db, current_user)
+    q = db.query(ConnectorModel).filter(ConnectorModel.status != "Draft")
+    if ids is not None:
+        q = q.filter(ConnectorModel.clinic_id.in_(ids or ["__none__"]))
+    out = []
+    for c in q.all():
+        v = connector_view(db, c)
+        out.append({"id": c.id, "name": c.type or c.name, "type": c.type, "clinic_id": c.clinic_id,
+                    "connected": v["verification"] == "verified", "verification": v["verification"],
+                    "verified_at": v.get("verified_at"), "lastSync": v["last_sync"] or "Never"})
+    return out
 
 
 @router.post("/integrations/{integration_id}/toggle", dependencies=[Depends(RoleChecker([UserRole.SYSTEM_ADMINISTRATOR.value, UserRole.ORGANIZATION_ADMINISTRATOR.value]))])

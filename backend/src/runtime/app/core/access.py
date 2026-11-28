@@ -169,7 +169,7 @@ def record(db: Session, actor, action: str, module: str, *, org_id: Optional[str
     row = AuditLogModel(user_system=who, action=action, module=module, correlation_id=correlation_id,
                         org_id=org_id, clinic_id=clinic_id, target_type=target_type,
                         target_id=None if target_id is None else str(target_id), detail=detail,
-                        timestamp=datetime.utcnow())
+                        scope_source="event", timestamp=datetime.utcnow())
     db.add(row)
     return row
 

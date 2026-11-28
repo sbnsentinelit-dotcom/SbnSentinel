@@ -18,6 +18,11 @@ router = APIRouter()
 
 
 def _scoped(db: Session, user: User):
+    """Signals the caller is entitled to as notifications. A role outside the known roles (for example
+    Unassigned after a role removal) has no inbox at all, rather than falling back to its organization."""
+    from app.core.access import ORG_WIDE, PLATFORM
+    if role_of(user) not in PLATFORM | ORG_WIDE | CLINIC_BOUND:
+        raise HTTPException(status_code=403, detail="You don't have permission to do this.")
     q = db.query(SignalModel)
     if is_platform(user):
         return q

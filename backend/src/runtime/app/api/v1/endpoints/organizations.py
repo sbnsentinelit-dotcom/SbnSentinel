@@ -92,6 +92,17 @@ def create_organization(payload: OrganizationIn, db: Session = Depends(get_db), 
     return view(db, org)
 
 
+@router.get("/ownership-review")
+def ownership_review(db: Session = Depends(get_db), actor: User = Depends(platform_only)):
+    """Clinics the upgrade could not give an owner from evidence (orphaned or conflicting), for the
+    Platform Administrator to resolve. Nothing here was guessed."""
+    from app.models.integration_evidence import OwnershipReviewModel
+    rows = db.query(OwnershipReviewModel).filter(OwnershipReviewModel.resolved_at.is_(None)) \
+        .order_by(OwnershipReviewModel.id).all()
+    return [{"id": r.id, "subject_type": r.subject_type, "subject_id": r.subject_id, "kind": r.kind,
+             "detail": r.detail, "created_at": _iso(r.created_at)} for r in rows]
+
+
 @router.get("/{org_id}")
 def get_organization(org_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not is_platform(current_user) and org_id != require_org(current_user):

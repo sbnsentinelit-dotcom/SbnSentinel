@@ -50,12 +50,11 @@ class RegisterInitiateRequest(BaseModel):
 
 @router.post("/register/initiate")
 def initiate_registration(user_in: RegisterInitiateRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), ip: str = Depends(check_ip_abuse)):
+    # The same answer whether or not the address already has an account (MS-001 account privacy).
+    answer = {"message": "If this email can be registered, a verification code has been sent."}
     user = db.query(User).filter(User.email == user_in.email).first()
     if user:
-        raise HTTPException(
-            status_code=400,
-            detail="The user with this email already exists in the system.",
-        )
+        return answer
 
     import secrets
     from app.models.otp import OTPModel
@@ -63,7 +62,7 @@ def initiate_registration(user_in: RegisterInitiateRequest, background_tasks: Ba
 
     recent_otp = db.query(OTPModel).filter(OTPModel.email == user_in.email, OTPModel.created_at >= datetime.utcnow() - timedelta(minutes=1)).first()
     if recent_otp:
-        raise HTTPException(status_code=429, detail="Please wait 1 minute before requesting a new OTP.")
+        return answer
 
     otp = str(secrets.randbelow(900000) + 100000)
     db_otp = OTPModel(email=user_in.email, otp_code=otp, purpose="signup")
@@ -77,7 +76,7 @@ def initiate_registration(user_in: RegisterInitiateRequest, background_tasks: Ba
     """
     background_tasks.add_task(send_email, user_in.email, "SBN Sentinel - Verification Code", html_body, is_html=True)
 
-    return {"message": "OTP sent successfully."}
+    return answer
 
 
 def validate_password_policy(password: str):
@@ -105,7 +104,7 @@ def register_user(user_in: RegisterVerifyRequest, db: Session = Depends(get_db),
 
     user = db.query(User).filter(User.email == user_in.email).first()
     if user:
-        raise HTTPException(status_code=400, detail="The user already exists.")
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
 
     from app.models.otp import OTPModel
     otp_record = db.query(OTPModel).filter(
@@ -123,8 +122,7 @@ def register_user(user_in: RegisterVerifyRequest, db: Session = Depends(get_db),
         db.commit()
         raise HTTPException(status_code=400, detail="Maximum OTP attempts exceeded. Please request a new one.")
 
-    import hmac
-    if not hmac.compare_digest(otp_record.otp_code, user_in.otp):
+    if not passwords.same_text(otp_record.otp_code, user_in.otp):
         db.commit()
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
 
@@ -152,19 +150,21 @@ def _client(request: Request):
 @router.post("/login", response_model=Token)
 def login_access_token(user_in: UserLogin, request: Request, db: Session = Depends(get_db), ip: str = Depends(check_ip_abuse)):
     user = db.query(User).filter(User.email == user_in.email).first()
-    if not user or not verify_password(user_in.password, user.hashed_password or ""):
-        # SIAME / SES-008: Log failed authentication attempt
+    generic = HTTPException(status_code=400, detail="Incorrect email or password")
+    if not user or not passwords.matches(user_in.password, user.hashed_password):
+        # SIAME / SES-008: Log failed authentication attempt (no account, wrong password, or an invited
+        # account that has not chosen a password yet: the caller cannot tell these apart).
         data_audit_engine._log_internal(
             db,
             user_system=user_in.email,
-            action="SECURITY:FAILED_LOGIN",
+            action="SECURITY:FAILED_LOGIN" if not user or user.hashed_password else "SECURITY:FAILED_LOGIN_PENDING_ACTIVATION",
             module="Authentication",
             correlation_id="Auth")
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+        raise generic
     elif not user.is_active:
         record(db, user, "SECURITY:FAILED_LOGIN_INACTIVE", "Authentication", correlation_id="Auth")
         db.commit()
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise generic
     if not is_platform(user) and org_is_suspended(db, user.org_id):
         record(db, user, "SECURITY:FAILED_LOGIN_ORG_SUSPENDED", "Authentication", correlation_id="Auth")
         db.commit()
@@ -200,6 +200,18 @@ def logout(db: Session = Depends(get_db), current_user: User = Depends(get_curre
     record(db, current_user, "SECURITY:USER_LOGOUT", "Authentication", target_type="session", target_id=sid)
     db.commit()
     return {"message": "Signed out", "session_id": sid}
+
+
+@router.post("/activity")
+def record_activity(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """The person is using the screen (typing, clicking). Only this call extends a session's idle time;
+    polling and other reads never do. At most one write a minute."""
+    from app.models.identity import UserSessionModel
+    sid = getattr(current_user, "_session_id", None)
+    row = db.query(UserSessionModel).filter(UserSessionModel.id == sid).first() if sid else None
+    moved = session_service.record_activity(db, row) if row is not None else False
+    return {"recorded": moved, "last_activity_at": row.last_seen_at.isoformat() + "Z" if row is not None else None,
+            "idle_timeout_minutes": int(session_service.idle_limit().total_seconds() // 60)}
 
 
 @router.get("/sessions")
@@ -323,7 +335,7 @@ class ResetPasswordRequest(BaseModel):
     otp: Optional[str] = None
     token: Optional[str] = None
     new_password: str
-    confirm_password: Optional[str] = None
+    confirm_password: str
 
 
 @router.post("/reset-password")
@@ -334,12 +346,12 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db),
         raise HTTPException(status_code=400, detail="Invalid or expired link or code")
     passwords.validate(payload.new_password, payload.confirm_password, user.email)
 
+    passwords.consume(db, row)        # atomic: a second submission of the same link or code fails here
     now = datetime.utcnow()
     user.hashed_password = get_password_hash(payload.new_password)
     user.token_invalid_before = now
     user.password_changed_at = now
-    passwords.retire_all(db, user.email, "reset_password")      # this and every earlier reset credential
-    row.used_at = now
+    passwords.retire_all(db, user.email, "reset_password")      # and every earlier reset credential
     ended = session_service.end_all(db, user.id, "password_reset")
     record(db, user, "SECURITY:PASSWORD_RESET", "Authentication", target_type="user", target_id=user.id,
            detail=f"{ended} session(s) ended")
@@ -352,7 +364,7 @@ class AcceptInviteRequest(BaseModel):
     otp: Optional[str] = None
     token: Optional[str] = None
     new_password: str
-    confirm_password: Optional[str] = None
+    confirm_password: str
     accept_terms: bool = False
 
 
@@ -398,6 +410,7 @@ def accept_invite(payload: AcceptInviteRequest, db: Session = Depends(get_db), i
     if org_is_suspended(db, user.org_id):
         raise HTTPException(status_code=403, detail="Your organization is suspended")
 
+    passwords.consume(db, row)        # atomic: a second submission of the same link or code fails here
     now = datetime.utcnow()
     user.hashed_password = get_password_hash(payload.new_password)
     user.is_active = True
@@ -406,7 +419,6 @@ def accept_invite(payload: AcceptInviteRequest, db: Session = Depends(get_db), i
     user.terms_version = settings.TERMS_VERSION
     user.updated_at = now
     passwords.retire_all(db, user.email, "invite")
-    row.used_at = now
     record(db, user, "USER_ACTIVATED", "User Management", target_type="user", target_id=user.id,
            detail=f"terms {settings.TERMS_VERSION} accepted")
     db.commit()

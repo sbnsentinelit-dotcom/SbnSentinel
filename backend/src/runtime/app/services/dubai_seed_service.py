@@ -82,6 +82,26 @@ DEMO_ORG_ID = "ORG-UAE-01"
 DEMO_ORG_NAME = "Sentinel UAE Medical Center"
 
 
+def record_existing_workbook_import(db: Session) -> int:
+    """A database imported before import records existed: the demo clinic's encounters whose ids are
+    the workbook's own ids are recorded as that workbook import, once. Nothing else is counted."""
+    from app.models.integration_evidence import DataImportModel
+    from app.services.workbook_dataset import encounters as workbook_encounters
+    clinic_id = "DXB-CLINIC-01"
+    if db.query(DataImportModel).filter(DataImportModel.clinic_id == clinic_id,
+                                        DataImportModel.source_kind == "workbook").first():
+        return 0
+    ids = {w["encounter_id"] for w in workbook_encounters()}
+    present = sum(1 for (eid,) in db.query(EncounterModel.id).filter(EncounterModel.clinic_id == clinic_id).all()
+                  if eid in ids)
+    if present:
+        db.add(DataImportModel(clinic_id=clinic_id, source_kind="workbook", source_label="Clinic billing workbook",
+                               accepted_count=present, completed_at=datetime.utcnow(),
+                               recorded_by="recorded from the workbook's encounter ids"))
+        db.commit()
+    return present
+
+
 def ensure_demo_organization(db: Session):
     """The demo organization that owns the demo clinic (MS-001: every clinic belongs to an organization)."""
     from app.models.organization import OrganizationModel
@@ -137,6 +157,7 @@ def seed_dubai_data(db: Session):
 
     existing_enc_ids = {e.id for e in db.query(EncounterModel.id).all()}
     encounters_data = []  # encounters that have a claim, in claim order (CLM2026000001 is the first)
+    imported_now = 0
 
     for w in workbook_encounters():
         enc_id = w["encounter_id"]
@@ -189,7 +210,13 @@ def seed_dubai_data(db: Session):
             )
             db.add(encounter)
             existing_enc_ids.add(enc_id)
+            imported_now += 1
 
+    if imported_now:
+        from app.models.integration_evidence import DataImportModel
+        db.add(DataImportModel(clinic_id=clinic_id, source_kind="workbook", source_label="Clinic billing workbook",
+                               accepted_count=imported_now, completed_at=datetime.utcnow(),
+                               recorded_by="workbook import"))
     db.commit()
 
     # 3. Seed 766 Claims

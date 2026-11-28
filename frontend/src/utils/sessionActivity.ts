@@ -1,8 +1,8 @@
 /**
- * MS-001: the server ends a session after SESSION_IDLE_TIMEOUT_MINUTES without activity, and it only
- * sees requests. Typing a long form or reading a page sends none, so while the person is actually
- * using the screen (keys, clicks, touch, scroll) this tells the server once a minute. A person who
- * does nothing is still signed out on time.
+ * MS-001: the server ends a session after SESSION_IDLE_TIMEOUT_MINUTES without user activity. Ordinary
+ * requests (polling the bell, loading a page) never extend it; only POST /auth/activity does. While the
+ * person is actually using the screen (keys, clicks, touch, scroll) this reports it once a minute, so an
+ * unattended dashboard is still signed out on time.
  */
 const ACTIVITY_EVENTS = ['keydown', 'mousedown', 'touchstart', 'scroll', 'wheel'] as const;
 export const HEARTBEAT_EVERY_MS = 60_000;
@@ -16,7 +16,7 @@ export function startSessionHeartbeat(ping?: () => Promise<unknown>): () => void
 
   const send = ping || (async () => {
     const { fetchWithAuth } = await import('./fetchWithAuth');
-    await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/auth/me`);
+    await fetchWithAuth(`${process.env.NEXT_PUBLIC_BACKEND_URL || ''}/api/v1/auth/activity`, { method: 'POST' });
   });
 
   const timer = window.setInterval(() => {
@@ -42,6 +42,7 @@ const REASONS: Record<string, string> = {
   access_removed: 'Your access was removed. Contact your administrator.',
   org_suspended: 'Your organization is suspended. Contact your platform administrator.',
   revoked: 'This session was signed out from another session. Please sign in again.',
+  reauthenticate: 'Please sign in again.',
 };
 
 /** The sign-in screen's message for why the server ended a session ("Session ended (idle_timeout)"). */

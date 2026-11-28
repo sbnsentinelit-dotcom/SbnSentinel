@@ -5,9 +5,9 @@ clinic lifecycle columns; the six approved roles (earlier names renamed); server
 per-user notification read state; profile, terms and one-time link columns.
 
 Data: every organization id already used by users or signals gets an organizations row (named by its
-id until an administrator renames it). A clinic without an owner gets the one organization its users
-or signals point to. A configuration row without an owner goes to the only organization when there is
-exactly one. Audit rows get the scope of the user who acted.
+id until an administrator renames it). A configuration row without an owner goes to the only
+organization when there is exactly one. Clinic ownership and historical audit scope are reconciled
+from event-time evidence by r2_ms001_ownership.
 
 Revision ID: r1_ms001_foundation
 Revises: p7_waiting_room_evidence
@@ -101,17 +101,7 @@ def _backfill_ownership(bind, insp) -> None:
                              "VALUES (:id, :name, 'Active', 'UTC', :now, :now)"),
                      {"id": org_id, "name": org_id, "now": now})
 
-    if insp.has_table("clinics"):
-        for (clinic_id,) in bind.execute(sa.text("SELECT id FROM clinics WHERE org_id IS NULL")).fetchall():
-            owners = set()
-            for table in ("users", "signals"):
-                if insp.has_table(table):
-                    owners |= {r[0] for r in bind.execute(sa.text(
-                        f"SELECT DISTINCT org_id FROM {table} WHERE clinic_id = :c AND org_id IS NOT NULL"), {"c": clinic_id})}
-            owners.discard("UNASSIGNED")
-            if len(owners) == 1:
-                bind.execute(sa.text("UPDATE clinics SET org_id = :o, updated_at = :now WHERE id = :c"),
-                             {"o": owners.pop(), "c": clinic_id, "now": now})
+    # Clinic ownership is reconciled by r2_ms001_ownership (explicit org_clinics mappings first).
 
     orgs = [r[0] for r in bind.execute(sa.text("SELECT id FROM organizations"))]
     if insp.has_table("settings") and len(orgs) == 1:
@@ -122,14 +112,7 @@ def _backfill_ownership(bind, insp) -> None:
             if first is not None:
                 bind.execute(sa.text("UPDATE settings SET org_id = :o WHERE id = :i"), {"o": orgs[0], "i": first})
 
-    if insp.has_table("audit_logs") and insp.has_table("users"):
-        bind.execute(sa.text(
-            "UPDATE audit_logs SET org_id = (SELECT u.org_id FROM users u WHERE u.email = audit_logs.user_system) "
-            "WHERE org_id IS NULL AND user_system IN (SELECT email FROM users WHERE org_id IS NOT NULL)"))
-        bind.execute(sa.text(
-            "UPDATE audit_logs SET clinic_id = (SELECT u.clinic_id FROM users u WHERE u.email = audit_logs.user_system) "
-            "WHERE clinic_id IS NULL AND user_system IN (SELECT email FROM users WHERE clinic_id IS NOT NULL "
-            "AND role IN ('Clinic Administrator', 'Operations Manager', 'Practice Manager', 'Staff User'))"))
+    # Historical audit rows are not given today's membership as their scope (see r2_ms001_ownership).
 
 
 def downgrade() -> None:

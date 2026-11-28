@@ -24,6 +24,9 @@ class AuditLogModel(Base):
     target_type = Column(String, nullable=True)
     target_id = Column(String, nullable=True)
     detail = Column(String, nullable=True)
+    # "event": scope recorded when the event happened; "unresolved": an older row whose scope is not
+    # known from event-time evidence (visible only to the platform). PR #8 A10.
+    scope_source = Column(String(16), nullable=True)
 
 
 @event.listens_for(AuditLogModel, 'before_update')

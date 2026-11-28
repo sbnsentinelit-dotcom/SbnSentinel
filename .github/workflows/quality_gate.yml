@@ -153,6 +153,88 @@ jobs:
       run: |
         pytest tests/integration/test_revenue_overview.py tests/integration/test_generated_billing.py -v
 
+    - name: MS-001 Founding V1 and PR 8 Remediation Verification
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/integration/test_ms001_foundation.py tests/integration/test_pr8_remediation.py -v
+
+    - name: Migration Round Trip (head -> p7 -> head)
+      run: |
+        python -B -m alembic downgrade p7_waiting_room_evidence
+        python -B -m alembic upgrade head
+
+    - name: Full Backend Regression Suite
+      env:
+        SECRET_KEY: "test-secret-key-for-ci"
+        PYTHONPATH: "src/runtime"
+      run: |
+        pytest tests/ -q -p no:cacheprovider
+
+  backend-postgresql:
+    name: Backend on PostgreSQL (MS-001 and PR 8)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sentinel
+          POSTGRES_PASSWORD: sentinel-ci-only
+          POSTGRES_DB: sentinel_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sentinel -d sentinel_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SQLALCHEMY_DATABASE_URL: "postgresql://sentinel:sentinel-ci-only@localhost:5432/sentinel_ci"
+      SENTINEL_TEST_DATABASE_URL: "postgresql://sentinel:sentinel-ci-only@localhost:5432/sentinel_ci"
+      SECRET_KEY: "test-secret-key-for-ci"
+      PYTHONPATH: "src/runtime"
+
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+
+    - name: Generate Ephemeral CI Keypair
+      run: |
+        openssl genrsa -out /tmp/ci_rsa_key.pem 2048
+        echo "JWT_PRIVATE_KEY<<EOF" >> $GITHUB_ENV
+        cat /tmp/ci_rsa_key.pem >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+
+    - name: Migrate PostgreSQL to head
+      run: python -B -m alembic upgrade head
+
+    - name: Migration Round Trip on PostgreSQL (head -> p7 -> head)
+      run: |
+        python -B -m alembic downgrade p7_waiting_room_evidence
+        python -B -m alembic upgrade head
+
+    - name: MS-001 and PR 8 Remediation on PostgreSQL
+      run: |
+        pytest tests/integration/test_ms001_foundation.py tests/integration/test_pr8_remediation.py -v
+
   frontend-quality:
     name: Frontend Quality Assurance
     runs-on: ubuntu-latest

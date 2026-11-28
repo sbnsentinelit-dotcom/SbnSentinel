@@ -1,9 +1,17 @@
-from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy import Column, Index, Integer, String, Boolean, text
 from app.db.database import Base
 
 
 class SettingsModel(Base):
     __tablename__ = "settings"
+    # PR #8 follow-up: the first open of a scope from two places at once still yields one row.
+    __table_args__ = (
+        Index("uq_settings_org_scope", "org_id", unique=True,
+              sqlite_where=text("clinic_id IS NULL AND org_id IS NOT NULL"),
+              postgresql_where=text("clinic_id IS NULL AND org_id IS NOT NULL")),
+        Index("uq_settings_clinic_scope", "org_id", "clinic_id", unique=True,
+              sqlite_where=text("clinic_id IS NOT NULL"), postgresql_where=text("clinic_id IS NOT NULL")),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     # Owner of this configuration (MS-001): one row per organization (clinic_id empty) and,

@@ -167,17 +167,7 @@ def get_encounter_summary_stats(
     SQL aggregated encounter metrics for the clinics in the caller's scope (MS-001): one clinic when
     named (and visible), otherwise every clinic the caller may see. An empty scope counts zero.
     """
-    from app.core.access import visible_clinic_ids
-    ids = visible_clinic_ids(db, current_user)
-    base = legacy_encounter_query(db)
-    if clinic_id:
-        if ids is not None and clinic_id not in ids:
-            raise HTTPException(status_code=404, detail="Clinic not found")
-        query = base.filter(EncounterModel.clinic_id == clinic_id)
-    elif ids is not None:
-        query = base.filter(EncounterModel.clinic_id.in_(ids or ["__none__"]))
-    else:
-        query = base
+    query = scoped_encounter_query(db, current_user, clinic_id)
     total_count = query.count()
 
     total_charges = query.with_entities(func.coalesce(func.sum(EncounterModel.billing_amount), 0.0)).scalar() or 0.0
@@ -195,23 +185,35 @@ def get_encounter_summary_stats(
     }
 
 
+def authorized_clinics(db: Session, current_user: User, clinic_id: Optional[str] = None):
+    """The clinic ids whose encounters the caller may use (None = every clinic, for the platform role
+    only). A chosen clinic outside that set is "not found". Every encounter read and write starts
+    here, before search, dates, pagination or totals (MS-001 / PR #8 A1)."""
+    from app.core.access import visible_clinic_ids
+    ids = visible_clinic_ids(db, current_user)
+    if clinic_id:
+        if ids is not None and clinic_id not in ids:
+            raise HTTPException(status_code=404, detail="Clinic not found")
+        return [clinic_id]
+    return ids
+
+
 def scoped_encounter_query(db: Session, current_user: User, clinic_id: Optional[str] = None):
-    """Encounters the caller may see: own clinic for front desk / clinic managers, the requested or own
-    clinic for other roles, everything (or the requested clinic) for System Administrators."""
+    """Encounters the caller may see: the authorized clinic set (or the one chosen clinic in it)."""
     query = legacy_encounter_query(db)
-    if current_user and getattr(current_user, 'role', None) != UserRole.SYSTEM_ADMINISTRATOR.value:
-        effective_clinic = clinic_id or getattr(current_user, 'clinic_id', None)
-        from app.core.access import CLINIC_BOUND
-        if getattr(current_user, 'role', None) in CLINIC_BOUND:
-            if getattr(current_user, 'clinic_id', None):
-                query = query.filter(EncounterModel.clinic_id == current_user.clinic_id)
-            else:
-                query = query.filter(EncounterModel.clinic_id == "UNASSIGNED_FORCE_FAIL")
-        elif effective_clinic:
-            query = query.filter(EncounterModel.clinic_id == effective_clinic)
-    elif clinic_id:
-        query = query.filter(EncounterModel.clinic_id == clinic_id)
+    ids = authorized_clinics(db, current_user, clinic_id)
+    if ids is not None:
+        query = query.filter(EncounterModel.clinic_id.in_(ids or ["__none__"]))
     return query
+
+
+def encounter_in_scope(db: Session, current_user: User, encounter_id: str) -> EncounterModel:
+    """One encounter, only when it belongs to a clinic the caller may use; otherwise 404."""
+    enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
+    ids = authorized_clinics(db, current_user) if enc is not None else None
+    if enc is None or (ids is not None and enc.clinic_id not in ids):
+        raise HTTPException(status_code=404, detail="Encounter record not found")
+    return enc
 
 
 def _period_bounds(period: Optional[str]):
@@ -382,11 +384,9 @@ def create_encounter(
         raise HTTPException(status_code=403, detail="Read-Only Auditor cannot create encounters")
 
     effective_clinic = encounter_in.clinic_id or getattr(current_user, 'clinic_id', None)
-    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        if not effective_clinic:
-            raise HTTPException(status_code=400, detail="Missing required clinic facility for encounter")
-        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and effective_clinic != current_user.clinic_id:
-            raise HTTPException(status_code=403, detail="Cannot create encounter for another clinic facility")
+    if not effective_clinic:
+        raise HTTPException(status_code=400, detail="Missing required clinic facility for encounter")
+    authorized_clinics(db, current_user, effective_clinic)      # 404 outside the caller's clinics
 
     existing = db.query(EncounterModel).filter(EncounterModel.id == encounter_in.id).first()
     if existing:
@@ -434,14 +434,7 @@ def get_encounter_journey(
     Returns encounter stages, timestamps, patient details, MRN, provider, department, insurance with clinic scope check.
     Enforces positive facility membership, preserves recorded timestamps without dynamic generation, and defaults missing insurance to 'Unknown'.
     """
-    enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
-    if not enc:
-        raise HTTPException(status_code=404, detail="Encounter record not found")
-
-    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        user_clinic = getattr(current_user, 'clinic_id', None)
-        if not user_clinic or not enc.clinic_id or enc.clinic_id != user_clinic:
-            raise HTTPException(status_code=403, detail="Cannot access encounter belonging to another clinic facility")
+    enc = encounter_in_scope(db, current_user, encounter_id)
 
     # Visits with events: stages, times, status and wait come from the recorded events.
     from app.services.patient_flow_service import journey_for_visit
@@ -508,14 +501,7 @@ def update_encounter(
         # charting (notes, diagnosis, medications) stays editable.
         raise HTTPException(status_code=403, detail="Encounter status is read-only in workbook integration profile (Report 05 §05.6)")
 
-    enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
-    if not enc:
-        raise HTTPException(status_code=404, detail="Encounter record not found")
-
-    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        user_clinic = getattr(current_user, 'clinic_id', None)
-        if not user_clinic or not enc.clinic_id or enc.clinic_id != user_clinic:
-            raise HTTPException(status_code=403, detail="Cannot modify encounter belonging to another clinic facility")
+    enc = encounter_in_scope(db, current_user, encounter_id)
 
     # A visit's flow status comes from its events. A person reports a change through
     # POST /patient-flow/visits/{id}/status, which records it as an event with the actor.
@@ -599,13 +585,7 @@ def delete_encounter(
     if current_user.role == UserRole.READ_ONLY_AUDITOR.value:
         raise HTTPException(status_code=403, detail="Read-Only Auditor cannot delete encounters")
 
-    enc = db.query(EncounterModel).filter(EncounterModel.id == encounter_id).first()
-    if not enc:
-        raise HTTPException(status_code=404, detail="Encounter record not found")
-
-    if current_user.role != UserRole.SYSTEM_ADMINISTRATOR.value:
-        if hasattr(current_user, 'clinic_id') and current_user.clinic_id and enc.clinic_id and enc.clinic_id != current_user.clinic_id:
-            raise HTTPException(status_code=403, detail="Cannot delete encounter belonging to another clinic facility")
+    enc = encounter_in_scope(db, current_user, encounter_id)
 
     db.delete(enc)
     db.commit()
